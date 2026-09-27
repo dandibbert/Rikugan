@@ -5,7 +5,7 @@ const template = fs.readFileSync('Rikugan/Resources/UserscriptRuntime.js', 'utf8
 function run(url, override = {}, source = 'globalThis.didRun = true;', extras = {}) {
   const config = {id: 'test', name: 'Test', version: '1', handler: 'test', matches: ['https://*.example.com/*'], includes: [], excludes: [], excludeMatches: [], grants: [], runAt: 'document-end', storage: {}, ...override};
   const calls = [];
-  const sandbox = {location: new URL(url), URL, console, setTimeout, JSON, window: {webkit: {messageHandlers: {test: {postMessage: body => { calls.push(body); return Promise.resolve(true); }}}}}, ...extras};
+  const sandbox = {location: new URL(url), URL, URLSearchParams, console, setTimeout, JSON, FormData, Blob, File, TextEncoder, Uint8Array, ArrayBuffer, btoa, atob, window: {webkit: {messageHandlers: {test: {postMessage: body => { calls.push(body); return Promise.resolve(true); }}}}}, ...extras};
   const script = template.replace('/*__CONFIG__*/', JSON.stringify(config)).replace('/*__SOURCE__*/', source);
   new vm.Script(script).runInNewContext(sandbox);
   return {sandbox, calls};
@@ -153,5 +153,29 @@ assert.equal(direct.sandbox.title, 'direct');
 assert.equal(direct.sandbox.attr, 'p9');
 const body = run('https://example.com/a', { runAt: 'document-body' });
 assert.equal(body.sandbox.didRun, true);
-console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow get/set/call, page-world window, menu, xhr and listeners');
+const plain = run('https://example.com/', { grants: ['GM_xmlhttpRequest'] }, "GM_xmlhttpRequest({url:'https://example.com/a', method:'POST', data:'hello'});");
+assert.equal(plain.calls[0].args.data, 'hello');
+assert.equal(plain.calls[0].args.dataBase64, undefined);
+const query = run('https://example.com/', { grants: ['GM_xmlhttpRequest'] }, "GM_xmlhttpRequest({url:'https://example.com/a', method:'POST', data: new URLSearchParams({q:'a b'})});");
+assert.equal(query.calls[0].args.data, 'q=a+b');
+assert.match(query.calls[0].args.headers['Content-Type'], /application\/x-www-form-urlencoded/);
+(async () => {
+  const form = run('https://example.com/', { grants: ['GM_xmlhttpRequest'] }, "const body = new FormData(); body.append('name', 'ada'); body.append('file', new Blob(['hi'], { type: 'text/plain' }), 'note.txt'); GM_xmlhttpRequest({url:'https://example.com/a', method:'POST', data: body});");
+  await new Promise(resolve => setImmediate(resolve));
+  const posted = form.calls.find(call => call.operation === 'xmlHttpRequest');
+  const text = Buffer.from(posted.args.dataBase64, 'base64').toString('utf8');
+  assert.match(text, /name="name"/);
+  assert.match(text, /\r\nada\r\n/);
+  assert.match(text, /filename="note.txt"/);
+  assert.match(text, /Content-Type: text\/plain/);
+  assert.match(text, /\r\nhi\r\n/);
+  assert.match(posted.args.headers['Content-Type'], /^multipart\/form-data; boundary=/);
+  assert.equal(posted.args.contentType, posted.args.headers['Content-Type']);
+  const custom = run('https://example.com/', { grants: ['GM_xmlhttpRequest'] }, "const body = new FormData(); body.append('name', 'ada'); GM_xmlhttpRequest({url:'https://example.com/a', method:'POST', headers:{'Content-Type':'text/plain'}, data: body});");
+  await new Promise(resolve => setImmediate(resolve));
+  const kept = custom.calls.find(call => call.operation === 'xmlHttpRequest');
+  assert.equal(kept.args.headers['Content-Type'], 'text/plain');
+  assert.equal(kept.args.contentType, undefined);
+  console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow get/set/call, page-world window, menu, xhr and listeners');
+})().catch(error => { console.error(error); process.exit(1); });
 

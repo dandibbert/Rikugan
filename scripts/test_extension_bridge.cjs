@@ -149,6 +149,9 @@ function load(extra) {
             record.title = options.title;
             record.message = options.message;
             record.buttons = (options.buttons || []).map(button => button.title);
+            if (options.progress != null) record.progress = Math.max(0, Math.min(100, Number(options.progress)));
+            if (options.iconUrl != null) record.iconUrl = options.iconUrl;
+            if (options.imageUrl != null) record.imageUrl = options.imageUrl;
             callback({ result: true });
             return;
           }
@@ -157,7 +160,8 @@ function load(extra) {
               { type: 'clicked', notificationId: record.id },
               { type: 'button', notificationId: record.id, buttonIndex: 0 },
               { type: 'closed', notificationId: record.id, byUser: true },
-              { type: 'settings', notificationId: record.id }
+              { type: 'settings', notificationId: record.id },
+              { type: 'shown', notificationId: record.id }
             ] });
             return;
           }
@@ -169,20 +173,26 @@ function load(extra) {
   });
   noteWorker.chrome.notifications.onClicked.addListener(id => clicks.push(id));
   noteWorker.chrome.notifications.onButtonClicked.addListener((id, index) => buttonClicks.push([id, index]));
-  const updated = await noteWorker.chrome.notifications.update('rikugan-demo', { title: 'Updated', message: 'changed', buttons: [{ title: 'Open' }] });
+  const updated = await noteWorker.chrome.notifications.update('rikugan-demo', { title: 'Updated', message: 'changed', buttons: [{ title: 'Open' }], progress: 80, iconUrl: 'icons/icon.png', imageUrl: 'https://example.com/a.png' });
   assert.equal(updated, true);
   assert.equal(record.title, 'Updated');
   assert.equal(record.message, 'changed');
   assert.deepEqual(record.buttons, ['Open']);
+  assert.equal(record.progress, 80);
+  assert.equal(record.iconUrl, 'icons/icon.png');
+  assert.equal(record.imageUrl, 'https://example.com/a.png');
   const closed = [];
   const settings = [];
   noteWorker.chrome.notifications.onClosed.addListener((id, byUser) => closed.push([id, byUser]));
   noteWorker.chrome.notifications.onShowSettings.addListener(() => settings.push('settings'));
+  const shown = [];
+  noteWorker.chrome.notifications.onShown.addListener(id => shown.push(id));
   await noteWorker.__rikuganPollNotifications();
   assert.deepEqual(clicks, ['rikugan-demo']);
   assert.deepEqual(buttonClicks, [['rikugan-demo', 0]]);
   assert.deepEqual(closed, [['rikugan-demo', true]]);
   assert.deepEqual(settings, ['settings']);
+  assert.deepEqual(shown, ['rikugan-demo']);
 
   const routed = [];
   const nativePosted = [];

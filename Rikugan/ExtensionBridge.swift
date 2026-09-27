@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import WebKit
 
 struct ExtensionNoticeRecord: Equatable {
@@ -6,6 +7,9 @@ struct ExtensionNoticeRecord: Equatable {
     var title: String
     var message: String
     var buttons: [String] = []
+    var iconURL: String = ""
+    var imageURL: String = ""
+    var progress: Int? = nil
     var extensionID: String = ""
 }
 
@@ -149,13 +153,37 @@ enum ExtensionBridge {
 
     static func permissionLevel(authorized: Bool) -> String { authorized ? "granted" : "denied" }
 
+    static func packagedImage(_ reference: String, packages: [(url: URL, directory: Bool)]) -> Data? {
+        let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("data:") { return dataImage(trimmed) }
+        guard let relative = packagePath(trimmed) else { return nil }
+        for package in packages {
+            if let data = readBytes(relative, package: package.url, directory: package.directory), looksLikeImage(data) { return data }
+        }
+        return nil
+    }
+
+    static func notificationBytes(_ reference: String, packages: [(url: URL, directory: Bool)]) async -> Data? {
+        let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.lowercased().hasPrefix("https://"), let url = URL(string: trimmed) {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  data.count <= 2_000_000, looksLikeImage(data) else { return nil }
+            return data
+        }
+        return packagedImage(trimmed, packages: packages)
+    }
+
     static func apply(api: String, details: [String: Any], records: inout [String: ExtensionNoticeRecord], deliver: (ExtensionNoticeRecord) -> Void) -> ExtensionHostOutcome {
         switch api {
         case "notifications.create":
             let options = details["options"] as? [String: Any] ?? [:]
             let explicit = details["id"] as? String ?? ""
             let id = explicit.isEmpty ? UUID().uuidString : explicit
-            let record = ExtensionNoticeRecord(id: id, title: options["title"] as? String ?? "", message: noticeMessage(options), buttons: buttonTitles(options["buttons"]), extensionID: details["extensionId"] as? String ?? "")
+            let record = ExtensionNoticeRecord(id: id, title: options["title"] as? String ?? "", message: noticeMessage(options), buttons: buttonTitles(options["buttons"]), iconURL: options["iconUrl"] as? String ?? "", imageURL: options["imageUrl"] as? String ?? "", progress: options["progress"] == nil ? nil : progressValue(options["progress"]), extensionID: details["extensionId"] as? String ?? "")
             records[id] = record
             deliver(record)
             return ExtensionHostOutcome(result: id)
@@ -166,6 +194,9 @@ enum ExtensionBridge {
             if let title = options["title"] as? String { record.title = title }
             if options["message"] != nil || options["body"] != nil { record.message = noticeMessage(options) }
             if options["buttons"] != nil { record.buttons = buttonTitles(options["buttons"]) }
+            if options["iconUrl"] != nil { record.iconURL = options["iconUrl"] as? String ?? "" }
+            if options["imageUrl"] != nil { record.imageURL = options["imageUrl"] as? String ?? "" }
+            if options["progress"] != nil, let progress = progressValue(options["progress"]) { record.progress = progress }
             if let extensionID = details["extensionId"] as? String, !extensionID.isEmpty { record.extensionID = extensionID }
             records[id] = record
             deliver(record)
@@ -180,7 +211,9 @@ enum ExtensionBridge {
         case "notifications.getAll":
             var map: [String: [String: Any]] = [:]
             for (key, value) in records {
-                map[key] = ["title": value.title, "message": value.message, "buttons": value.buttons]
+                var item: [String: Any] = ["title": value.title, "message": value.message, "buttons": value.buttons, "iconUrl": value.iconURL, "imageUrl": value.imageURL]
+                if let progress = value.progress { item["progress"] = progress }
+                map[key] = item
             }
             return ExtensionHostOutcome(result: map)
         default:
@@ -345,6 +378,56 @@ enum ExtensionBridge {
 
     private static func noticeMessage(_ options: [String: Any]) -> String {
         (options["message"] as? String) ?? (options["body"] as? String) ?? ""
+    }
+
+    private static func progressValue(_ value: Any?) -> Int? {
+        let number: Int?
+        if let value = value as? Int { number = value }
+        else if let value = value as? NSNumber { number = value.intValue }
+        else { return nil }
+        guard let number else { return nil }
+        return min(100, max(0, number))
+    }
+
+    static func packagePath(_ reference: String) -> String? {
+        var text = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.lowercased().hasPrefix("data:"), !text.lowercased().hasPrefix("https://"), !text.lowercased().hasPrefix("http://") else { return nil }
+        if let url = URL(string: text), let scheme = url.scheme?.lowercased(),
+           ["chrome-extension", "webkit-extension", "moz-extension"].contains(scheme) {
+            text = url.path
+        }
+        while text.hasPrefix("/") { text.removeFirst() }
+        return safeRelative(text)
+    }
+
+    private static func dataImage(_ reference: String) -> Data? {
+        guard let comma = reference.firstIndex(of: ","), reference.lowercased().hasPrefix("data:image/") else { return nil }
+        let meta = reference[..<comma].lowercased()
+        guard meta.contains(";base64") else { return nil }
+        let payload = String(reference[reference.index(after: comma)...])
+        guard let data = Data(base64Encoded: payload), data.count <= 2_000_000, looksLikeImage(data) else { return nil }
+        return data
+    }
+
+    private static func readBytes(_ name: String, package: URL, directory: Bool) -> Data? {
+        guard let relative = safeRelative(name) else { return nil }
+        let data: Data?
+        if directory {
+            data = try? Data(contentsOf: package.appendingPathComponent(relative))
+        } else if let packed = try? Data(contentsOf: package) {
+            data = ZipArchive.extract(data: packed, path: relative)
+        } else { data = nil }
+        guard let data, (1...2_000_000).contains(data.count) else { return nil }
+        return data
+    }
+
+    private static func looksLikeImage(_ data: Data) -> Bool {
+        let bytes = [UInt8](data.prefix(16))
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return true }
+        if bytes.starts(with: [0xFF, 0xD8]) { return true }
+        if bytes.starts(with: [0x47, 0x49, 0x46, 0x38]) { return true }
+        if bytes.count >= 12, bytes.starts(with: [0x52, 0x49, 0x46, 0x46]), Array(bytes[8..<12]) == [0x57, 0x45, 0x42, 0x50] { return true }
+        return UIImage(data: data) != nil
     }
 
     private static func buttonTitles(_ value: Any?) -> [String] {

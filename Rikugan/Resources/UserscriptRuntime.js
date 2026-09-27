@@ -94,14 +94,81 @@
     if (!details || typeof details.onprogress !== 'function') return;
     details.onprogress({ lengthComputable: Number(event.total) > 0, loaded: Number(event.loaded) || 0, total: Number(event.total) || 0 });
   };
+  const headerMap = value => {
+    const headers = {};
+    if (value && typeof value === 'object') Object.keys(value).forEach(key => { headers[key] = String(value[key]); });
+    return headers;
+  };
+  const hasType = headers => Object.keys(headers).some(key => key.toLowerCase() === 'content-type');
+  const textBytes = text => typeof TextEncoder === 'function' ? new TextEncoder().encode(text) : Uint8Array.from(unescape(encodeURIComponent(text)), c => c.charCodeAt(0));
+  const b64 = bytes => {
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+    return btoa(binary);
+  };
+  const joinBytes = chunks => {
+    let total = 0;
+    chunks.forEach(chunk => { total += chunk.length; });
+    if (total > 8 * 1024 * 1024) throw new Error('请求体超过大小限制。');
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    chunks.forEach(chunk => { bytes.set(chunk, offset); offset += chunk.length; });
+    return bytes;
+  };
+  const encodeSync = data => {
+    if (data == null) return { data: null };
+    if (typeof data === 'string') return { data };
+    if (typeof URLSearchParams !== 'undefined' && data instanceof URLSearchParams) return { data: data.toString(), contentType: 'application/x-www-form-urlencoded;charset=UTF-8' };
+    return null;
+  };
+  const encodeAsync = async data => {
+    if (typeof FormData !== 'undefined' && data instanceof FormData) {
+      const boundary = '----RikuganForm' + Math.random().toString(16).slice(2);
+      const chunks = [];
+      for (const pair of data.entries()) {
+        const name = String(pair[0]).replace(/[\r\n"]/g, '');
+        const value = pair[1];
+        if (typeof value === 'string') {
+          chunks.push(textBytes('--' + boundary + '\r\nContent-Disposition: form-data; name="' + name + '"\r\n\r\n' + value + '\r\n'));
+        } else {
+          const filename = String((value && value.name) || 'blob').replace(/[\r\n"]/g, '');
+          const type = String((value && value.type) || 'application/octet-stream').replace(/[\r\n]/g, '');
+          chunks.push(textBytes('--' + boundary + '\r\nContent-Disposition: form-data; name="' + name + '"; filename="' + filename + '"\r\nContent-Type: ' + type + '\r\n\r\n'));
+          chunks.push(new Uint8Array(typeof value.arrayBuffer === 'function' ? await value.arrayBuffer() : []));
+          chunks.push(textBytes('\r\n'));
+        }
+      }
+      chunks.push(textBytes('--' + boundary + '--\r\n'));
+      return { dataBase64: b64(joinBytes(chunks)), contentType: 'multipart/form-data; boundary=' + boundary };
+    }
+    let bytes = null;
+    let contentType = 'application/octet-stream';
+    if (typeof Blob !== 'undefined' && data instanceof Blob) {
+      bytes = new Uint8Array(await data.arrayBuffer());
+      contentType = data.type || contentType;
+    } else if (typeof ArrayBuffer !== 'undefined' && data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+    else if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(data)) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    if (!bytes) return { data: null };
+    if (bytes.length > 8 * 1024 * 1024) throw new Error('请求体超过大小限制。');
+    return { dataBase64: b64(bytes), contentType };
+  };
+  const requestArgs = (details, id, encoded) => {
+    const headers = headerMap(details.headers);
+    if (encoded.contentType && !hasType(headers)) headers['Content-Type'] = encoded.contentType;
+    const args = { id, url: String(details.url), method: details.method || 'GET', headers, data: encoded.data == null ? null : encoded.data };
+    if (encoded.dataBase64) args.dataBase64 = encoded.dataBase64;
+    if (encoded.contentType && !hasType(headerMap(details.headers))) args.contentType = encoded.contentType;
+    return args;
+  };
   const xhr = details => {
     const id = Math.random().toString(36).slice(2);
-    const args = {id, url: String(details.url), method: details.method || 'GET', headers: details.headers || {}, data: typeof details.data === 'string' ? details.data : null};
     let aborted = false;
     pendingXHR[id] = details;
-    const promise = call('xmlHttpRequest', args).then(response => {
+    const sync = encodeSync(details && details.data);
+    const outgoing = sync ? Promise.resolve(call('xmlHttpRequest', requestArgs(details, id, sync))) : encodeAsync(details && details.data).then(encoded => aborted ? null : call('xmlHttpRequest', requestArgs(details, id, encoded)));
+    const promise = outgoing.then(response => {
       delete pendingXHR[id];
-      if (aborted) return;
+      if (aborted || !response) return;
       response.response = response.responseText;
       if (details.responseType === 'json') { try { response.response = JSON.parse(response.responseText); } catch (_) { response.response = null; } }
       if (details.responseType === 'arraybuffer' || details.responseType === 'blob') {

@@ -2,6 +2,33 @@ import SwiftUI
 import WebKit
 import UniformTypeIdentifiers
 
+struct ExtensionNoticeFace: View {
+    let notice: PageNotice
+    var prominent = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 8) {
+                if let icon = uiImage(notice.iconData) {
+                    Image(uiImage: icon).resizable().scaledToFill().frame(width: 28, height: 28).clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(notice.title).font(prominent ? .subheadline.weight(.semibold) : .subheadline)
+                    if !notice.body.isEmpty { Text(notice.body).font(.caption).lineLimit(prominent ? 2 : 4) }
+                    if !prominent { Text(notice.host).font(.caption2).foregroundStyle(.secondary) }
+                }
+            }
+            if let picture = uiImage(notice.imageData), notice.imageData != notice.iconData {
+                Image(uiImage: picture).resizable().scaledToFit().frame(maxWidth: 220, maxHeight: 72).clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            if let progress = notice.progress {
+                ProgressView(value: Double(progress), total: 100)
+                Text("\(progress)%").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private func uiImage(_ data: Data?) -> UIImage? { data.flatMap { UIImage(data: $0) } }
+}
+
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
@@ -24,10 +51,7 @@ struct RootView: View {
                 if let toast = model.noticeToast {
                     VStack(alignment: .leading, spacing: 6) {
                         Button { model.activateExtensionNotice(toast) } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(toast.title).font(.subheadline.weight(.semibold))
-                                if !toast.body.isEmpty { Text(toast.body).font(.caption).lineLimit(2) }
-                            }
+                            ExtensionNoticeFace(notice: toast, prominent: true)
                         }
                         .buttonStyle(.plain)
                         if !toast.buttons.isEmpty || !toast.extensionNotificationID.isEmpty {
@@ -866,11 +890,7 @@ struct SettingsView: View {
                     ForEach(model.notices) { notice in
                         VStack(alignment: .leading, spacing: 6) {
                             Button { model.activateExtensionNotice(notice) } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(notice.title).font(.subheadline)
-                                    if !notice.body.isEmpty { Text(notice.body).font(.caption) }
-                                    Text(notice.host).font(.caption2).foregroundStyle(.secondary)
-                                }
+                                ExtensionNoticeFace(notice: notice)
                             }
                             .buttonStyle(.plain)
                             if !notice.buttons.isEmpty || !notice.extensionNotificationID.isEmpty {

@@ -121,7 +121,12 @@ struct ScriptCommand: Identifiable {
             let requestID = args["id"] as? String ?? UUID().uuidString
             let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
             let method = args["method"] as? String ?? "GET"
-            let body = (args["data"] as? String)?.data(using: .utf8)
+            let payload = ScriptRequestBody.bytes(text: args["data"] as? String, base64: args["dataBase64"] as? String)
+            let body: Data?
+            switch payload {
+            case .success(let data): body = data
+            case .failure(let error): replyHandler(nil, error.localizedDescription); return
+            }
             let headers = args["headers"] as? [String: String]
             let store = tab.isPrivate ? session.privateStore : session.dataStore
             Task { @MainActor [weak self] in
@@ -129,6 +134,9 @@ struct ScriptCommand: Identifiable {
                 var request = URLRequest(url: url)
                 request.httpMethod = method
                 request.httpBody = body
+                if let contentType = args["contentType"] as? String, !contentType.isEmpty {
+                    request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+                }
                 if let headers {
                     for (key, value) in headers where !["host", "content-length", "connection"].contains(key.lowercased()) { request.setValue(value, forHTTPHeaderField: key) }
                 }

@@ -16,7 +16,7 @@ enum ChromeAPIMatrix {
         .init(api: "cookies", level: "Partial", note: "只能访问当前身份网站存储里 WebKit 暴露的 cookie。"),
         .init(api: "downloads", level: "Partial", note: "浏览器自己的下载管理器可用；chrome.downloads 取决于 WebKit。"),
         .init(api: "i18n", level: "Partial", note: "跟随扩展包内的 _locales，缺少的文案不会伪造。"),
-        .init(api: "notifications", level: "Partial", note: "扩展脚本调用 chrome.notifications.create、update、clear、getAll、getPermissionLevel。create 与 update 写入通知记录、App 内列表，并提交 UNUserNotificationCenter。getPermissionLevel 在系统通知已授权时返回 granted，未授权或被拒绝时返回 denied。按钮保存在记录上。点按列表行触发 onClicked，点按按钮触发 onButtonClicked，滑掉一行或 clear 触发 onClosed，点「通知设置」触发 onShowSettings。后台轮询取回这些事件。系统通知本身不能深链按钮。没有图片、进度和 onShown。"),
+        .init(api: "notifications", level: "Partial", note: "扩展脚本调用 chrome.notifications.create、update、clear、getAll、getPermissionLevel。create 与 update 写入通知记录、App 内列表，并提交 UNUserNotificationCenter。getPermissionLevel 在系统通知已授权时返回 granted，未授权或被拒绝时返回 denied。按钮保存在记录上。点按列表行触发 onClicked，点按按钮触发 onButtonClicked，滑掉一行或 clear 触发 onClosed，点「通知设置」触发 onShowSettings。后台轮询取回这些事件。iconUrl 和 imageUrl 从扩展包相对路径、扩展 URL 或 https 图片读取，显示在列表行上，并在系统允许时作为 UNNotificationAttachment。progress 保存 0 到 100 并显示在列表行上，update 会改它；系统通知本身没有进度条。列表行出现时，以及系统通知提交成功时，都会通过轮询触发 onShown。系统通知本身不能深链按钮。"),
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
         .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带 DNR 由 WebKit 执行。Rikugan 的广告拦截是独立引擎，不把扩展改写成用户脚本。"),
         .init(api: "debugger", level: "Unsupported", note: "已列入 unsupportedAPIs。不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),

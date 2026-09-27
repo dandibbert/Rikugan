@@ -321,6 +321,7 @@
       if (event.type === 'button' && ns.notifications.onButtonClicked && typeof ns.notifications.onButtonClicked._emit === 'function') ns.notifications.onButtonClicked._emit(id, event.buttonIndex);
       if (event.type === 'closed' && ns.notifications.onClosed && typeof ns.notifications.onClosed._emit === 'function') ns.notifications.onClosed._emit(id, !!event.byUser);
       if (event.type === 'settings' && ns.notifications.onShowSettings && typeof ns.notifications.onShowSettings._emit === 'function') ns.notifications.onShowSettings._emit();
+      if (event.type === 'shown' && ns.notifications.onShown && typeof ns.notifications.onShown._emit === 'function') ns.notifications.onShown._emit(id);
     });
   }
 
@@ -405,6 +406,7 @@
     fillEvent(notes, 'onButtonClicked');
     fillEvent(notes, 'onClosed');
     fillEvent(notes, 'onShowSettings');
+    fillEvent(notes, 'onShown');
     relay();
     listenFrames();
     if (typeof window === 'undefined' && !handler() && typeof setInterval === 'function' && !root.__rikuganNotificationPoll) {

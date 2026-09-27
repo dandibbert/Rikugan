@@ -153,6 +153,20 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
     }
 }
 
+enum ScriptRequestBody {
+    static let limit = 8 * 1024 * 1024
+
+    static func bytes(text: String?, base64: String?) -> Result<Data?, Error> {
+        if let base64 {
+            guard base64.utf8.count <= (limit / 3) * 4 + 8 else { return .failure(RikuganError.message("请求体超过大小限制。")) }
+            guard let data = Data(base64Encoded: base64) else { return .failure(RikuganError.message("请求体无法解码。")) }
+            guard data.count <= limit else { return .failure(RikuganError.message("请求体超过大小限制。")) }
+            return .success(data)
+        }
+        return .success(text?.data(using: .utf8))
+    }
+}
+
 enum ScriptVault {
     static func persists(isPrivate: Bool) -> Bool { !isPrivate }
     static func commit(isPrivate: Bool, scriptID: UUID, stored: [String: Any], json: String, memory: inout [UUID: [String: Any]]) -> String? {

@@ -13,6 +13,11 @@ struct PageNotice: Identifiable, Equatable {
     var extensionNotificationID = ""
     var extensionRuntimeID = ""
     var buttons: [String] = []
+    var iconURL = ""
+    var imageURL = ""
+    var progress: Int? = nil
+    var iconData: Data? = nil
+    var imageData: Data? = nil
 }
 
 @MainActor final class AppModel: ObservableObject {
@@ -67,15 +72,39 @@ struct PageNotice: Identifiable, Equatable {
     }
     func deliverExtensionNotice(_ record: ExtensionNoticeRecord) {
         if let index = notices.firstIndex(where: { $0.extensionNotificationID == record.id && !$0.extensionNotificationID.isEmpty }) {
+            let sameIcon = notices[index].iconURL == record.iconURL
+            let sameImage = notices[index].imageURL == record.imageURL
             notices[index].title = record.title
             notices[index].body = record.message
             notices[index].buttons = record.buttons
             notices[index].extensionRuntimeID = record.extensionID
+            notices[index].iconURL = record.iconURL
+            notices[index].imageURL = record.imageURL
+            notices[index].progress = record.progress
+            if !sameIcon { notices[index].iconData = nil }
+            if !sameImage { notices[index].imageData = nil }
             noticeToast = notices[index]
-            SystemNotifications.deliver(title: record.title, body: record.message.isEmpty ? record.id : record.message, identifier: record.id)
-            return
+        } else {
+            let notice = PageNotice(host: "extension", title: record.title, body: record.message, extensionNotificationID: record.id, extensionRuntimeID: record.extensionID, buttons: record.buttons, iconURL: record.iconURL, imageURL: record.imageURL, progress: record.progress)
+            notices.insert(notice, at: 0)
+            if notices.count > 40 { notices.removeLast(notices.count - 40) }
+            noticeToast = notice
         }
-        deliverNotice(host: "extension", title: record.title, body: record.message, extensionNotificationID: record.id, extensionRuntimeID: record.extensionID, buttons: record.buttons)
+        queueExtensionEvent(type: "shown", notificationID: record.id, byUser: false, extensionID: record.extensionID)
+        let packages = session?.extensionPackages(preferring: record.extensionID).packages ?? []
+        Task { await self.attachExtensionNotice(record, packages: packages) }
+    }
+    private func attachExtensionNotice(_ record: ExtensionNoticeRecord, packages: [(url: URL, directory: Bool)]) async {
+        let icon = await ExtensionBridge.notificationBytes(record.iconURL, packages: packages)
+        let picture = await ExtensionBridge.notificationBytes(record.imageURL, packages: packages)
+        if let index = notices.firstIndex(where: { $0.extensionNotificationID == record.id }) {
+            notices[index].iconData = icon
+            notices[index].imageData = picture
+            if noticeToast?.extensionNotificationID == record.id { noticeToast = notices[index] }
+        }
+        SystemNotifications.deliver(title: record.title, body: record.message.isEmpty ? record.id : record.message, identifier: record.id, image: picture ?? icon) { [weak self] in
+            self?.queueExtensionEvent(type: "shown", notificationID: record.id, byUser: false, extensionID: record.extensionID)
+        }
     }
     func removeExtensionNotices(ids: [String]) {
         let chosen = Set(ids.filter { !$0.isEmpty })
@@ -355,7 +384,7 @@ enum SystemNotifications {
             }
         }
     }
-    static func deliver(title: String, body: String, identifier: String = "") {
+    static func deliver(title: String, body: String, identifier: String = "", image: Data? = nil, submitted: (() -> Void)? = nil) {
         let center = UNUserNotificationCenter.current()
         let requestID = identifier.isEmpty ? UUID().uuidString : identifier
         center.getNotificationSettings { settings in
@@ -363,7 +392,10 @@ enum SystemNotifications {
                 let content = UNMutableNotificationContent()
                 content.title = String(title.prefix(120))
                 content.body = String(body.prefix(500))
-                center.add(UNNotificationRequest(identifier: requestID, content: content, trigger: nil))
+                if let image, let attachment = attachment(image, identifier: requestID) { content.attachments = [attachment] }
+                center.add(UNNotificationRequest(identifier: requestID, content: content, trigger: nil)) { error in
+                    if error == nil { DispatchQueue.main.async { submitted?() } }
+                }
             }
             switch settings.authorizationStatus {
             case .authorized, .provisional, .ephemeral:
@@ -384,6 +416,19 @@ enum SystemNotifications {
                 }
             }
         }
+    }
+    static func attachment(_ data: Data, identifier: String) -> UNNotificationAttachment? {
+        let ext: String
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { ext = "png" }
+        else if data.starts(with: [0xFF, 0xD8]) { ext = "jpg" }
+        else if data.starts(with: [0x47, 0x49, 0x46]) { ext = "gif" }
+        else { ext = "png" }
+        let safe = identifier.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "-" }.map { String($0) }.joined()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent((safe.isEmpty ? UUID().uuidString : safe) + "." + ext)
+        do {
+            try data.write(to: url, options: .atomic)
+            return try UNNotificationAttachment(identifier: identifier, url: url, options: nil)
+        } catch { return nil }
     }
     static func withdraw(_ identifiers: [String]) {
         let ids = identifiers.filter { !$0.isEmpty }

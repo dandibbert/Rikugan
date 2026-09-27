@@ -46,6 +46,17 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(URLRules.connectionAllowed(URL(string: "https://user:password@example.com/")!, origin: origin, rules: ["*"]))
         XCTAssertTrue(URLRules.connectionAllowed(origin, origin: origin, rules: ["self"]))
     }
+    func testScriptRequestBodyDecodesFormPayload() throws {
+        let text = try ScriptRequestBody.bytes(text: "ada", base64: nil).get()
+        XCTAssertEqual(text, Data("ada".utf8))
+        let encoded = Data("hello".utf8).base64EncodedString()
+        let binary = try ScriptRequestBody.bytes(text: nil, base64: encoded).get()
+        XCTAssertEqual(binary, Data("hello".utf8))
+        XCTAssertThrowsError(try ScriptRequestBody.bytes(text: nil, base64: "%%%%").get())
+        let note = UserScript.capabilityNotes["GM_xmlhttpRequest"] ?? ""
+        XCTAssertTrue(note.contains("FormData"))
+        XCTAssertFalse(note.contains("不支持流式、FormData"))
+    }
     func testSearchEscapesQuery() {
         let url = URLRules.inputURL("a+b & c", searchEngine: "https://example.com/?q=")!
         XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "a+b & c")
@@ -284,6 +295,9 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(notifications.note.contains("onClicked"))
         XCTAssertTrue(notifications.note.contains("getPermissionLevel"))
         XCTAssertTrue(notifications.note.contains("onClosed"))
+        XCTAssertTrue(notifications.note.contains("onShown"))
+        XCTAssertTrue(notifications.note.contains("progress"))
+        XCTAssertFalse(notifications.note.contains("没有图片、进度和 onShown"))
         XCTAssertFalse(notifications.note.contains("onClicked、按钮和 update 没有"))
         XCTAssertFalse(notifications.note.contains("不会被记成成功"))
         XCTAssertFalse(notifications.note.contains("没有自研 chrome.notifications"))
@@ -375,7 +389,8 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(ExtensionBridge.permissionLevel(authorized: false), "denied")
         var records: [String: ExtensionNoticeRecord] = [:]
         var delivered: [(String, String)] = []
-        let created = ExtensionBridge.apply(api: "notifications.create", details: ["id": "rikugan-demo", "options": ["title": "Rikugan", "message": "通知已创建", "buttons": [["title": "Open"]]]], records: &records) { record in
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let created = ExtensionBridge.apply(api: "notifications.create", details: ["id": "rikugan-demo", "options": ["title": "Rikugan", "message": "通知已创建", "buttons": [["title": "Open"]], "iconUrl": "chrome-extension://abc/icons/icon.png", "imageUrl": png, "progress": 40]], records: &records) { record in
             delivered.append((record.title, record.message))
         }
         XCTAssertEqual(created.result as? String, "rikugan-demo")
@@ -383,15 +398,21 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(records["rikugan-demo"]?.title, "Rikugan")
         XCTAssertEqual(records["rikugan-demo"]?.message, "通知已创建")
         XCTAssertEqual(records["rikugan-demo"]?.buttons, ["Open"])
+        XCTAssertEqual(records["rikugan-demo"]?.iconURL, "chrome-extension://abc/icons/icon.png")
+        XCTAssertEqual(records["rikugan-demo"]?.progress, 40)
+        XCTAssertEqual(ExtensionBridge.packagePath(records["rikugan-demo"]?.iconURL ?? ""), "icons/icon.png")
+        XCTAssertNotNil(ExtensionBridge.packagedImage(png, packages: []))
         XCTAssertEqual(delivered.first?.0, "Rikugan")
         XCTAssertEqual(delivered.first?.1, "通知已创建")
-        let updated = ExtensionBridge.apply(api: "notifications.update", details: ["id": "rikugan-demo", "options": ["title": "Updated", "message": "changed"]], records: &records) { record in
+        let updated = ExtensionBridge.apply(api: "notifications.update", details: ["id": "rikugan-demo", "options": ["title": "Updated", "message": "changed", "progress": 150]], records: &records) { record in
             delivered.append((record.title, record.message))
         }
         XCTAssertEqual(updated.result as? Bool, true)
         XCTAssertEqual(records["rikugan-demo"]?.title, "Updated")
         XCTAssertEqual(records["rikugan-demo"]?.message, "changed")
         XCTAssertEqual(records["rikugan-demo"]?.buttons, ["Open"])
+        XCTAssertEqual(records["rikugan-demo"]?.progress, 100)
+        XCTAssertEqual(records["rikugan-demo"]?.iconURL, "chrome-extension://abc/icons/icon.png")
         XCTAssertEqual(delivered.last?.0, "Updated")
         let missingUpdate = ExtensionBridge.apply(api: "notifications.update", details: ["id": "missing"], records: &records) { _ in }
         XCTAssertEqual(missingUpdate.result as? Bool, false)
@@ -430,6 +451,12 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(unpacked.contains { $0.0 == "rikugan-host-bridge.js" })
         try Data("body{color:red}".utf8).write(to: directory.appendingPathComponent("a.css"))
         try Data("1+1".utf8).write(to: directory.appendingPathComponent("a.js"))
+        let icon = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("icons"), withIntermediateDirectories: true)
+        try icon.write(to: directory.appendingPathComponent("icons/icon.png"))
+        let pictured = ExtensionBridge.packagedImage("icons/icon.png", packages: [(url: directory, directory: true)])
+        XCTAssertEqual(pictured, icon)
+        XCTAssertNil(ExtensionBridge.packagedImage("../secret.png", packages: [(url: directory, directory: true)]))
         let loaded = ExtensionBridge.loadSources(["a.js", "a.css"], packages: [(url: directory, directory: true)], strict: true)
         XCTAssertEqual(try loaded.get(), ["1+1", "body{color:red}"])
         let missingFile = ExtensionBridge.loadSources(["missing.js"], packages: [(url: directory, directory: true)], strict: true)
