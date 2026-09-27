@@ -41,6 +41,20 @@ extension BrowserSession {
         persistTabs()
     }
     func move(_ tab: BrowserTab, to groupID: UUID?) { tab.groupID = groupID; persistTabs() }
+    func loadThumbnails() {
+        guard let model else { return }
+        let folder = model.directory(profileID).appendingPathComponent("Thumbnails", isDirectory: true)
+        for tab in tabs where !tab.isPrivate {
+            let file = folder.appendingPathComponent(tab.id.uuidString + ".jpg")
+            if let image = UIImage(contentsOfFile: file.path) { thumbnails[tab.id] = image }
+        }
+    }
+    func removeThumbnail(_ id: UUID) {
+        thumbnails[id] = nil
+        guard let model else { return }
+        let file = model.directory(profileID).appendingPathComponent("Thumbnails", isDirectory: true).appendingPathComponent(id.uuidString + ".jpg")
+        try? FileManager.default.removeItem(at: file)
+    }
 }
 
 extension BrowserTab: WKScriptMessageHandler {
@@ -49,13 +63,20 @@ extension BrowserTab: WKScriptMessageHandler {
         webView.configuration.userContentController.add(self, contentWorld: .page, name: "rikuganPage")
         pageHandlerInstalled = true
     }
+    func removeContentRules() {
+        let controller = webView.configuration.userContentController
+        for list in installedRuleLists { controller.remove(list) }
+        installedRuleLists = []
+        contentRulesOn = false
+    }
     func syncContentRules() {
-        guard let list = session?.contentRuleList else { contentRulesOn = false; return }
+        removeContentRules()
         let host = webView.url?.host ?? URL(string: address)?.host
         let allowed = (session?.profile.settings.contentBlocking ?? true) && (session?.profile.site(for: host)?.contentBlocking ?? true)
+        guard allowed, let lists = session?.contentRuleLists, !lists.isEmpty else { return }
         let controller = webView.configuration.userContentController
-        if allowed && !contentRulesOn { controller.add(list); contentRulesOn = true }
-        else if !allowed && contentRulesOn { controller.remove(list); contentRulesOn = false }
+        for list in lists { controller.add(list); installedRuleLists.append(list) }
+        contentRulesOn = true
     }
     func setAutoRefresh(_ seconds: Int) {
         autoRefreshSeconds = max(0, seconds)
@@ -86,20 +107,31 @@ extension BrowserTab: WKScriptMessageHandler {
             face = FontLibrary.faceCSS(file: file, family: family)
         }
         let clipboard = session?.profile.permission(host: host ?? "", kind: "clipboard") ?? "ask"
+        let notifications = session?.profile.permission(host: host ?? "", kind: "notification") ?? "ask"
         let modeJS = PageTools.jsString(mode) ?? "\"off\""
         let familyJS = PageTools.jsString(family) ?? "\"\""
         let faceJS = PageTools.jsString(face) ?? "\"\""
+        let notifyJS = PageTools.jsString(notifications) ?? "\"ask\""
         let blockClipboard = clipboard == "block" ? "try{if(navigator.clipboard){navigator.clipboard.readText=()=>Promise.reject(new Error('Blocked by Rikugan'));}}catch(e){}" : ""
+        let hostJSON = (session?.hostCSS).flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let procedural = session?.proceduralJSON ?? "[]"
+        let css = PageTools.jsString(session?.globalCosmetic ?? "") ?? "\"\""
         Task { [weak self] in
             guard let self else { return }
-            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),\(blockClipboard)true", in: self.webView)
+            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installConsole(),\(blockClipboard)true", in: self.webView)
         }
     }
     func captureThumbnail() {
         guard !isHome, !isPrivate else { return }
         webView.takeSnapshot(with: nil) { [weak self] image, _ in
             guard let self, let image else { return }
-            Task { @MainActor in self.session?.thumbnails[self.id] = image }
+            Task { @MainActor in
+                self.session?.thumbnails[self.id] = image
+                guard let session = self.session, let model = session.model, let data = image.jpegData(compressionQuality: 0.55) else { return }
+                let folder = model.directory(session.profileID).appendingPathComponent("Thumbnails", isDirectory: true)
+                try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try? data.write(to: folder.appendingPathComponent(self.id.uuidString + ".jpg"), options: .atomic)
+            }
         }
     }
     func captureIcon() {
@@ -113,11 +145,36 @@ extension BrowserTab: WKScriptMessageHandler {
         }
     }
     func findInPage(_ query: String, direction: Int) async -> (Int, Int) {
-        let literal = PageTools.jsString(query) ?? "\"\""
-        let value = await PageTools.call("RikuganPageTools.find(\(literal), \(direction))", in: webView) as? [String: Any]
-        return (Self.number(value?["index"]), Self.number(value?["total"]))
+        let trimmed = query
+        guard !trimmed.isEmpty else { clearFind(); return (0, 0) }
+        let literal = PageTools.jsString(trimmed) ?? "\"\""
+        let total = Self.number(await PageTools.call("RikuganPageTools.countMatches(\(literal))", in: webView))
+        let configuration = WKFindConfiguration()
+        configuration.backwards = direction < 0
+        configuration.wraps = true
+        let matched: Bool = await withCheckedContinuation { continuation in
+            webView.find(trimmed, configuration: configuration) { result in
+                continuation.resume(returning: result.matchFound)
+            }
+        }
+        guard matched, total > 0 else { findCursor = 0; findNeedle = trimmed; return (0, total) }
+        if findNeedle != trimmed || findCursor == 0 {
+            findNeedle = trimmed
+            findCursor = direction < 0 ? total : 1
+        } else if direction < 0 {
+            findCursor = findCursor <= 1 ? total : findCursor - 1
+        } else {
+            findCursor = findCursor >= total ? 1 : findCursor + 1
+        }
+        return (findCursor, total)
     }
-    func clearFind() { Task { _ = await PageTools.call("RikuganPageTools.clearFind()", in: webView) } }
+    func clearFind() {
+        findCursor = 0
+        findNeedle = ""
+        let configuration = WKFindConfiguration()
+        webView.find("", configuration: configuration) { _ in }
+        Task { _ = await PageTools.call("RikuganPageTools.clearFind()", in: webView) }
+    }
     func beginElementPicker() { Task { _ = await PageTools.call("RikuganPageTools.startPicker()", in: webView) } }
     func video(_ action: String) {
         Task { [weak self] in
@@ -151,8 +208,41 @@ extension BrowserTab: WKScriptMessageHandler {
         controller.present(from: view.bounds, in: view, animated: true, completionHandler: nil)
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "rikuganPage", let body = message.body as? [String: Any], body["action"] as? String == "picker",
-              let selector = body["selector"] as? String, !selector.isEmpty, let host = webView.url?.host else { return }
+        guard message.name == "rikuganPage", let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        if action == "console" {
+            let line = (body["level"] as? String ?? "log") + ": " + (body["text"] as? String ?? "")
+            consoleLines.append(String(line.prefix(2000)))
+            if consoleLines.count > 200 { consoleLines.removeFirst(consoleLines.count - 200) }
+            return
+        }
+        if action == "texts", let items = body["items"] as? [[String: Any]] {
+            let rows: [[String: String]] = items.compactMap { item in
+                guard let id = item["id"] as? String, let text = item["text"] as? String else { return nil }
+                return ["id": id, "text": text]
+            }
+            if !rows.isEmpty { liveTexts = rows }
+            return
+        }
+        if action == "notification", let id = body["id"] as? String {
+            let host = webView.url?.host ?? ""
+            let saved = session?.profile.permission(host: host, kind: "notification") ?? "ask"
+            if saved != "ask" {
+                resolveNotification(id, decision: saved == "allow" ? "granted" : "denied")
+                return
+            }
+            BrowserPresentation.choice(title: host.isEmpty ? "通知" : host, message: "这个网页想显示通知。Rikugan 会记住允许或禁止，但 iOS 不会为网页 Notification 弹出系统横幅。") { [weak self] choice in
+                guard let self else { return }
+                if choice != "ask" {
+                    self.session?.model?.updateProfile(self.session?.profileID ?? UUID()) { profile in
+                        profile.webPermissions.removeAll { $0.host == host && $0.kind == "notification" }
+                        profile.webPermissions.append(WebPermission(host: host, kind: "notification", decision: choice))
+                    }
+                }
+                self.resolveNotification(id, decision: choice == "allow" ? "granted" : "denied")
+            }
+            return
+        }
+        guard action == "picker", let selector = body["selector"] as? String, !selector.isEmpty, let host = webView.url?.host else { return }
         let rule = "\(host)##\(selector)"
         BrowserPresentation.confirm(title: "隐藏这个元素？", message: rule) { [weak self] allowed in
             guard allowed, let self, let session = self.session else { return }
@@ -166,6 +256,11 @@ extension BrowserTab: WKScriptMessageHandler {
                 }
             }
         }
+    }
+    private func resolveNotification(_ id: String, decision: String) {
+        let idJS = PageTools.jsString(id) ?? "\"\""
+        let decisionJS = PageTools.jsString(decision) ?? "\"denied\""
+        Task { _ = await PageTools.call("(function(){var fn=window.__rgNotify&&window.__rgNotify[\(idJS)];if(fn)fn(\(decisionJS));})()", in: webView) }
     }
     func webView(_ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
                  completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {

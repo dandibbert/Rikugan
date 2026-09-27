@@ -68,7 +68,7 @@ struct ReaderSettings: Codable, Equatable {
     var theme = "sepia"
 }
 
-struct BrowserSettings: Codable, Equatable {
+struct BrowserSettings: Equatable {
     var addressBar = "bottom"
     var darkMode = "off"
     var homepage = "favorites"
@@ -89,6 +89,65 @@ struct BrowserSettings: Codable, Equatable {
     var translateTarget = "zh-Hans"
     var reader = ReaderSettings()
     var translationBackend = "apple"
+    var searchSuggestions = true
+}
+
+extension BrowserSettings: Codable {
+    enum CodingKeys: String, CodingKey {
+        case addressBar, darkMode, homepage, homepageURL, immersiveWallpaper, wallpaperFile
+        case preventAppStoreRedirect, preventExternalAppRedirect, contentBlocking, builtInRules
+        case customRules, subscriptions, customEngines, webFontFamily, importedFonts, inspectable
+        case shortcuts, translateTarget, reader, translationBackend, searchSuggestions
+    }
+    init(from decoder: Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        addressBar = try container.decodeIfPresent(String.self, forKey: .addressBar) ?? addressBar
+        darkMode = try container.decodeIfPresent(String.self, forKey: .darkMode) ?? darkMode
+        homepage = try container.decodeIfPresent(String.self, forKey: .homepage) ?? homepage
+        homepageURL = try container.decodeIfPresent(String.self, forKey: .homepageURL) ?? homepageURL
+        immersiveWallpaper = try container.decodeIfPresent(Bool.self, forKey: .immersiveWallpaper) ?? immersiveWallpaper
+        wallpaperFile = try container.decodeIfPresent(String.self, forKey: .wallpaperFile) ?? wallpaperFile
+        preventAppStoreRedirect = try container.decodeIfPresent(Bool.self, forKey: .preventAppStoreRedirect) ?? preventAppStoreRedirect
+        preventExternalAppRedirect = try container.decodeIfPresent(Bool.self, forKey: .preventExternalAppRedirect) ?? preventExternalAppRedirect
+        contentBlocking = try container.decodeIfPresent(Bool.self, forKey: .contentBlocking) ?? contentBlocking
+        builtInRules = try container.decodeIfPresent(Bool.self, forKey: .builtInRules) ?? builtInRules
+        customRules = try container.decodeIfPresent([CustomBlockRule].self, forKey: .customRules) ?? customRules
+        subscriptions = try container.decodeIfPresent([FilterSubscription].self, forKey: .subscriptions) ?? subscriptions
+        customEngines = try container.decodeIfPresent([SearchEngine].self, forKey: .customEngines) ?? customEngines
+        webFontFamily = try container.decodeIfPresent(String.self, forKey: .webFontFamily) ?? webFontFamily
+        importedFonts = try container.decodeIfPresent([ImportedFont].self, forKey: .importedFonts) ?? importedFonts
+        inspectable = try container.decodeIfPresent(Bool.self, forKey: .inspectable) ?? inspectable
+        shortcuts = try container.decodeIfPresent([String].self, forKey: .shortcuts) ?? shortcuts
+        translateTarget = try container.decodeIfPresent(String.self, forKey: .translateTarget) ?? translateTarget
+        reader = try container.decodeIfPresent(ReaderSettings.self, forKey: .reader) ?? reader
+        translationBackend = try container.decodeIfPresent(String.self, forKey: .translationBackend) ?? translationBackend
+        searchSuggestions = try container.decodeIfPresent(Bool.self, forKey: .searchSuggestions) ?? true
+    }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(addressBar, forKey: .addressBar)
+        try container.encode(darkMode, forKey: .darkMode)
+        try container.encode(homepage, forKey: .homepage)
+        try container.encode(homepageURL, forKey: .homepageURL)
+        try container.encode(immersiveWallpaper, forKey: .immersiveWallpaper)
+        try container.encode(wallpaperFile, forKey: .wallpaperFile)
+        try container.encode(preventAppStoreRedirect, forKey: .preventAppStoreRedirect)
+        try container.encode(preventExternalAppRedirect, forKey: .preventExternalAppRedirect)
+        try container.encode(contentBlocking, forKey: .contentBlocking)
+        try container.encode(builtInRules, forKey: .builtInRules)
+        try container.encode(customRules, forKey: .customRules)
+        try container.encode(subscriptions, forKey: .subscriptions)
+        try container.encode(customEngines, forKey: .customEngines)
+        try container.encode(webFontFamily, forKey: .webFontFamily)
+        try container.encode(importedFonts, forKey: .importedFonts)
+        try container.encode(inspectable, forKey: .inspectable)
+        try container.encode(shortcuts, forKey: .shortcuts)
+        try container.encode(translateTarget, forKey: .translateTarget)
+        try container.encode(reader, forKey: .reader)
+        try container.encode(translationBackend, forKey: .translationBackend)
+        try container.encode(searchSuggestions, forKey: .searchSuggestions)
+    }
 }
 
 struct SiteSettings: Codable, Equatable, Identifiable {
@@ -186,6 +245,93 @@ enum Omnibox {
             rows.insert(OmniboxSuggestion(id: "search", title: "搜索「\(query)」", subtitle: profile.searchEngine, target: query), at: 0)
         }
         return rows
+    }
+}
+
+enum SearchSuggest {
+    static func endpoint(template: String, query: String) -> URL? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count < 200 else { return nil }
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let lower = template.lowercased()
+        if lower.contains("google.") { return URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(encoded)") }
+        if lower.contains("bing.") { return URL(string: "https://api.bing.com/osjson.aspx?query=\(encoded)") }
+        if lower.contains("duckduckgo.") { return URL(string: "https://duckduckgo.com/ac/?q=\(encoded)&type=list") }
+        return nil
+    }
+    static func parse(_ data: Data) -> [String] {
+        if let rows = try? JSONSerialization.jsonObject(with: data) as? [Any], rows.count > 1, let suggestions = rows[1] as? [String] {
+            return Array(suggestions.prefix(8))
+        }
+        if let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            return Array(rows.compactMap { $0["phrase"] as? String }.prefix(8))
+        }
+        return []
+    }
+    static func fetch(query: String, template: String) async -> [String] {
+        guard let url = endpoint(template: template, query: query) else { return [] }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 4
+        request.setValue("Rikugan", forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return [] }
+        return parse(data)
+    }
+}
+
+struct PlaylistVariant: Equatable {
+    var url: String
+    var bandwidth: Int
+    var width: Int
+    var height: Int
+    var kind: String
+}
+
+enum PlaylistText {
+    static func parseM3U8(_ text: String, base: URL) -> [PlaylistVariant] {
+        guard text.contains("#EXTM3U") else { return [] }
+        let lines = text.components(separatedBy: .newlines)
+        var variants: [PlaylistVariant] = []
+        for index in lines.indices {
+            let line = lines[index].trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("#EXT-X-STREAM-INF:") else { continue }
+            let bandwidth = capture(#"BANDWIDTH=(\d+)"#, line).flatMap(Int.init) ?? 0
+            let size = capture(#"RESOLUTION=(\d+)x(\d+)"#, line)
+            let width = Int(size?.0 ?? "") ?? 0
+            let height = Int(size?.1 ?? "") ?? 0
+            let next = index + 1 < lines.count ? lines[index + 1].trimmingCharacters(in: .whitespaces) : ""
+            guard !next.isEmpty, !next.hasPrefix("#"), let url = URL(string: next, relativeTo: base)?.absoluteString else { continue }
+            variants.append(PlaylistVariant(url: url, bandwidth: bandwidth, width: width, height: height, kind: "hls"))
+        }
+        return variants
+    }
+    static func parseMPD(_ text: String, base: URL) -> [PlaylistVariant] {
+        guard text.contains("<MPD") || text.contains("<mpd") else { return [] }
+        var variants: [PlaylistVariant] = []
+        for block in blocks(text) {
+            guard let raw = capture("<BaseURL>([^<]+)</BaseURL>", block)?.0,
+                  let url = URL(string: raw.trimmingCharacters(in: .whitespaces), relativeTo: base)?.absoluteString else { continue }
+            let bandwidth = Int(capture(#"bandwidth="(\d+)""#, block)?.0 ?? "") ?? 0
+            let width = Int(capture(#"width="(\d+)""#, block)?.0 ?? "") ?? 0
+            let height = Int(capture(#"height="(\d+)""#, block)?.0 ?? "") ?? 0
+            variants.append(PlaylistVariant(url: url, bandwidth: bandwidth, width: width, height: height, kind: "dash"))
+        }
+        return variants
+    }
+    private static func blocks(_ text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #"<Representation\b[^>]*>[\s\S]*?</Representation>"#, options: [.caseInsensitive]) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range, in: text).map { String(text[$0]) }
+        }
+    }
+    private static func capture(_ pattern: String, _ text: String) -> (String, String)? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
+        let first = Range(match.range(at: 1), in: text).map { String(text[$0]) } ?? ""
+        let second = match.numberOfRanges > 2 ? Range(match.range(at: 2), in: text).map { String(text[$0]) } ?? "" : ""
+        return (first, second)
     }
 }
 

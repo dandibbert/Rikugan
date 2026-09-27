@@ -12,6 +12,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
     @Published var working = false
     @Published var pendingShare: (action: String, value: String)?
     let downloadCenter = DownloadCenter()
+    let windows = WindowRegistry()
     let root: URL
     let isTesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
     var profile: BrowserProfile { state.profiles.first { $0.id == state.activeProfileID } ?? state.profiles[0] }
@@ -235,6 +236,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         let data = try Data(contentsOf: url)
         guard data.count <= 2_500_000 else { throw RikuganError.message("字体文件不能超过 2.5 MB。") }
+        try FontLibrary.rejectUnsupported(data, ext: url.pathExtension)
         let folder = directory(profile.id).appendingPathComponent("Fonts", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let fileName = UUID().uuidString + "." + (url.pathExtension.isEmpty ? "ttf" : url.pathExtension)
@@ -278,12 +280,8 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
                 Button("关闭标签页") { if let tab = model.session?.activeTab { model.session?.close(tab) } }.keyboardShortcut("w")
             }
         }
-        WindowGroup(for: UUID.self) { $tabID in
-            if let tabID, let session = model.session, let tab = session.tabs.first(where: { $0.id == tabID }) {
-                BrowserPage(tab: tab, session: session, openPanel: { _ in }).environmentObject(model)
-            } else {
-                ContentUnavailableView("标签已关闭", systemImage: "macwindow")
-            }
+        WindowGroup(for: UUID.self) { $windowID in
+            AuxiliaryBrowserView(windowID: windowID).environmentObject(model)
         }
     }
 }

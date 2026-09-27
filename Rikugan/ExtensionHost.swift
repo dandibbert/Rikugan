@@ -94,7 +94,11 @@ extension BrowserSession {
         context.baseURL = URL(string: "webkit-extension://" + record.id.uuidString.lowercased() + "/")!
         context.isInspectable = true
         context.hasAccessToPrivateData = false
-        context.unsupportedAPIs = ["runtime.sendNativeMessage", "runtime.connectNative"]
+        context.unsupportedAPIs = [
+            "runtime.sendNativeMessage", "runtime.connectNative",
+            "notifications", "notifications.create", "notifications.clear", "notifications.getAll", "notifications.update",
+            "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand"
+        ]
         for permission in record.allowedPermissions { context.setPermissionStatus(.grantedExplicitly, for: WKWebExtension.Permission(rawValue: permission)) }
         for pattern in record.allowedPatterns {
             if let match = try? WKWebExtension.MatchPattern(string: pattern) { context.setPermissionStatus(.grantedExplicitly, for: match) }
@@ -149,12 +153,7 @@ extension BrowserSession {
         model?.working = true
         defer { model?.working = false }
         do {
-            var request = URLRequest(url: url)
-            request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count > 16 else {
-                throw RikuganError.message("商店没有返回安装包（HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)）。")
-            }
+            let data = try await Self.extensionPackage(from: url)
             let temp = FileManager.default.temporaryDirectory.appendingPathComponent(id + ".crx")
             try data.write(to: temp)
             var prepared = try await prepareExtension(temp)
@@ -168,8 +167,7 @@ extension BrowserSession {
         model?.working = true
         defer { model?.working = false }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw RikuganError.message("更新下载失败。") }
+            let data = try await Self.extensionPackage(from: url)
             let temp = FileManager.default.temporaryDirectory.appendingPathComponent(record.id.uuidString + ".crx")
             try data.write(to: temp)
             let prepared = try await prepareExtension(temp)
@@ -197,6 +195,29 @@ extension BrowserSession {
                 }
             }
         } catch { model?.message = error.localizedDescription }
+    }
+    static func extensionPackage(from url: URL) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count > 16 else {
+            throw RikuganError.message("没有返回安装包（HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)）。")
+        }
+        if let manifest = ExtensionUpdateManifest.package(in: data) {
+            var follow = URLRequest(url: manifest.url)
+            follow.setValue(request.value(forHTTPHeaderField: "User-Agent"), forHTTPHeaderField: "User-Agent")
+            let (file, fileResponse) = try await URLSession.shared.data(for: follow)
+            guard let fileHTTP = fileResponse as? HTTPURLResponse, (200..<300).contains(fileHTTP.statusCode), file.count > 16 else {
+                throw RikuganError.message("更新清单指向的 CRX 下载失败。")
+            }
+            return file
+        }
+        return data
+    }
+    func checkExtensionUpdates() async {
+        let records = profile.extensions.filter { !$0.updateURL.isEmpty || !$0.storeID.isEmpty }
+        guard !records.isEmpty else { model?.message = "没有带更新地址的扩展。"; return }
+        for record in records { await updateExtension(record) }
     }
     private func discardInstalledFiles(_ record: ExtensionRecord) {
         guard let model else { return }

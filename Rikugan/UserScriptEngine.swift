@@ -6,12 +6,14 @@ struct ScriptCommand: Identifiable {
     var title: String
     var scriptID: UUID
     var tabID: UUID
+    var isolated = true
 }
 
 @MainActor final class UserScriptEngine: NSObject, WKScriptMessageHandlerWithReply {
     weak var tab: BrowserTab?
     private var handlers: [(name: String, world: WKContentWorld)] = []
     private var scripts: [String: UserScript] = [:]
+    private var exchanges: [String: ScriptExchange] = [:]
     private static let template: String = {
         guard let url = Bundle.main.url(forResource: "UserscriptRuntime", withExtension: "js"), let source = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return source
@@ -24,10 +26,8 @@ struct ScriptCommand: Identifiable {
         for script in enabledScripts where script.enabled {
             let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
             let name = "rg_" + script.id.uuidString.replacingOccurrences(of: "-", with: "")
-            if script.isolated {
-                controller.addScriptMessageHandler(self, contentWorld: world, name: name)
-                handlers.append((name, world)); scripts[name] = script
-            }
+            controller.addScriptMessageHandler(self, contentWorld: world, name: name)
+            handlers.append((name, world)); scripts[name] = script
             let storage = (script.storageJSON.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? [:]
             let resources = Dictionary(uniqueKeysWithValues: script.resources.map { ($0.name, ["text": $0.text, "url": $0.dataURL]) })
             let configuration: [String: Any] = [
@@ -63,14 +63,19 @@ struct ScriptCommand: Identifiable {
         let args = body["args"] as? [String: Any] ?? [:]
         switch operation {
         case "getValue", "listValues":
-            let storage = Self.values(script)
+            let storage = values(for: script, tab: tab, session: session)
             replyHandler(operation == "listValues" ? Array(storage.keys) : (storage[args["key"] as? String ?? ""] ?? NSNull()), nil)
         case "setValue", "deleteValue":
             guard let key = args["key"] as? String, key.utf8.count < 4096 else { replyHandler(nil, "无效的存储键。"); return }
-            var values = Self.values(script)
-            if operation == "deleteValue" { values.removeValue(forKey: key) } else { values[key] = args["value"] ?? NSNull() }
-            guard JSONSerialization.isValidJSONObject(values), let data = try? JSONSerialization.data(withJSONObject: values), data.count <= 2_000_000,
+            var stored = values(for: script, tab: tab, session: session)
+            if operation == "deleteValue" { stored.removeValue(forKey: key) } else { stored[key] = args["value"] ?? NSNull() }
+            guard JSONSerialization.isValidJSONObject(stored), let data = try? JSONSerialization.data(withJSONObject: stored), data.count <= 2_000_000,
                   let json = String(data: data, encoding: .utf8) else { replyHandler(nil, "脚本存储必须为 JSON，且不能超过 2 MB。"); return }
+            if !ScriptVault.persists(isPrivate: tab.isPrivate) {
+                session.privateScriptValues[script.id] = stored
+                replyHandler(true, nil)
+                return
+            }
             session.model?.updateProfile(session.profileID) { profile in
                 if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].storageJSON = json }
             }
@@ -87,7 +92,7 @@ struct ScriptCommand: Identifiable {
         case "registerMenuCommand":
             guard message.frameInfo.isMainFrame, let id = args["id"] as? String, let title = args["title"] as? String else { replyHandler(nil, "菜单命令仅支持顶层页面。"); return }
             session.commands.removeAll { $0.id == id && $0.tabID == tab.id }
-            session.commands.append(ScriptCommand(id: id, title: String(title.prefix(120)), scriptID: script.id, tabID: tab.id))
+            session.commands.append(ScriptCommand(id: id, title: String(title.prefix(120)), scriptID: script.id, tabID: tab.id, isolated: script.isolated))
             replyHandler(id, nil)
         case "unregisterMenuCommand":
             session.commands.removeAll { $0.id == args["id"] as? String && $0.scriptID == script.id && $0.tabID == tab.id }
@@ -106,11 +111,32 @@ struct ScriptCommand: Identifiable {
                 for (key, value) in headers where !["host", "content-length", "connection"].contains(key.lowercased()) { request.setValue(value, forHTTPHeaderField: key) }
             }
             let rules = script.connects + ["self"]
-            ScriptNetwork.fetch(request, permits: { URLRules.connectionAllowed($0, origin: origin, rules: rules) }) { result in
+            let requestID = args["id"] as? String ?? UUID().uuidString
+            let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
+            let exchange = ScriptExchange.start(request, permits: { URLRules.connectionAllowed($0, origin: origin, rules: rules) }) { [weak self] result in
+                self?.exchanges[requestID] = nil
                 switch result { case .success(let value): replyHandler(value, nil); case .failure(let error): replyHandler(nil, error.localizedDescription) }
             }
+            exchange?.onProgress = { [weak self] loaded, total in self?.reportProgress(id: requestID, loaded: loaded, total: total, world: world) }
+            if let exchange { exchanges[requestID] = exchange }
+        case "abortRequest":
+            if let id = args["id"] as? String { exchanges.removeValue(forKey: id)?.cancel() }
+            replyHandler(true, nil)
         default: replyHandler(nil, "尚未支持此 API。")
         }
+    }
+    private func values(for script: UserScript, tab: BrowserTab, session: BrowserSession) -> [String: Any] {
+        if tab.isPrivate {
+            if session.privateScriptValues[script.id] == nil { session.privateScriptValues[script.id] = Self.values(script) }
+            return session.privateScriptValues[script.id] ?? [:]
+        }
+        return Self.values(script)
+    }
+    private func reportProgress(id: String, loaded: Int, total: Int, world: WKContentWorld) {
+        guard let tab else { return }
+        let payload: [String: Any] = ["id": id, "loaded": loaded, "total": total]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
+        tab.webView.evaluateJavaScript("globalThis.__rikuganXHREvent && globalThis.__rikuganXHREvent(\(json))", in: nil, in: world) { _, _ in }
     }
     static func values(_ script: UserScript) -> [String: Any] {
         guard let data = script.storageJSON.data(using: .utf8), let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }

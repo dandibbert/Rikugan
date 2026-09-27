@@ -2,6 +2,21 @@ import CoreText
 import UIKit
 
 enum FontLibrary {
+    static func rejectUnsupported(_ data: Data, ext: String) throws {
+        let kind = ext.lowercased()
+        if kind == "woff" || kind == "woff2" {
+            throw RikuganError.message("不能注册 woff / woff2。Core Text 只接受 ttf、otf 或 ttc，页面不会假装已经用上这个字体。")
+        }
+        if data.count >= 4 {
+            let magic = String(data: data.prefix(4), encoding: .ascii) ?? ""
+            if magic == "wOFF" || magic == "wOF2" {
+                throw RikuganError.message("文件内容是 woff / woff2。Core Text 不能注册，请换 ttf、otf 或 ttc。")
+            }
+        }
+        guard ["ttf", "otf", "ttc", ""].contains(kind) else {
+            throw RikuganError.message("只接受 ttf、otf 或 ttc。")
+        }
+    }
     static func register(_ url: URL) throws -> String {
         var error: Unmanaged<CFError>?
         guard CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) else {

@@ -4,22 +4,22 @@ import Compression
 enum ChromeAPIMatrix {
     struct Entry: Equatable { var api: String; var level: String; var note: String }
     static let entries: [Entry] = [
-        .init(api: "runtime", level: "Supported", note: "onMessage、sendMessage、connect、getURL、id。sendNativeMessage / connectNative 明确禁用。"),
-        .init(api: "storage", level: "Supported", note: "local / sync / session 由 WebKit 扩展存储提供，按身份隔离。"),
+        .init(api: "runtime", level: "Supported", note: "由 WKWebExtension 实现 onMessage、sendMessage、connect、getURL、id。不是自研 chrome.runtime。sendNativeMessage / connectNative 明确禁用。"),
+        .init(api: "storage", level: "Supported", note: "由 WKWebExtension 的扩展存储提供 local / sync / session，按身份隔离。"),
         .init(api: "scripting", level: "Partial", note: "executeScript 与 insertCSS 取决于 WebKit；不支持的目标会返回错误而不是崩溃。"),
         .init(api: "tabs", level: "Partial", note: "query、create、update、reload、remove、activate。窗口管理只覆盖 App 内窗口。"),
         .init(api: "permissions", level: "Supported", note: "安装确认、可选权限与网站权限变更都会再次询问。"),
         .init(api: "content_scripts", level: "Supported", note: "matches、exclude_matches、js、css、run_at、all_frames。"),
-        .init(api: "action", level: "Supported", note: "工具栏按钮与 popup。扩展页使用 WebKit 扩展 origin。"),
+        .init(api: "action", level: "Supported", note: "工具栏按钮调用 WKWebExtensionContext.performAction，弹窗由 WebKit 绘制。扩展页使用 WebKit 扩展 origin。"),
         .init(api: "contextMenus", level: "Partial", note: "由 WebKit 提供的上下文菜单，不覆盖全部桌面上下文。"),
         .init(api: "commands", level: "Partial", note: "iOS 没有桌面级快捷键系统，仅保留 WebKit 能分发的命令。"),
         .init(api: "cookies", level: "Partial", note: "只能访问当前身份网站存储里 WebKit 暴露的 cookie。"),
         .init(api: "downloads", level: "Partial", note: "浏览器自己的下载管理器可用；chrome.downloads 取决于 WebKit。"),
         .init(api: "i18n", level: "Partial", note: "跟随扩展包内的 _locales，缺少的文案不会伪造。"),
-        .init(api: "notifications", level: "Unsupported", note: "未实现持久通知后端。调用会由 WebKit 返回不支持，而不是静默成功。"),
+        .init(api: "notifications", level: "Unsupported", note: "已列入 WKWebExtensionContext.unsupportedAPIs。没有持久通知后端，调用不会被记成成功。"),
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
         .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带 DNR 由 WebKit 执行。Rikugan 的广告拦截是独立引擎，不把扩展改写成用户脚本。"),
-        .init(api: "debugger", level: "Unsupported", note: "不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),
+        .init(api: "debugger", level: "Unsupported", note: "已列入 unsupportedAPIs。不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),
         .init(api: "nativeMessaging", level: "Unsupported", note: "runtime.sendNativeMessage 与 connectNative 已列入 unsupportedAPIs。")
     ]
     static func additions(old: [String], new: [String]) -> [String] {
@@ -261,6 +261,24 @@ enum CRXArchive {
 
 extension ZipArchive {
     static func int32Public(_ bytes: [UInt8], _ index: Int) -> Int { Int(bytes[index]) | Int(bytes[index + 1]) << 8 | Int(bytes[index + 2]) << 16 | Int(bytes[index + 3]) << 24 }
+}
+
+enum ExtensionUpdateManifest {
+    /// Chrome/Edge update manifests are XML (`<gupdate><updatecheck codebase version>`), not the CRX itself.
+    static func package(in data: Data) -> (url: URL, version: String)? {
+        guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { return nil }
+        let lowered = text.lowercased()
+        guard lowered.contains("<updatecheck"), lowered.contains("codebase") else { return nil }
+        guard let codebase = attribute("codebase", in: text), let url = URL(string: codebase), url.scheme?.lowercased() == "https" else { return nil }
+        return (url, attribute("version", in: text) ?? "")
+    }
+    private static func attribute(_ name: String, in text: String) -> String? {
+        let pattern = name + #"\s*=\s*"([^"]+)""#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range), let found = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[found]).replacingOccurrences(of: "&amp;", with: "&")
+    }
 }
 
 enum InternalPages {

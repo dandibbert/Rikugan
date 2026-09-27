@@ -75,7 +75,7 @@ struct BrowserShell: View {
             }.navigationTitle("标签")
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button("新标签", systemImage: "plus") { session.addTab() } }
-                    ToolbarItem(placement: .topBarTrailing) { Button("新窗口", systemImage: "macwindow.badge.plus") { let tab = session.addTab(activate: false); openWindow(value: tab.id) } }
+                    ToolbarItem(placement: .topBarTrailing) { Button("新窗口", systemImage: "macwindow.badge.plus") { openAnotherWindow() } }
                 }
         } detail: {
             VStack(spacing: 0) {
@@ -95,6 +95,12 @@ struct BrowserShell: View {
     }
     private func row(_ tab: BrowserTab) -> some View {
         Button { session.select(tab) } label: { HStack { Image(systemName: tab.isPrivate ? "eyeglasses" : "globe"); Text(tab.pageTitle).lineLimit(1) } }
+    }
+    private func openAnotherWindow() {
+        let tab = session.activeTab
+        let store = tab?.isPrivate == true ? session.privateStore : session.dataStore
+        let id = model.windows.open(store: store, extensions: session.extensionController, url: tab?.webView.url ?? URL(string: tab?.address ?? ""))
+        openWindow(value: id)
     }
 }
 
@@ -169,7 +175,7 @@ struct BrowserPage: View {
             case .reader: ReaderSheet(tab: tab)
             case .media: MediaSheet(tab: tab)
             case .images: ImageSheet(tab: tab)
-            case .qr: QRSheet(address: tab.webView.url?.absoluteString ?? tab.address)
+            case .qr: QRSheet(address: tab.webView.url?.absoluteString ?? tab.address, open: { value in tool = nil; openQR(value, search: false) }, search: { value in tool = nil; openQR(value, search: true) })
             case .translate: TranslateSheet(tab: tab)
             case .site: SiteSettingsSheet(tab: tab)
             case .console: ConsoleSheet(tab: tab)
@@ -199,16 +205,31 @@ struct BrowserPage: View {
                 }
             }.padding(.horizontal, 14).frame(height: 46).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
             HStack {
-                Button { tab.webView.goBack() } label: { Image(systemName: "chevron.left").frame(width: 32, height: 30) }.disabled(!tab.canGoBack).accessibilityLabel("后退")
-                Button { tab.webView.goForward() } label: { Image(systemName: "chevron.right").frame(width: 32, height: 30) }.disabled(!tab.canGoForward).accessibilityLabel("前进")
+                Button { tab.webView.goBack() } label: { Image(systemName: "chevron.left").frame(width: 32, height: 30) }
+                    .disabled(!tab.canGoBack).accessibilityLabel("后退")
+                    .contextMenu { shortcutMenu }
+                Button { tab.webView.goForward() } label: { Image(systemName: "chevron.right").frame(width: 32, height: 30) }
+                    .disabled(!tab.canGoForward).accessibilityLabel("前进")
+                    .contextMenu { shortcutMenu }
                 ForEach(model.profile.settings.shortcuts, id: \.self) { id in
                     Button { shortcut(id) } label: { Image(systemName: ShortcutCatalog.symbol(id)).frame(width: 30, height: 30) }.accessibilityLabel(ShortcutCatalog.title(id))
+                }
+                ForEach(toolbarExtensions.prefix(3)) { record in
+                    Button { session.performExtension(record.id) } label: {
+                        Text(String(record.name.prefix(1))).font(.system(size: 12, weight: .bold))
+                            .frame(width: 26, height: 26)
+                            .background(Circle().stroke(Color.secondary.opacity(0.45)))
+                    }
+                    .accessibilityLabel(record.name)
+                    .accessibilityIdentifier("extension.toolbar.\(record.name)")
                 }
                 Spacer(minLength: 8)
                 Button { openPanel(.profiles) } label: { Image(systemName: model.profile.symbol).frame(width: 36, height: 30) }.accessibilityLabel("身份空间").accessibilityIdentifier("browser.profiles")
                 Spacer(minLength: 8)
                 Button { share() } label: { Image(systemName: "square.and.arrow.up").frame(width: 32, height: 30) }.disabled(tab.isHome).accessibilityLabel("分享")
-                Button { openPanel(.tabs) } label: { ZStack { Image(systemName: "square.on.square"); Text("\(session.tabs.count)").font(.system(size: 9, weight: .bold)).offset(x: -2, y: 2) }.frame(width: 36, height: 30) }.accessibilityLabel("标签页").accessibilityIdentifier("browser.tabs")
+                Button { openPanel(.tabs) } label: { ZStack { Image(systemName: "square.on.square"); Text("\(session.tabs.count)").font(.system(size: 9, weight: .bold)).offset(x: -2, y: 2) }.frame(width: 36, height: 30) }
+                    .accessibilityLabel("标签页").accessibilityIdentifier("browser.tabs")
+                    .contextMenu { shortcutMenu }
                 pageMenu
             }.font(.system(size: 19))
         }.padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 6).background(.bar)
@@ -232,6 +253,8 @@ struct BrowserPage: View {
             Button("媒体", systemImage: "play.rectangle") { tool = .media }.disabled(tab.isHome)
             Button("图片", systemImage: "photo") { tool = .images }.disabled(tab.isHome)
             Button("画中画", systemImage: "pip") { tab.video("pip") }.disabled(tab.isHome)
+            Button("全屏", systemImage: "arrow.up.left.and.arrow.down.right") { tab.video("fullscreen") }.disabled(tab.isHome)
+            Button("AirPlay", systemImage: "airplayvideo") { tab.video("airplay") }.disabled(tab.isHome)
             Button("下载", systemImage: "arrow.down.circle") { openPanel(.settings) }
             Divider()
             Button("分享", systemImage: "square.and.arrow.up") { share() }
@@ -271,7 +294,36 @@ struct BrowserPage: View {
         model.updateProfile(session.profileID) { $0.settings.darkMode = next }
         tab.applyDecorations()
     }
-    private func refreshSuggestions() { suggestions = addressFocused ? Omnibox.suggestions(input: input, profile: model.profile) : [] }
+    private var toolbarExtensions: [ExtensionRecord] {
+        model.profile.extensions.filter { $0.enabled && session.contexts[$0.id] != nil }
+    }
+    private var shortcutMenu: some View {
+        ForEach(ShortcutCatalog.all, id: \.id) { item in Button(item.title) { shortcut(item.id) } }
+    }
+    private func refreshSuggestions() {
+        let local = addressFocused ? Omnibox.suggestions(input: input, profile: model.profile) : []
+        suggestions = local
+        let query = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard addressFocused, model.profile.settings.searchSuggestions, URLRules.isSearch(query) else { return }
+        let template = model.profile.searchEngine
+        Task {
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            let remote = await SearchSuggest.fetch(query: query, template: template)
+            guard addressFocused, input.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            var rows = Omnibox.suggestions(input: query, profile: model.profile)
+            for term in remote where !rows.contains(where: { $0.title == term }) {
+                rows.append(OmniboxSuggestion(id: "r" + term, title: term, subtitle: "搜索建议", target: term))
+            }
+            suggestions = rows
+        }
+    }
+    private func openQR(_ value: String, search: Bool) {
+        if search { tab.loadInput(value); return }
+        if let url = URLRules.directURL(value) { tab.navigate(url); return }
+        if let url = URL(string: value), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) { tab.navigate(url); return }
+        if !value.contains(where: \.isWhitespace), value.contains("."), let url = URL(string: "https://" + value) { tab.navigate(url); return }
+        model.message = "这不是可以打开的网址。"
+    }
     private func runFind(_ direction: Int) async {
         let found = await tab.findInPage(findText, direction: direction)
         findIndex = found.0; findTotal = found.1
@@ -385,19 +437,17 @@ struct TabsView: View {
     @State private var groupName = ""
     var body: some View {
         NavigationStack {
-            List {
-                if !model.profile.closedTabs.isEmpty {
-                    Button("恢复最近关闭 · \(model.profile.closedTabs[0].title)", systemImage: "arrow.uturn.backward") { session.reopenClosed() }
-                }
-                if !session.tabs.filter(\.isPrivate).isEmpty {
-                    Section("无痕") { ForEach(session.tabs.filter(\.isPrivate)) { row($0) } }
-                }
-                ForEach(model.profile.tabGroups) { group in
-                    Section(group.name) {
-                        ForEach(session.tabs.filter { $0.groupID == group.id && !$0.isPrivate }) { row($0) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if !model.profile.closedTabs.isEmpty {
+                        Button("恢复最近关闭 · \(model.profile.closedTabs[0].title)", systemImage: "arrow.uturn.backward") { session.reopenClosed() }
                     }
-                }
-                Section("标签页") { ForEach(session.tabs.filter { $0.groupID == nil && !$0.isPrivate }) { row($0) } }
+                    if !session.tabs.filter(\.isPrivate).isEmpty { groupBlock(title: "无痕", tabs: session.tabs.filter(\.isPrivate), group: nil) }
+                    ForEach(model.profile.tabGroups) { group in
+                        groupBlock(title: group.name, tabs: session.tabs.filter { $0.groupID == group.id && !$0.isPrivate }, group: group)
+                    }
+                    groupBlock(title: "未分组", tabs: session.tabs.filter { $0.groupID == nil && !$0.isPrivate }, group: nil)
+                }.padding(16)
             }.navigationTitle("标签页")
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button("新建", systemImage: "plus") { session.addTab(); dismiss() } }
@@ -418,16 +468,37 @@ struct TabsView: View {
                 }
         }
     }
-    private func row(_ tab: BrowserTab) -> some View {
-        Button { session.select(tab); dismiss() } label: {
-            HStack(spacing: 12) {
-                if let image = session.thumbnails[tab.id] { Image(uiImage: image).resizable().scaledToFill().frame(width: 54, height: 40).clipped().cornerRadius(6) }
-                else if let icon = session.favicons[tab.id] { Image(uiImage: icon).resizable().frame(width: 22, height: 22) }
-                else { Image(systemName: tab.isHome ? "house" : (tab.isPrivate ? "eyeglasses" : "globe")) }
-                VStack(alignment: .leading) { Text(tab.pageTitle).lineLimit(1); Text(tab.isHome ? "新标签页" : tab.address).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                Spacer(); if tab.id == session.selectedID { Image(systemName: "checkmark.circle.fill") }
+    private func groupBlock(title: String, tabs: [BrowserTab], group: TabGroup?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                if let group {
+                    Menu {
+                        Button("重命名") { BrowserPresentation.input(title: "重命名标签组", message: "", initial: group.name) { name in if let name { session.renameGroup(group.id, to: name) } } }
+                        Button("删除标签组", role: .destructive) { session.deleteGroup(group.id) }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 10)], spacing: 10) {
+                ForEach(tabs) { tab in card(tab) }
             }
         }
+    }
+    private func card(_ tab: BrowserTab) -> some View {
+        Button { session.select(tab); dismiss() } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10).fill(Color(uiColor: .secondarySystemFill))
+                    if let image = session.thumbnails[tab.id] { Image(uiImage: image).resizable().scaledToFill() }
+                    else { Image(systemName: tab.isHome ? "house" : (tab.isPrivate ? "eyeglasses" : "globe")).font(.title2).foregroundStyle(.secondary) }
+                }.frame(height: 92).clipped().clipShape(RoundedRectangle(cornerRadius: 10))
+                Text(tab.pageTitle).font(.subheadline).lineLimit(1)
+                Text(tab.isHome ? "新标签页" : tab.address).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) { if tab.id == session.selectedID { Image(systemName: "checkmark.circle.fill").padding(6) } }
         .contextMenu {
             Button("关闭") { session.close(tab) }
             Button("关闭其他") { session.closeOthers(keeping: tab) }
@@ -437,7 +508,6 @@ struct TabsView: View {
                 ForEach(model.profile.tabGroups) { group in Button(group.name) { session.move(tab, to: group.id) } }
             }
         }
-        .swipeActions { Button("关闭", role: .destructive) { session.close(tab) } }
     }
 }
 
@@ -484,8 +554,13 @@ struct LibraryView: View {
                 Picker("资料", selection: $selection) { Text("书签").tag(0); Text("历史").tag(1) }.pickerStyle(.segmented)
                 TextField("搜索", text: $query)
                 if selection == 0 {
-                    if model.profile.bookmarkFolders.isEmpty == false && folder == nil {
-                        ForEach(model.profile.bookmarkFolders) { item in Button(item.name, systemImage: "folder") { folder = item.id } }
+                    if folder != nil { Button("返回上一层", systemImage: "chevron.left") { folder = model.profile.bookmarkFolders.first { $0.id == folder }?.parentID } }
+                    ForEach(childFolders) { item in
+                        HStack {
+                            Button(item.name, systemImage: "folder") { folder = item.id }
+                            Spacer()
+                            Button("删除", role: .destructive) { deleteFolder(item) }.font(.caption)
+                        }
                     }
                     if filteredBookmarks.isEmpty { ContentUnavailableView("还没有书签", systemImage: "book") }
                     ForEach(filteredBookmarks) { page in
@@ -529,14 +604,27 @@ struct LibraryView: View {
                 }
                 .alert("新建文件夹", isPresented: $addingFolder) {
                     TextField("名称", text: $folderName)
-                    Button("创建") { model.updateProfile(session.profileID) { $0.bookmarkFolders.append(BookmarkFolder(name: String(folderName.prefix(40)))) }; folderName = "" }
+                    Button("创建") { model.updateProfile(session.profileID) { $0.bookmarkFolders.append(BookmarkFolder(name: String(folderName.prefix(40)), parentID: folder)) }; folderName = "" }
                     Button("取消", role: .cancel) {}
                 }
         }
     }
+    private var childFolders: [BookmarkFolder] { model.profile.bookmarkFolders.filter { $0.parentID == folder } }
+    private func deleteFolder(_ item: BookmarkFolder) {
+        model.updateProfile(session.profileID) { profile in
+            for index in profile.bookmarkFolders.indices where profile.bookmarkFolders[index].parentID == item.id {
+                profile.bookmarkFolders[index].parentID = item.parentID
+            }
+            for index in profile.bookmarks.indices where profile.bookmarks[index].folderID == item.id {
+                profile.bookmarks[index].folderID = item.parentID
+            }
+            profile.bookmarkFolders.removeAll { $0.id == item.id }
+        }
+        if folder == item.id { folder = item.parentID }
+    }
     private var filteredBookmarks: [PageRecord] {
         model.profile.bookmarks.filter { page in
-            (folder == nil || page.folderID == folder) && (query.isEmpty || page.title.localizedCaseInsensitiveContains(query) || page.url.localizedCaseInsensitiveContains(query))
+            (query.isEmpty ? page.folderID == folder : true) && (query.isEmpty || page.title.localizedCaseInsensitiveContains(query) || page.url.localizedCaseInsensitiveContains(query))
         }
     }
     private var filteredHistory: [PageRecord] {
@@ -587,11 +675,10 @@ struct SettingsView: View {
                         ForEach(SearchEngines.builtins, id: \.template) { Text($0.name).tag($0.template) }
                         ForEach(model.profile.settings.customEngines) { Text($0.name).tag($0.template) }
                     }
-                    Button("自定义搜索引擎") { BrowserPresentation.input(title: "搜索模板", message: "使用 {query}，例如 https://example.com/search?q={query}", initial: "https://example.com/search?q={query}") { template in
-                        guard let template, template.contains("{query}"), let url = URL(string: template.replacingOccurrences(of: "{query}", with: "test")) else { return }
-                        _ = url
+                    Button("添加搜索引擎") { BrowserPresentation.input(title: "搜索模板", message: "使用 {query}。添加后可在「自定义搜索引擎」里改名称和关键词。", initial: "https://example.com/search?q={query}") { template in
+                        guard let template, template.contains("{query}"), URL(string: template.replacingOccurrences(of: "{query}", with: "test")) != nil else { return }
                         model.updateProfile(session.profileID) { profile in
-                            profile.settings.customEngines.append(SearchEngine(name: "自定义", template: template, keyword: "c\(profile.settings.customEngines.count)"))
+                            profile.settings.customEngines.append(SearchEngine(name: "自定义", template: template, keyword: ""))
                             profile.searchEngine = template
                         }
                     } }
@@ -604,6 +691,12 @@ struct SettingsView: View {
                     Picker("首页", selection: Binding(get: { model.profile.settings.homepage }, set: { value in model.updateProfile(session.profileID) { $0.settings.homepage = value } })) {
                         Text("收藏").tag("favorites"); Text("空白").tag("blank"); Text("自定义网址").tag("custom")
                     }
+                    if model.profile.settings.homepage == "custom" {
+                        TextField("https://example.com", text: Binding(get: { model.profile.settings.homepageURL }, set: { value in model.updateProfile(session.profileID) { $0.settings.homepageURL = value.trimmingCharacters(in: .whitespacesAndNewlines) } }))
+                            .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    }
+                    Toggle("搜索建议", isOn: Binding(get: { model.profile.settings.searchSuggestions }, set: { value in model.updateProfile(session.profileID) { $0.settings.searchSuggestions = value } }))
+                    NavigationLink("自定义搜索引擎") { CustomEngineView() }
                     Toggle("首页沉浸壁纸", isOn: Binding(get: { model.profile.settings.immersiveWallpaper }, set: { value in model.updateProfile(session.profileID) { $0.settings.immersiveWallpaper = value } }))
                     Button(model.profile.settings.wallpaperFile.isEmpty ? "选择首页壁纸" : "更换首页壁纸") { wallpaper = true }
                     if !model.profile.settings.wallpaperFile.isEmpty { Button("清除首页壁纸", role: .destructive) { model.clearWallpaper() } }
@@ -634,7 +727,7 @@ struct SettingsView: View {
                 Section("关于 Rikugan") {
                     LabeledContent("版本", value: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0") + " (" + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1") + ")")
                     Text("扩展运行时使用 iOS 18.4 的 WKWebExtension，而不是一套假装完整的自研 chrome.*。未实现的 API 会标明 Unsupported，不会静默当成成功。").font(.footnote).foregroundStyle(.secondary)
-                    Text("未签名 IPA 没有默认浏览器 entitlement。重签时如果描述文件不含该权限，Rikugan 不会出现在系统默认浏览器列表里，这里也不会假装可以。分享扩展需要同一个 App Group：\(AppGroupID.suite)。").font(.footnote).foregroundStyle(.secondary)
+                    Text("工程包含 com.apple.developer.web-browser entitlement。未签名 IPA 没有有效签名，不会出现在「设置 → App → 默认 App → 浏览器 App」。用带这项权限的描述文件重签之后，系统才可能把它列出来。分享扩展需要同一个 App Group：\(AppGroupID.suite)。").font(.footnote).foregroundStyle(.secondary)
                     Link("源代码与问题反馈", destination: URL(string: "https://github.com/dandibbert/Rikugan")!)
                 }
             }.navigationTitle("设置与下载").toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
@@ -651,5 +744,34 @@ struct SettingsView: View {
                     }
                 }
         }
+    }
+}
+
+struct CustomEngineView: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        Form {
+            if model.profile.settings.customEngines.isEmpty { ContentUnavailableView("还没有自定义搜索引擎", systemImage: "magnifyingglass") }
+            ForEach(model.profile.settings.customEngines) { engine in
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("名称", text: binding(engine.id, \.name))
+                    TextField("关键词", text: binding(engine.id, \.keyword)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text(engine.template).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }.onDelete { index in
+                model.updateProfile(model.profile.id) { $0.settings.customEngines.remove(atOffsets: index) }
+            }
+            Text("在地址栏输入「关键词 内容」会使用对应模板。关键词留空则只出现在搜索引擎列表里。").font(.footnote).foregroundStyle(.secondary)
+        }.navigationTitle("自定义搜索引擎")
+    }
+    private func binding(_ id: UUID, _ key: WritableKeyPath<SearchEngine, String>) -> Binding<String> {
+        Binding(get: {
+            model.profile.settings.customEngines.first { $0.id == id }?[keyPath: key] ?? ""
+        }, set: { value in
+            model.updateProfile(model.profile.id) { profile in
+                guard let index = profile.settings.customEngines.firstIndex(where: { $0.id == id }) else { return }
+                profile.settings.customEngines[index][keyPath: key] = String(value.prefix(40))
+            }
+        })
     }
 }

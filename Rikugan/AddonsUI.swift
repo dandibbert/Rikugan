@@ -33,6 +33,7 @@ struct AddonsView: View {
                                 }
                                 HStack {
                                     Button("打开扩展", systemImage: "arrow.up.forward.app") { dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { session.performExtension(record.id) } }
+                                    Button("检查更新") { Task { await session.updateExtension(record) } }.font(.subheadline)
                                         .font(.subheadline).buttonStyle(.bordered).disabled(!record.enabled || session.contexts[record.id] == nil)
                                         .accessibilityIdentifier("extension.run.\(record.name)")
                                     Spacer()
@@ -44,7 +45,8 @@ struct AddonsView: View {
                                 if let error = session.extensionErrors[record.id] { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                             }.padding(.vertical, 5)
                         }
-                    } footer: { Text("兼容性取决于 iOS 的 WebKit 扩展 API。桌面 Chrome 的全部扩展不保证可用。安装或更改扩展后，请刷新目标页面。") }
+                    } footer: { Text("工具栏上的扩展按钮会打开 popup。后台由 WKWebExtension 在启用时加载。兼容性取决于 iOS 的 WebKit，不是自研 chrome.*。") }
+                    Button("检查已安装扩展的更新") { Task { await session.checkExtensionUpdates() } }
                 } else {
                     Section {
                         if model.profile.scripts.isEmpty {
@@ -53,11 +55,15 @@ struct AddonsView: View {
                         ForEach(model.profile.scripts) { script in
                             HStack {
                                 Button { dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { model.scriptDraft = ScriptDraft(source: script.source, existingID: script.id) } } label: {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(script.name).font(.headline)
-                                        Text("v\(script.version) · \(script.author.isEmpty ? script.namespace : script.author)").font(.caption2).foregroundStyle(.secondary)
-                                        Text(script.matches.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                        Text((script.isolated ? "隔离环境" : "页面环境") + " · \(script.runAt) · \(script.grants.joined(separator: " "))").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                    HStack(alignment: .top, spacing: 10) {
+                                        scriptIcon(script)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(script.name).font(.headline)
+                                            Text("v\(script.version) · \(script.author.isEmpty ? script.namespace : script.author)").font(.caption2).foregroundStyle(.secondary)
+                                            Text(script.matches.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                            Text((script.isolated ? "隔离环境" : "页面环境") + " · \(script.runAt)").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                            Text("更新于 " + script.updatedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary)
+                                        }
                                     }
                                 }.buttonStyle(.plain)
                                 Spacer()
@@ -156,6 +162,17 @@ struct ExtensionDetails: View {
                 }.navigationTitle("扩展详情").navigationBarTitleDisplayMode(.inline)
                     .confirmationDialog("删除扩展和本身份中的扩展数据？", isPresented: $deleting, titleVisibility: .visible) { Button("删除", role: .destructive) { session.removeExtension(record); dismiss() } }
             } else { ContentUnavailableView("扩展已删除", systemImage: "puzzlepiece.extension") }
+        }
+    }
+}
+
+private extension AddonsView {
+    @ViewBuilder func scriptIcon(_ script: UserScript) -> some View {
+        if let url = URL(string: script.icon), script.icon.hasPrefix("https://") {
+            AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { Image(systemName: "curlybraces") }
+                .frame(width: 28, height: 28).clipShape(RoundedRectangle(cornerRadius: 6))
+        } else {
+            Image(systemName: "curlybraces").frame(width: 28, height: 28)
         }
     }
 }

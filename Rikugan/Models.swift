@@ -109,10 +109,10 @@ struct UserScript: Codable, Identifiable, Equatable {
 
     static let capabilityNotes: [String: String] = [
         "GM_getValue": "Supported。同步读取本页缓存，写入后其他标签用 GM.getValue 或刷新。",
-        "GM_xmlhttpRequest": "Partial。无 Cookie、无流式进度，单次 8 MB，按 @connect 检查重定向。",
+        "GM_xmlhttpRequest": "Partial。无 Cookie，按 @connect 检查重定向，onprogress 报告已下载字节，abort() 会取消 URLSession 任务。单次响应 8 MB。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
         "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",
-        "unsafeWindow": "Partial。@grant none 就是页面 window；隔离脚本只能用 unsafeWindow.eval，或给 JSON 可序列化属性赋值。",
+        "unsafeWindow": "Partial。@grant none 就是页面 window。隔离脚本可读可写 JSON 属性，可调用页面函数；Document 等不可序列化对象仍会标明 Partial。",
         "document-body": "Supported。document-start 注入后等到 body 存在再执行。"
     ]
 
@@ -196,6 +196,8 @@ struct UserScript: Codable, Identifiable, Equatable {
     }
 
     func permits(_ operation: String) -> Bool {
+        if operation == "abortRequest" { return permits("xmlHttpRequest") }
+        if (operation == "registerMenuCommand" || operation == "unregisterMenuCommand") && grants.contains("none") { return true }
         let name = operation == "xmlHttpRequest" ? "xmlhttpRequest" : operation
         return grants.contains("GM_" + name) || grants.contains("GM." + operation)
     }

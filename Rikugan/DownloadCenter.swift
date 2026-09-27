@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 struct DownloadLive: Equatable {
     var received: Int64 = 0
@@ -15,6 +16,9 @@ struct DownloadLive: Equatable {
     private var samples: [UUID: (bytes: Int64, time: Date)] = [:]
     private var resumeData: [UUID: Data] = [:]
     private var owners: [UUID: UUID] = [:]
+    private var webDownloads: [UUID: WKDownload] = [:]
+    private var webResume: [UUID: Data] = [:]
+    private var webTabs: [UUID: UUID] = [:]
 
     func activate(_ model: AppModel) {
         self.model = model
@@ -33,7 +37,7 @@ struct DownloadLive: Equatable {
     }
     func fileURL(_ record: DownloadRecord, profile: UUID) -> URL { directory(profile: profile).appendingPathComponent(record.fileName) }
 
-    func start(url: URL, suggested name: String? = nil) {
+    func start(url: URL, suggested name: String? = nil, cookies: [HTTPCookie] = [], referer: String? = nil) {
         guard let model else { return }
         let profile = model.profile.id
         let id = UUID()
@@ -43,6 +47,8 @@ struct DownloadLive: Equatable {
         model.updateProfile(profile) { $0.downloads.insert(record, at: 0) }
         var request = URLRequest(url: url)
         request.setValue("Rikugan", forHTTPHeaderField: "User-Agent")
+        if let header = CookieHeader.value(cookies: cookies, url: url) { request.setValue(header, forHTTPHeaderField: "Cookie") }
+        if let referer { request.setValue(referer, forHTTPHeaderField: "Referer") }
         let task = session.downloadTask(with: request)
         task.taskDescription = id.uuidString
         tasks[id] = task
@@ -50,18 +56,31 @@ struct DownloadLive: Equatable {
         task.resume()
     }
     func pause(_ id: UUID) {
-        guard let task = tasks[id] else { return }
-        task.cancel(byProducingResumeData: { [weak self] data in
+        if let task = tasks[id] {
+            task.cancel(byProducingResumeData: { [weak self] data in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if let data { self.resumeData[id] = data }
+                    self.tasks[id] = nil
+                    self.live[id] = nil
+                    self.update(id, state: "paused", resumable: data != nil)
+                }
+            })
+            return
+        }
+        guard let download = webDownloads[id] else { return }
+        download.cancel { [weak self] data in
             Task { @MainActor in
                 guard let self else { return }
-                if let data { self.resumeData[id] = data }
-                self.tasks[id] = nil
+                self.webDownloads[id] = nil
+                if let data { self.webResume[id] = data }
                 self.live[id] = nil
                 self.update(id, state: "paused", resumable: data != nil)
             }
-        })
+        }
     }
     func resume(_ id: UUID) {
+        if webResume[id] != nil { resumeWebKit(id); return }
         guard let model, let data = resumeData[id], let owner = owners[id] ?? Optional(model.profile.id),
               let record = model.state.profiles.first(where: { $0.id == owner })?.downloads.first(where: { $0.id == id }) else { return }
         owners[id] = owner
@@ -74,8 +93,11 @@ struct DownloadLive: Equatable {
     }
     func cancel(_ id: UUID) {
         tasks[id]?.cancel()
+        webDownloads[id]?.cancel { _ in }
         tasks[id] = nil
+        webDownloads[id] = nil
         resumeData[id] = nil
+        webResume[id] = nil
         live[id] = nil
         update(id, state: "cancelled")
     }
@@ -89,15 +111,52 @@ struct DownloadLive: Equatable {
         model.updateProfile(owner) { $0.downloads.removeAll { $0.id == id } }
         owners[id] = nil
     }
-    func noteWebKit(name: String, fileName: String, state: String) -> UUID {
+    func noteWebKit(name: String, fileName: String, state: String, total: Int64 = 0) -> UUID {
         let id = UUID()
         guard let model else { return id }
         owners[id] = model.profile.id
-        let record = DownloadRecord(id: id, name: name, fileName: fileName, state: state, resumable: false)
+        var record = DownloadRecord(id: id, name: name, fileName: fileName, state: state, resumable: true)
+        record.total = max(0, total)
         model.updateProfile(model.profile.id) { $0.downloads.insert(record, at: 0) }
         return id
     }
-    func finishWebKit(_ id: UUID, fileName: String) { update(id, state: "finished", fileName: fileName) }
+    func attachWebKit(_ id: UUID, download: WKDownload, tab: UUID) {
+        webDownloads[id] = download
+        webTabs[id] = tab
+        owners[id] = model?.profile.id
+    }
+    func finishWebKit(_ id: UUID, fileName: String) {
+        webDownloads[id] = nil
+        webResume[id] = nil
+        update(id, state: "finished", fileName: fileName)
+    }
+    func failWebKit(_ id: UUID, resume: Data?, message: String) {
+        if let resume { webResume[id] = resume }
+        webDownloads[id] = nil
+        if model?.state.profiles.flatMap(\.downloads).first(where: { $0.id == id })?.state == "paused" {
+            update(id, resumable: resume != nil || webResume[id] != nil)
+            return
+        }
+        live[id] = nil
+        update(id, state: resume == nil ? "failed" : "paused", resumable: resume != nil)
+        model?.message = message
+    }
+    private func resumeWebKit(_ id: UUID) {
+        guard let data = webResume[id], let model else { return }
+        guard let tabID = webTabs[id], let tab = model.session?.tabs.first(where: { $0.id == tabID }) else {
+            model.message = "原来的标签页已关闭，无法继续这个网页下载。"
+            return
+        }
+        tab.webView.resumeDownload(fromResumeData: data) { [weak self] download in
+            Task { @MainActor in
+                guard let self else { return }
+                download.delegate = tab
+                self.webDownloads[id] = download
+                self.webResume[id] = nil
+                self.update(id, state: "running", resumable: true)
+            }
+        }
+    }
 
     private func update(_ id: UUID, state: String? = nil, fileName: String? = nil, resumable: Bool? = nil, received: Int64? = nil, total: Int64? = nil) {
         guard let model, let owner = owners[id] ?? Optional(model.profile.id) else { return }
@@ -176,5 +235,19 @@ struct DownloadLive: Equatable {
             update(id, state: "failed")
             model.message = error.localizedDescription
         }
+    }
+}
+
+enum CookieHeader {
+    static func value(cookies: [HTTPCookie], url: URL) -> String? {
+        guard let host = url.host?.lowercased() else { return nil }
+        let matched = cookies.filter { cookie in
+            let domain = cookie.domain.lowercased().hasPrefix(".") ? String(cookie.domain.lowercased().dropFirst()) : cookie.domain.lowercased()
+            let hostOK = host == domain || host.hasSuffix("." + domain)
+            let pathOK = url.path.hasPrefix(cookie.path)
+            return hostOK && pathOK
+        }
+        let header = matched.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        return header.isEmpty ? nil : header
     }
 }

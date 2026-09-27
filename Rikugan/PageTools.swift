@@ -9,11 +9,13 @@ enum PageTools {
         return text
     }()
 
-    static func install(on controller: WKUserContentController, cosmeticCSS: String) {
+    static func install(on controller: WKUserContentController, cosmeticCSS: String, hostCSS: String = "{}", procedural: String = "[]") {
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
-        guard !cosmeticCSS.isEmpty, let literal = jsString(cosmeticCSS) else { return }
-        let css = "(function(){try{var s=document.createElement('style');s.id='rikugan-cosmetic';s.textContent=\(literal);(document.documentElement||document.head).appendChild(s);}catch(e){}})();"
-        controller.addUserScript(WKUserScript(source: css, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        let css = jsString(cosmeticCSS) ?? "\"\""
+        let host = hostCSS.isEmpty ? "{}" : hostCSS
+        let rules = procedural.isEmpty ? "[]" : procedural
+        let boot = "(function(){try{if(globalThis.RikuganPageTools){RikuganPageTools.applyBlocking(\(css), \(host), \(rules));RikuganPageTools.installConsole();}}catch(e){}})();"
+        controller.addUserScript(WKUserScript(source: boot, injectionTime: .atDocumentStart, forMainFrameOnly: false))
     }
 
     static func call(_ expression: String, in webView: WKWebView) async -> Any? {
@@ -35,27 +37,33 @@ enum BlockListCoordinator {
         let settings = session.profile.settings
         let compiled = AdBlockEngine.compile(lines: AdBlockEngine.lines(settings: settings))
         session.globalCosmetic = compiled.globalCSS
+        session.hostCSS = compiled.hostCSS
+        session.proceduralJSON = compiled.proceduralJSON
         let store = WKContentRuleListStore.default()
-        let identifier = "rikugan.rules"
-        if let existing = session.contentRuleList {
-            for tab in session.tabs {
-                tab.webView.configuration.userContentController.remove(existing)
-                tab.contentRulesOn = false
-            }
-            session.contentRuleList = nil
-        }
-        for tab in session.tabs { tab.contentRulesOn = false }
-        guard let store, compiled.json != "[]" else { session.refreshScripts(); return }
-        do {
-            let list = try await compile(store, identifier: identifier, json: compiled.json)
-            session.contentRuleList = list
-        } catch {
-            if let list = try? await compile(store, identifier: identifier, json: compiled.networkJSON) {
-                session.contentRuleList = list
-            } else {
-                if announce { session.model?.message = "内容规则没有编译成功，已保留样式隐藏。\(error.localizedDescription)" }
+        for tab in session.tabs { tab.removeContentRules() }
+        session.contentRuleLists = []
+        session.contentRuleList = nil
+        guard let store else { session.refreshScripts(); return }
+        let chunks = compiled.chunks.isEmpty ? [] : compiled.chunks
+        if chunks.isEmpty { session.refreshScripts(); return }
+        var lists: [WKContentRuleList] = []
+        var failed = false
+        for (index, chunk) in chunks.enumerated() where chunk != "[]" {
+            do { lists.append(try await compile(store, identifier: "rikugan.rules.\(index)", json: chunk)) }
+            catch {
+                failed = true
+                if announce { session.model?.message = "有一段内容规则没有编译成功，已改用网络规则和样式隐藏。\(error.localizedDescription)" }
+                break
             }
         }
+        if failed {
+            lists = []
+            for (index, chunk) in compiled.networkChunks.enumerated() where chunk != "[]" {
+                if let list = try? await compile(store, identifier: "rikugan.rules.network.\(index)", json: chunk) { lists.append(list) }
+            }
+        }
+        session.contentRuleLists = lists
+        session.contentRuleList = lists.first
         session.refreshScripts()
         for tab in session.tabs { tab.syncContentRules() }
     }

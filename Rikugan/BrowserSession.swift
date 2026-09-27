@@ -17,7 +17,11 @@ import WebKit
     var contexts: [UUID: WKWebExtensionContext] = [:]
     var privateStore: WKWebsiteDataStore = .nonPersistent()
     var contentRuleList: WKContentRuleList?
+    var contentRuleLists: [WKContentRuleList] = []
     var globalCosmetic = ""
+    var hostCSS: [String: String] = [:]
+    var proceduralJSON = "[]"
+    var privateScriptValues: [UUID: [String: Any]] = [:]
     var popupPresenter: PopupPresenter?
     private var scriptRefresh: Task<Void, Never>?
     private var stopped = false
@@ -47,6 +51,8 @@ import WebKit
         extensionController.didFocusWindow(self)
         for tab in tabs { extensionController.didOpenTab(tab) }
         if let tab = activeTab { extensionController.didActivateTab(tab, previousActiveTab: nil); tab.restoreIfNeeded() }
+        loadThumbnails()
+        for tab in tabs where tab.autoRefreshSeconds > 0 { tab.setAutoRefresh(tab.autoRefreshSeconds) }
         ready = true; persistTabs()
         Task { [weak self] in
             guard let self else { return }
@@ -96,7 +102,11 @@ import WebKit
         tabs.remove(at: index); thumbnails[tab.id] = nil; favicons[tab.id] = nil
         extensionController.didCloseTab(tab, windowIsClosing: false)
         commands.removeAll { $0.tabID == tab.id }; tab.teardown()
-        if wasPrivate, !tabs.contains(where: \.isPrivate) { privateStore = .nonPersistent() }
+        removeThumbnail(tab.id)
+        if wasPrivate, !tabs.contains(where: \.isPrivate) {
+            privateStore = .nonPersistent()
+            privateScriptValues.removeAll()
+        }
         if tabs.isEmpty { addTab() }
         else if wasActive { select(tabs[min(index, tabs.count - 1)]) }
         persistTabs()
@@ -129,7 +139,8 @@ import WebKit
         for tab in tabs {
             let allowed = tab.userscriptsAllowed
             tab.scriptEngine.configure(tab.webView.configuration.userContentController, scripts: allowed ? profile.scripts : [])
-            PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic)
+            let hostJSON = (try? JSONSerialization.data(withJSONObject: hostCSS)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic, hostCSS: hostJSON, procedural: proceduralJSON)
             tab.ensurePageHandler()
             tab.syncContentRules()
         }
@@ -146,8 +157,8 @@ import WebKit
         guard let tab = activeTab, tab.id == command.tabID else { return }
         Task { [weak self] in
             do {
-                _ = try await tab.webView.callAsyncJavaScript("globalThis.__rikuganCommands?.[id]?.()", arguments: ["id": command.id], in: nil,
-                    contentWorld: .world(name: "rikugan.script." + command.scriptID.uuidString))
+                let world: WKContentWorld = command.isolated ? .world(name: "rikugan.script." + command.scriptID.uuidString) : .page
+                _ = try await tab.webView.callAsyncJavaScript("globalThis.__rikuganCommands?.[id]?.()", arguments: ["id": command.id], in: nil, contentWorld: world)
             } catch { self?.model?.message = error.localizedDescription }
         }
     }
@@ -180,8 +191,13 @@ import WebKit
     var groupID: UUID?
     var autoRefreshSeconds: Int
     var contentRulesOn = false
+    var installedRuleLists: [WKContentRuleList] = []
     var pageHandlerInstalled = false
     var refreshTask: Task<Void, Never>?
+    var findNeedle = ""
+    var findCursor = 0
+    @Published var consoleLines: [String] = []
+    @Published var liveTexts: [[String: String]] = []
     var webKitDownloadIDs: [ObjectIdentifier: UUID] = [:]
     var lastActiveAt = Date()
     var snapshot: SavedTab { SavedTab(id: id, url: isHome || isPrivate ? "" : address, title: pageTitle, desktop: desktop, groupID: groupID, autoRefreshSeconds: autoRefreshSeconds) }
@@ -337,8 +353,12 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
             var url = dir.appendingPathComponent(safe)
             if FileManager.default.fileExists(atPath: url.path) { url = dir.appendingPathComponent(UUID().uuidString.prefix(8) + "-" + safe) }
             downloads[ObjectIdentifier(download)] = url
-            let recordID = session?.model?.downloadCenter.noteWebKit(name: safe, fileName: url.lastPathComponent, state: "running")
-            if let recordID { webKitDownloadIDs[ObjectIdentifier(download)] = recordID }
+            let expected = response.expectedContentLength
+            let recordID = session?.model?.downloadCenter.noteWebKit(name: safe, fileName: url.lastPathComponent, state: "running", total: expected > 0 ? expected : 0)
+            if let recordID {
+                webKitDownloadIDs[ObjectIdentifier(download)] = recordID
+                session?.model?.downloadCenter.attachWebKit(recordID, download: download, tab: id)
+            }
             completionHandler(url)
         } catch { session?.model?.message = error.localizedDescription; completionHandler(nil) }
     }
@@ -350,8 +370,15 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         session?.model?.message = "下载完成：\(url?.lastPathComponent ?? "文件")。可在「文件 → 我的 iPhone → Rikugan → Downloads」找到。"
     }
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        if let file = downloads.removeValue(forKey: ObjectIdentifier(download)) { try? FileManager.default.removeItem(at: file) }
-        session?.model?.message = "下载失败：\(error.localizedDescription)"
+        let key = ObjectIdentifier(download)
+        let id = webKitDownloadIDs[key]
+        if resumeData == nil, let file = downloads.removeValue(forKey: key) { try? FileManager.default.removeItem(at: file) }
+        else { downloads.removeValue(forKey: key) }
+        if let id {
+            session?.model?.downloadCenter.failWebKit(id, resume: resumeData, message: "下载失败：\(error.localizedDescription)")
+        } else {
+            session?.model?.message = "下载失败：\(error.localizedDescription)"
+        }
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {

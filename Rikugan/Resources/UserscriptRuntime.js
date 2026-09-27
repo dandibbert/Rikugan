@@ -32,7 +32,7 @@
     scriptHandler: 'Rikugan', version: '0.2.0',
     script: { name: config.name, namespace: config.namespace || '', version: config.version, author: config.author || '', grants: config.grants, resources: Object.keys(resources) },
     scriptWillUpdate: false,
-    capabilities: { unsafeWindow: config.isolated ? 'partial' : 'supported', GM_getResourceText: 'supported', GM_xmlhttpRequest: 'partial' }
+    capabilities: { unsafeWindow: config.isolated ? 'partial' : 'supported', GM_getResourceText: 'supported', GM_xmlhttpRequest: 'partial', GM_registerMenuCommand: 'supported' }
   };
   const addStyle = css => {
     const style = document.createElement('style'); style.textContent = String(css);
@@ -52,17 +52,27 @@
   const GM_openInTab = allowed('openInTab') ? (url, options = {}) => call('openInTab', {url: String(url), background: options === true || options.active === false}) : undefined;
   const GM_getResourceText = allowed('getResourceText') ? name => resources[name] ? resources[name].text : undefined : undefined;
   const GM_getResourceURL = allowed('getResourceURL') ? name => resources[name] ? resources[name].url : undefined : undefined;
-  const callbacks = Object.create(null);
+  const callbacks = (globalThis.__rikuganCommands && typeof globalThis.__rikuganCommands === 'object') ? globalThis.__rikuganCommands : Object.create(null);
   Object.defineProperty(globalThis, '__rikuganCommands', {value: callbacks, configurable: true});
-  const GM_registerMenuCommand = allowed('registerMenuCommand') ? (title, callback) => {
+  const menuAllowed = allowed('registerMenuCommand') || (config.grants || []).includes('none');
+  const GM_registerMenuCommand = menuAllowed ? (title, callback) => {
     const id = config.id + '-' + Math.random().toString(36).slice(2);
     callbacks[id] = callback; void call('registerMenuCommand', {id, title: String(title)}).catch(console.error); return id;
   } : undefined;
-  const GM_unregisterMenuCommand = allowed('unregisterMenuCommand') ? id => { delete callbacks[id]; return call('unregisterMenuCommand', {id}); } : undefined;
+  const GM_unregisterMenuCommand = (menuAllowed || allowed('unregisterMenuCommand')) ? id => { delete callbacks[id]; return call('unregisterMenuCommand', {id}); } : undefined;
+  const pendingXHR = Object.create(null);
+  globalThis.__rikuganXHREvent = event => {
+    const details = pendingXHR[event && event.id];
+    if (!details || typeof details.onprogress !== 'function') return;
+    details.onprogress({ lengthComputable: Number(event.total) > 0, loaded: Number(event.loaded) || 0, total: Number(event.total) || 0 });
+  };
   const xhr = details => {
-    const args = {url: String(details.url), method: details.method || 'GET', headers: details.headers || {}, data: typeof details.data === 'string' ? details.data : null};
+    const id = Math.random().toString(36).slice(2);
+    const args = {id, url: String(details.url), method: details.method || 'GET', headers: details.headers || {}, data: typeof details.data === 'string' ? details.data : null};
     let aborted = false;
+    pendingXHR[id] = details;
     const promise = call('xmlHttpRequest', args).then(response => {
+      delete pendingXHR[id];
       if (aborted) return;
       response.response = response.responseText;
       if (details.responseType === 'json') { try { response.response = JSON.parse(response.responseText); } catch (_) { response.response = null; } }
@@ -72,12 +82,19 @@
       }
       delete response.responseBase64;
       details.onload?.(response); return response;
-    }).catch(error => { if (!aborted) details.onerror?.({error: String(error)}); throw error; });
-    promise.abort = () => { aborted = true; details.onabort?.({}); };
-    return promise;
+    }).catch(error => { delete pendingXHR[id]; if (!aborted) details.onerror?.({error: String(error)}); throw error; });
+    const abort = () => {
+      if (aborted) return;
+      aborted = true;
+      delete pendingXHR[id];
+      void call('abortRequest', {id}).catch(() => {});
+      details.onabort?.({});
+    };
+    promise.abort = abort;
+    return {promise, abort};
   };
   const GM_xmlhttpRequest = allowed('xmlHttpRequest') ? details => {
-    const request = xhr(details); request.catch(() => {}); return {abort: request.abort};
+    const request = xhr(details); request.promise.catch(() => {}); return {abort: request.abort};
   } : undefined;
   const GM = {info: GM_info, addStyle, log: GM_log};
   if (allowed('getValue')) GM.getValue = async (key, fallback) => { const value = await call('getValue', {key: String(key)}); return value === null ? fallback : value; };
@@ -86,29 +103,52 @@
   if (allowed('listValues')) GM.listValues = () => call('listValues');
   if (allowed('setClipboard')) GM.setClipboard = GM_setClipboard;
   if (allowed('openInTab')) GM.openInTab = GM_openInTab;
-  if (allowed('registerMenuCommand')) GM.registerMenuCommand = GM_registerMenuCommand;
-  if (allowed('unregisterMenuCommand')) GM.unregisterMenuCommand = GM_unregisterMenuCommand;
-  if (allowed('xmlHttpRequest')) GM.xmlHttpRequest = xhr;
+  if (menuAllowed) GM.registerMenuCommand = GM_registerMenuCommand;
+  if (menuAllowed) GM.unregisterMenuCommand = GM_unregisterMenuCommand;
+  if (allowed('xmlHttpRequest')) GM.xmlHttpRequest = details => xhr(details).promise;
   if (allowed('getResourceText')) GM.getResourceText = async name => resources[name] ? resources[name].text : null;
   if (allowed('getResourceURL')) GM.getResourceURL = async name => resources[name] ? resources[name].url : null;
   const unsafeWindow = (() => {
     if (!config.isolated) return typeof window === 'undefined' ? globalThis : window;
-    const evalInPage = code => {
-      const el = document.createElement('script');
+    const pageEval = code => {
+      const doc = typeof document === 'undefined' ? null : document;
+      if (!doc || typeof doc.createElement !== 'function' || !doc.documentElement) {
+        throw new Error('Unsupported API: isolated unsafeWindow is Partial without a document bridge.');
+      }
+      const el = doc.createElement('script');
       el.textContent = String(code);
-      (document.documentElement || document.head || document.body).appendChild(el);
-      el.remove();
+      doc.documentElement.appendChild(el);
+      if (typeof el.remove === 'function') el.remove();
+    };
+    const readPage = prop => {
+      pageEval('try{var v=window[' + JSON.stringify(String(prop)) + '];var payload;' +
+        'if(typeof v==="function")payload={fn:1};else if(v===undefined)payload={u:1};else payload={v:v};' +
+        'document.documentElement.setAttribute("data-rg-uw",JSON.stringify(payload));}' +
+        'catch(e){document.documentElement.setAttribute("data-rg-uw",JSON.stringify({e:String(e)}));}');
+      const raw = document.documentElement.getAttribute('data-rg-uw');
+      if (document.documentElement.removeAttribute) document.documentElement.removeAttribute('data-rg-uw');
+      let payload = {};
+      try { payload = JSON.parse(raw || '{}'); } catch (_) { payload = { e: 'not JSON' }; }
+      if (payload.e) throw new Error('Unsupported API: isolated unsafeWindow.' + String(prop) + ' is Partial. ' + payload.e);
+      if (payload.fn) {
+        return (...args) => {
+          const json = JSON.stringify(args);
+          if (json === undefined) throw new Error('Unsupported API: unsafeWindow call arguments must be JSON. Compatibility: Partial.');
+          pageEval('window[' + JSON.stringify(String(prop)) + '].apply(window,' + json + ');');
+        };
+      }
+      return payload.u ? undefined : payload.v;
     };
     return new Proxy(Object.create(null), {
       get(_, prop) {
-        if (prop === 'eval') return evalInPage;
-        if (prop === Symbol.toPrimitive || prop === 'then' || prop === Symbol.toStringTag) return undefined;
-        throw new Error('Unsupported API: isolated unsafeWindow.' + String(prop) + ' is Partial. Use unsafeWindow.eval(code).');
+        if (prop === 'eval') return pageEval;
+        if (typeof prop === 'symbol' || prop === 'then') return undefined;
+        return readPage(prop);
       },
       set(_, prop, value) {
         const json = JSON.stringify(value);
         if (json === undefined) throw new Error('Unsupported API: unsafeWindow assignment only accepts JSON values. Compatibility: Partial.');
-        evalInPage('window[' + JSON.stringify(String(prop)) + '] = ' + json + ';');
+        pageEval('window[' + JSON.stringify(String(prop)) + '] = ' + json + ';');
         return true;
       }
     });

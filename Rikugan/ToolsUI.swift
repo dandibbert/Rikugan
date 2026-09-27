@@ -31,26 +31,59 @@ enum ByteFormat {
     }
 }
 
+private struct ReaderBlock: Identifiable {
+    var id: Int
+    var tag: String
+    var text: String
+    var href: String
+    var src: String
+}
+
 struct ReaderSheet: View {
     @ObservedObject var tab: BrowserTab
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
     @State private var author = ""
-    @State private var text = ""
+    @State private var blocks: [ReaderBlock] = []
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(title.isEmpty ? tab.pageTitle : title).font(.system(size: model.profile.settings.reader.fontSize + 6, weight: .bold))
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(title.isEmpty ? tab.pageTitle : title).font(face(model.profile.settings.reader.fontSize + 8)).fontWeight(.bold)
                     if !author.isEmpty { Text(author).font(.subheadline).foregroundStyle(.secondary) }
-                    Text(text.isEmpty ? "没有识别到正文。" : text).font(.system(size: model.profile.settings.reader.fontSize)).lineSpacing(model.profile.settings.reader.fontSize * (model.profile.settings.reader.lineHeight - 1))
-                }.padding(22).frame(maxWidth: 720, alignment: .leading)
+                    if blocks.isEmpty { Text("没有识别到正文。").foregroundStyle(.secondary) }
+                    ForEach(blocks) { block in
+                        if block.tag == "img", let url = URL(string: block.src) {
+                            AsyncImage(url: url) { image in image.resizable().scaledToFit() } placeholder: { Color.secondary.opacity(0.15).frame(height: 120) }
+                                .frame(maxHeight: 360)
+                        } else if !block.href.isEmpty, let url = URL(string: block.href) {
+                            Link(block.text, destination: url).font(face(model.profile.settings.reader.fontSize))
+                        } else {
+                            Text(block.text)
+                                .font(face(block.tag.hasPrefix("h") ? model.profile.settings.reader.fontSize + 4 : model.profile.settings.reader.fontSize))
+                                .fontWeight(block.tag.hasPrefix("h") ? .semibold : .regular)
+                                .lineSpacing(model.profile.settings.reader.fontSize * (model.profile.settings.reader.lineHeight - 1))
+                        }
+                    }
+                }.padding(22).frame(maxWidth: 720, alignment: .leading).foregroundStyle(foreground)
             }
             .background(theme.ignoresSafeArea())
             .navigationTitle("阅读模式")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) { Menu("版式") { controls } }
+            }
         }.task { await load() }
+    }
+    @ViewBuilder private var controls: some View {
+        Stepper("字号 \(Int(model.profile.settings.reader.fontSize))", value: reader(\.fontSize), in: 14...32, step: 1)
+        Picker("字体", selection: readerString(\.font)) {
+            Text("系统").tag("system"); Text("衬线").tag("serif"); Text("等宽").tag("mono")
+            ForEach(model.profile.settings.importedFonts) { font in Text(font.family).tag(font.family) }
+        }
+        Stepper("行距 \(String(format: "%.1f", model.profile.settings.reader.lineHeight))", value: reader(\.lineHeight), in: 1.2...2.2, step: 0.1)
+        Picker("主题", selection: readerString(\.theme)) { Text("羊皮纸").tag("sepia"); Text("白").tag("light"); Text("黑").tag("dark") }
     }
     private var theme: Color {
         switch model.profile.settings.reader.theme {
@@ -59,11 +92,36 @@ struct ReaderSheet: View {
         default: return Color(red: 0.96, green: 0.93, blue: 0.86)
         }
     }
+    private var foreground: Color { model.profile.settings.reader.theme == "dark" ? Color(white: 0.92) : Color(white: 0.12) }
+    private func face(_ size: Double) -> Font {
+        switch model.profile.settings.reader.font {
+        case "serif": return .system(size: size, design: .serif)
+        case "mono": return .system(size: size, design: .monospaced)
+        case "", "system": return .system(size: size)
+        default: return .custom(model.profile.settings.reader.font, size: size)
+        }
+    }
+    private func reader(_ key: WritableKeyPath<ReaderSettings, Double>) -> Binding<Double> {
+        Binding(get: { model.profile.settings.reader[keyPath: key] }, set: { value in
+            model.updateProfile(model.profile.id) { $0.settings.reader[keyPath: key] = value }
+        })
+    }
+    private func readerString(_ key: WritableKeyPath<ReaderSettings, String>) -> Binding<String> {
+        Binding(get: { model.profile.settings.reader[keyPath: key] }, set: { value in
+            model.updateProfile(model.profile.id) { $0.settings.reader[keyPath: key] = value }
+        })
+    }
     private func load() async {
         guard let value = await PageTools.call("RikuganPageTools.extractArticle()", in: tab.webView) as? [String: Any] else { return }
         title = value["title"] as? String ?? ""
         author = value["author"] as? String ?? ""
-        text = value["text"] as? String ?? ""
+        let rows = value["blocks"] as? [[String: Any]] ?? []
+        blocks = rows.enumerated().compactMap { index, item in
+            let text = item["text"] as? String ?? ""
+            let src = item["src"] as? String ?? ""
+            guard !text.isEmpty || !src.isEmpty else { return nil }
+            return ReaderBlock(id: index, tag: item["tag"] as? String ?? "p", text: text, href: item["href"] as? String ?? "", src: src)
+        }
     }
 }
 
@@ -71,6 +129,7 @@ struct MediaSheet: View {
     @ObservedObject var tab: BrowserTab
     @EnvironmentObject var model: AppModel
     @State private var items: [[String: Any]] = []
+    @State private var variants: [PlaylistVariant] = []
     var body: some View {
         NavigationStack {
             List {
@@ -82,7 +141,19 @@ struct MediaSheet: View {
                         let width = (item["width"] as? NSNumber)?.intValue ?? 0
                         let height = (item["height"] as? NSNumber)?.intValue ?? 0
                         if width > 0 { Text("\(width)×\(height)").font(.caption2).foregroundStyle(.secondary) }
-                        Button("下载") { if let raw = item["url"] as? String, let url = URL(string: raw) { model.downloadCenter.start(url: url) } }.font(.subheadline)
+                        Button("下载") { Task { await download(item["url"] as? String) } }.font(.subheadline)
+                    }
+                }
+                if !variants.isEmpty {
+                    Section("播放列表") {
+                        ForEach(Array(variants.enumerated()), id: \.offset) { _, variant in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(variant.kind.uppercased() + (variant.width > 0 ? " \(variant.width)×\(variant.height)" : "")).font(.caption)
+                                Text(variant.url).font(.footnote).lineLimit(2)
+                                if variant.bandwidth > 0 { Text("\(variant.bandwidth / 1000) kbps").font(.caption2).foregroundStyle(.secondary) }
+                                Button("下载这个地址") { Task { await download(variant.url) } }.font(.subheadline)
+                            }
+                        }
                     }
                 }
             }.navigationTitle("媒体")
@@ -91,6 +162,35 @@ struct MediaSheet: View {
     }
     private func load() async {
         items = await PageTools.call("RikuganPageTools.collectMedia()", in: tab.webView) as? [[String: Any]] ?? []
+        var found: [PlaylistVariant] = []
+        for item in items {
+            let kind = item["kind"] as? String ?? ""
+            guard kind == "hls" || kind == "dash", let raw = item["url"] as? String, let url = URL(string: raw) else { continue }
+            guard let text = await playlistText(url) else { continue }
+            if kind == "hls" { found.append(contentsOf: PlaylistText.parseM3U8(text, base: url)) }
+            else { found.append(contentsOf: PlaylistText.parseMPD(text, base: url)) }
+        }
+        variants = found
+    }
+    private func playlistText(_ url: URL) async -> String? {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        if let header = await cookieHeader(for: url) { request.setValue(header, forHTTPHeaderField: "Cookie") }
+        if let page = tab.webView.url { request.setValue(page.absoluteString, forHTTPHeaderField: "Referer") }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { return nil }
+        return text
+    }
+    private func download(_ raw: String?) async {
+        guard let raw, let url = URL(string: raw) else { return }
+        let cookies = await currentCookies()
+        model.downloadCenter.start(url: url, cookies: cookies, referer: tab.webView.url?.absoluteString)
+    }
+    private func cookieHeader(for url: URL) async -> String? { CookieHeader.value(cookies: await currentCookies(), url: url) }
+    private func currentCookies() async -> [HTTPCookie] {
+        guard let store = tab.isPrivate ? tab.session?.privateStore : tab.session?.dataStore else { return [] }
+        return await withCheckedContinuation { continuation in store.httpCookieStore.getAllCookies { continuation.resume(returning: $0) } }
     }
 }
 
@@ -151,6 +251,8 @@ final class PhotoSaver: NSObject {
 
 struct QRSheet: View {
     let address: String
+    var open: (String) -> Void
+    var search: (String) -> Void
     @State private var scanned = ""
     @State private var camera = false
     @State private var photo: PhotosPickerItem?
@@ -161,7 +263,14 @@ struct QRSheet: View {
                 Text(address).font(.footnote).lineLimit(3).multilineTextAlignment(.center)
                 Button("用相机扫描") { camera = true }
                 PhotosPicker("从照片识别", selection: $photo, matching: .images)
-                if !scanned.isEmpty { Text(scanned).font(.headline).textSelection(.enabled) }
+                if !scanned.isEmpty {
+                    Text(scanned).font(.headline).textSelection(.enabled)
+                    HStack {
+                        Button("打开") { open(scanned) }
+                        Button("搜索") { search(scanned) }
+                        Button("复制") { UIPasteboard.general.string = scanned }
+                    }.buttonStyle(.bordered)
+                }
             }.padding().navigationTitle("二维码")
         }
         .sheet(isPresented: $camera) { CameraScanner { scanned = $0; camera = false } }
@@ -243,6 +352,8 @@ struct TranslateSheet: View {
     @State private var rows: [(id: String, text: String)] = []
     @State private var status = "正在提取页面文字"
     @State private var original = false
+    @State private var translating = false
+    @State private var applied = Set<String>()
     var body: some View {
         NavigationStack {
             Form {
@@ -253,32 +364,77 @@ struct TranslateSheet: View {
                     ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
                 }
                 Button(original ? "显示译文" : "显示原文") { Task { await toggle() } }.disabled(rows.isEmpty)
-                Text("翻译层目前是 Apple 设备端 Translation。换 provider 时实现 Translation 调用点即可，页面替换逻辑不用重写。未下载的语言包会由系统提示，不会假装已经译完。").font(.footnote).foregroundStyle(.secondary)
+                Text("当前能工作的翻译后端只有 Apple 设备端 Translation。没有配置网络密钥的第二家服务，这里不会假装有。未下载的语言包由系统提示。一篇普通文章会分批译完，最多 2500 个文本节点；页面变化会在约 20 秒内补译。").font(.footnote).foregroundStyle(.secondary)
             }.navigationTitle("翻译网页")
                 .translationTask(configuration) { session in await translate(session) }
+                .onChange(of: tab.liveTexts) { _, items in Task { await translateIncoming(items) } }
         }.task { await collect() }
     }
-    static let languages = [("zh-Hans", "简体中文"), ("zh-Hant", "繁体中文"), ("en", "英语"), ("ja", "日语"), ("ko", "韩语"), ("fr", "法语"), ("de", "德语"), ("es", "西班牙语"), ("pt", "葡萄牙语"), ("ru", "俄语"), ("ar", "阿拉伯语"), ("it", "意大利语"), ("vi", "越南语"), ("th", "泰语"), ("id", "印尼语"), ("nl", "荷兰语"), ("pl", "波兰语"), ("tr", "土耳其语"), ("uk", "乌克兰语"), ("hi", "印地语")]
+    static let languages = [
+        ("zh-Hans", "简体中文"), ("zh-Hant", "繁体中文"), ("en", "英语"), ("en-GB", "英语（英国）"),
+        ("ja", "日语"), ("ko", "韩语"), ("fr", "法语"), ("de", "德语"), ("es", "西班牙语"),
+        ("pt-BR", "葡萄牙语（巴西）"), ("pt-PT", "葡萄牙语（葡萄牙）"), ("ru", "俄语"), ("ar", "阿拉伯语"),
+        ("it", "意大利语"), ("vi", "越南语"), ("th", "泰语"), ("id", "印尼语"), ("nl", "荷兰语"),
+        ("pl", "波兰语"), ("tr", "土耳其语"), ("uk", "乌克兰语"), ("hi", "印地语"), ("cs", "捷克语"),
+        ("da", "丹麦语"), ("fi", "芬兰语"), ("el", "希腊语"), ("he", "希伯来语"), ("hu", "匈牙利语"),
+        ("ms", "马来语"), ("nb", "挪威语"), ("ro", "罗马尼亚语"), ("sk", "斯洛伐克语"), ("sv", "瑞典语"),
+        ("ca", "加泰罗尼亚语"), ("hr", "克罗地亚语"), ("bg", "保加利亚语")
+    ]
     private func collect() async {
-        let value = await PageTools.call("RikuganPageTools.collectTexts(80)", in: tab.webView) as? [[String: Any]] ?? []
+        let value = await PageTools.call("RikuganPageTools.collectTexts(2500)", in: tab.webView) as? [[String: Any]] ?? []
         rows = value.compactMap { item in
             guard let id = item["id"] as? String, let text = item["text"] as? String else { return nil }
             return (id, text)
         }
-        let sample = rows.prefix(6).map(\.text).joined(separator: " ")
+        let sample = rows.prefix(8).map(\.text).joined(separator: " ")
         let recognizer = NLLanguageRecognizer(); recognizer.processString(sample)
         status = "检测语言：\(recognizer.dominantLanguage?.rawValue ?? "未知") · \(rows.count) 段"
         configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget))
     }
     private func translate(_ session: TranslationSession) async {
-        let requests = rows.prefix(80).map { TranslationSession.Request(sourceText: $0.text, clientIdentifier: $0.id) }
-        do {
-            let responses = try await session.translations(from: Array(requests))
-            let pairs: [[String: String]] = responses.map { ["id": $0.clientIdentifier ?? "", "text": $0.targetText] }
-            guard let data = try? JSONSerialization.data(withJSONObject: pairs), let json = String(data: data, encoding: .utf8) else { return }
-            _ = await PageTools.call("RikuganPageTools.applyTexts(\(json))", in: tab.webView)
-            status = "已替换 \(responses.count) 段文字，版面结构保持为原来的文本节点。"
-        } catch { status = "翻译没有完成：\(error.localizedDescription)" }
+        guard !translating else { return }
+        translating = true
+        defer { translating = false }
+        let cap = Array(rows.prefix(2500).filter { !applied.contains($0.id) })
+        guard !cap.isEmpty else { return }
+        var index = 0
+        var done = applied.count
+        while index < cap.count {
+            let batch = Array(cap[index..<min(index + 40, cap.count)])
+            let requests = batch.map { TranslationSession.Request(sourceText: $0.text, clientIdentifier: $0.id) }
+            do {
+                let responses = try await session.translations(from: requests)
+                try await apply(responses.map { ["id": $0.clientIdentifier ?? "", "text": $0.targetText] })
+                batch.forEach { applied.insert($0.id) }
+                done = applied.count
+                status = "已翻译 \(done) 段"
+            } catch {
+                status = "翻译停在 \(done) 段：\(error.localizedDescription)"
+                return
+            }
+            index += batch.count
+        }
+        if rows.prefix(2500).contains(where: { !applied.contains($0.id) }) {
+            configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget))
+            return
+        }
+        status = "已翻译 \(done) 段。之后约 20 秒内的新文字会继续翻译。"
+        _ = await PageTools.call("RikuganPageTools.watchNewText(20000)", in: tab.webView)
+    }
+    private func translateIncoming(_ items: [[String: String]]) async {
+        let fresh = items.compactMap { item -> (id: String, text: String)? in
+            guard let id = item["id"], let text = item["text"], !applied.contains(id) else { return nil }
+            return (id, text)
+        }
+        guard !fresh.isEmpty else { return }
+        rows.append(contentsOf: fresh)
+        status = "页面有新文字，正在补译 \(fresh.count) 段"
+        guard !translating else { return }
+        configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget))
+    }
+    private func apply(_ pairs: [[String: String]]) async throws {
+        guard let data = try? JSONSerialization.data(withJSONObject: pairs), let json = String(data: data, encoding: .utf8) else { return }
+        _ = await PageTools.call("RikuganPageTools.applyTexts(\(json))", in: tab.webView)
     }
     private func toggle() async {
         original.toggle()
@@ -307,7 +463,7 @@ struct SiteSettingsSheet: View {
                     toggle("JavaScript", key: \.javascriptEnabled)
                     Picker("弹窗", selection: optional(\.popups)) { Text("允许").tag(Optional("allow")); Text("询问").tag(Optional("ask")); Text("禁止").tag(Optional("block")) }
                     Section("网页权限") {
-                        ForEach(["camera", "microphone", "location", "clipboard"], id: \.self) { kind in
+                        ForEach(["camera", "microphone", "location", "clipboard", "notification"], id: \.self) { kind in
                             Picker(kind, selection: permission(kind)) { Text("询问").tag("ask"); Text("允许").tag("allow"); Text("禁止").tag("block") }
                         }
                     }
@@ -345,12 +501,15 @@ struct SiteSettingsSheet: View {
 struct ConsoleSheet: View {
     @ObservedObject var tab: BrowserTab
     @State private var source = "document.title"
-    @State private var result = "实验功能：在页面主世界执行公开的 evaluateJavaScript。完整检查请用 Safari Develop，本 App 已按设置打开 isInspectable。"
+    @State private var result = "实验功能：在页面主世界执行公开的 evaluateJavaScript。页面 error 和 console.error 会列在下面。完整检查请用 Safari Develop，本 App 已按设置打开 isInspectable。这不是完整的 Web Inspector。"
     var body: some View {
         NavigationStack {
             VStack {
                 TextEditor(text: $source).font(.system(.footnote, design: .monospaced)).frame(minHeight: 120)
                 Button("运行") { run() }.buttonStyle(.borderedProminent)
+                if !tab.consoleLines.isEmpty {
+                    Text(tab.consoleLines.suffix(30).joined(separator: "\n")).font(.system(.caption2, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                }
                 ScrollView { Text(result).font(.footnote).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
             }.padding().navigationTitle("实验控制台")
         }
@@ -391,7 +550,11 @@ struct AutofillSheet: View {
     }
     private func fill(_ item: AutofillItem) async {
         guard let tab else { return }
-        let payload: [String: String] = ["username": item.username, "password": item.secret, "name": item.name]
+        let payload: [String: String] = [
+            "username": item.username, "password": item.kind == "password" ? item.secret : "", "name": item.name,
+            "email": item.email, "phone": item.phone, "address": item.address,
+            "paymentLast4": item.paymentLast4
+        ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
         _ = await PageTools.call("RikuganPageTools.fill(\(json))", in: tab.webView)
     }
@@ -448,7 +611,7 @@ struct ContentBlockingView: View {
                 TextField("https://…/filters.txt", text: $subURL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("添加并下载") { Task { await addSubscription() } }
             }
-            Text("网络规则编译成 WKContentRuleList，元素隐藏同时走 cosmetic CSS。订阅只解析兼容的子集，单次最多采用约 1500 条网络规则。").font(.footnote).foregroundStyle(.secondary)
+            Text("网络规则按每 5 万条切成 WKContentRuleList。WebKit 没有公开硬上限，但过大的列表会编译失败，失败的那一段会退回纯网络规则。元素隐藏、例外规则、#$# 样式和能转成 CSS :has 的 #?# 会注入页面。:has-text / :contains 用脚本隐藏。不处理 scriptlet、redirect、removeparam。这不是完整 EasyList。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("内容拦截")
     }
     private func setting(_ key: WritableKeyPath<BrowserSettings, Bool>) -> Binding<Bool> {
@@ -479,7 +642,7 @@ struct FontSettingsView: View {
                 ForEach(FontLibrary.families(), id: \.self) { Text($0).tag($0) }
             }
             Button("安装字体文件") { importing = true }
-            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf/otf 会注册到本进程，并用 data URL 注入页面。").font(.footnote).foregroundStyle(.secondary)
+            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf、otf、ttc 会注册到本进程，并用 data URL 注入当前身份的网页。woff / woff2 会被拒绝。字体是身份级设置，不是每个站点单独一份。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("网页字体")
             .fileImporter(isPresented: $importing, allowedContentTypes: [.font, .data], allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first { do { try model.importFont(url) } catch { model.message = error.localizedDescription } }
@@ -501,7 +664,14 @@ struct CapabilityView: View {
 struct DownloadList: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var center: DownloadCenter
+    @State private var exportURL: URL?
     var body: some View {
+        Group { downloadRows }
+        .sheet(isPresented: Binding(get: { exportURL != nil }, set: { if !$0 { exportURL = nil } })) {
+            if let exportURL { DocumentExport(url: exportURL) }
+        }
+    }
+    @ViewBuilder private var downloadRows: some View {
         let records = model.profile.downloads
         if records.isEmpty { Text("还没有下载文件").foregroundStyle(.secondary) }
         ForEach(records) { record in
@@ -522,8 +692,10 @@ struct DownloadList: View {
                     Text(record.state == "finished" ? "已完成 · \(ByteFormat.bytes(record.total))" : record.state).font(.caption).foregroundStyle(.secondary)
                     HStack {
                         if record.state == "finished" {
-                            ShareLink(item: center.fileURL(record, profile: model.profile.id)) { Image(systemName: "square.and.arrow.up") }
-                            NavigationLink("打开") { QuickLookView(url: center.fileURL(record, profile: model.profile.id)) }
+                            let file = center.fileURL(record, profile: model.profile.id)
+                            ShareLink(item: file) { Image(systemName: "square.and.arrow.up") }
+                            Button("保存到文件") { exportURL = file }
+                            NavigationLink("打开") { QuickLookView(url: file) }
                         }
                         Button("删除", role: .destructive) { center.delete(record.id) }
                     }.font(.caption)
@@ -531,6 +703,14 @@ struct DownloadList: View {
             }
         }
     }
+}
+
+struct DocumentExport: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        UIDocumentPickerViewController(forExporting: [url], asCopy: true)
+    }
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
 }
 
 struct QuickLookView: UIViewControllerRepresentable {
