@@ -24,6 +24,7 @@ paragraph.parentElement = body;
 
 const sandbox = {
   console,
+  URL,
   document: null,
   window: { fetch() { return Promise.resolve(); } }
 };
@@ -38,4 +39,65 @@ sandbox.RikuganPageTools.setFont('');
 assert.equal(sandbox.RikuganPageTools.extractArticle(), null);
 const found = sandbox.RikuganPageTools.collectMedia();
 assert.ok(Array.isArray(found));
-console.log('PASS: page tools selector, appearance no-ops, and media collector');
+
+const css = sandbox.RikuganPageTools.darkCSS;
+assert.equal(typeof css, 'string');
+assert.equal(css.includes('invert('), false);
+assert.ok(css.includes('#e8e8e8'));
+const textRule = css.split('img,video,picture,canvas,svg')[0];
+assert.ok(textRule.includes('#e8e8e8'));
+assert.equal(textRule.includes('img,'), false);
+assert.ok(css.includes('filter:none'));
+
+const playlist = [
+  '#EXTM3U',
+  '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.4d401e"',
+  'low/index.m3u8',
+  '#EXT-X-STREAM-INF:BANDWIDTH=1400000,RESOLUTION=1280x720',
+  'hi/index.m3u8'
+].join('\n');
+const variants = sandbox.RikuganPageTools.parseM3U8(playlist, 'https://cdn.example/video/master.m3u8');
+assert.equal(variants.length, 2);
+assert.equal(variants[0].bandwidth, 800000);
+assert.equal(variants[0].width, 640);
+assert.equal(variants[0].height, 360);
+assert.equal(variants[0].url, 'https://cdn.example/video/low/index.m3u8');
+assert.equal(variants[1].url, 'https://cdn.example/video/hi/index.m3u8');
+const dash = sandbox.RikuganPageTools.parseMPD(
+  '<MPD><Representation bandwidth="900000" width="640" height="360"><BaseURL>v.mp4</BaseURL></Representation></MPD>',
+  'https://cdn.example/dash/'
+);
+assert.equal(dash.length, 1);
+assert.equal(dash[0].url, 'https://cdn.example/dash/v.mp4');
+assert.equal(dash[0].kind, 'dash');
+
+let marked = false;
+sandbox.document = {
+  body: {},
+  createTreeWalker() {
+    const nodes = [{ nodeType: 3, nodeValue: 'Cats and cats.' }];
+    let index = 0;
+    return { nextNode() { return index < nodes.length ? nodes[index++] : null; } };
+  },
+  querySelectorAll() { marked = true; return []; }
+};
+assert.equal(sandbox.RikuganPageTools.countMatches('cats'), 2);
+assert.equal(marked, false);
+assert.equal(sandbox.RikuganPageTools.countMatches(''), 0);
+
+const { classify, options } = require('./adblock_subset.cjs');
+assert.equal(classify('||ads.example^'), 'block');
+assert.equal(classify('@@||ads.example^'), 'allow');
+assert.equal(classify('||ads.example^$script,third-party'), 'block');
+assert.deepEqual(options('||ads.example^$script,third-party').types, ['script']);
+assert.equal(options('||ads.example^$script,third-party').thirdParty, true);
+assert.deepEqual(options('||ads.example^$domain=news.example|~ok.example').domains, ['news.example', '~ok.example']);
+assert.equal(classify('example.com##.ad'), 'cosmetic');
+assert.equal(classify('example.com#$#body{color:red}'), 'css');
+assert.equal(classify('example.com#?#div:has(.ad)'), 'cosmetic');
+assert.equal(classify('example.com#?#div:has-text(Sponsored)'), 'procedural');
+assert.equal(classify('#%#scriptlet'), 'drop');
+assert.equal(classify('||ads.example^$redirect'), 'drop');
+assert.equal(classify('example.com#@#.ad'), 'unhide');
+
+console.log('PASS: page tools selector, dark CSS, playlists, find count, adblock subset');

@@ -169,5 +169,67 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(copy.searchHistory, ["cats"])
         XCTAssertEqual(copy.settings.customRules.first?.text, "||example.net^")
     }
+    func testAdBlockOptionsCosmeticAndChunks() {
+        let compiled = AdBlockEngine.compile(lines: [
+            "||tracker.test^$script,third-party",
+            "@@||tracker.test^$domain=news.test",
+            "example.com#$#body{background:#fff}",
+            "example.com#?#div:has(.ad)",
+            "example.com#?#div:has-text(Sponsored)",
+            "#%#scriptlet",
+            "||ads.test^$redirect",
+            "##.adsbygoogle"
+        ], limit: 2)
+        XCTAssertTrue(compiled.networkJSON.contains("\"script\""))
+        XCTAssertTrue(compiled.networkJSON.contains("third-party"))
+        XCTAssertTrue(compiled.networkJSON.contains("news.test"))
+        XCTAssertTrue(compiled.hostCSS["example.com"]?.contains("background:#fff") == true)
+        XCTAssertTrue(compiled.hostCSS["example.com"]?.contains("div:has(.ad)") == true)
+        XCTAssertTrue(compiled.proceduralJSON.contains("Sponsored"))
+        XCTAssertTrue(compiled.proceduralJSON.contains("has-text"))
+        XCTAssertTrue(compiled.globalCSS.contains(".adsbygoogle"))
+        XCTAssertFalse(compiled.json.contains("scriptlet"))
+        XCTAssertFalse(compiled.networkJSON.contains("redirect"))
+        XCTAssertGreaterThan(compiled.chunks.count, 1)
+        XCTAssertEqual(AdBlockEngine.chunkDefault, 50_000)
+    }
+    func testPlaylistsSuggestionsUpdatesFontsAndPrivateScripts() throws {
+        let master = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
+        low/index.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=1400000,RESOLUTION=1280x720
+        hi/index.m3u8
+        """
+        let variants = PlaylistText.parseM3U8(master, base: URL(string: "https://cdn.example/video/master.m3u8")!)
+        XCTAssertEqual(variants.count, 2)
+        XCTAssertEqual(variants[0].width, 640)
+        XCTAssertEqual(variants[0].bandwidth, 800000)
+        XCTAssertTrue(variants[1].url.contains("hi/index.m3u8"))
+        let dash = PlaylistText.parseMPD("<MPD><Representation bandwidth=\"900000\" width=\"640\" height=\"360\"><BaseURL>v.mp4</BaseURL></Representation></MPD>", base: URL(string: "https://cdn.example/dash/")!)
+        XCTAssertEqual(dash.first?.url, "https://cdn.example/dash/v.mp4")
+        XCTAssertEqual(dash.first?.kind, "dash")
+        let suggestions = SearchSuggest.parse(Data("[\"cats\",[\"cats food\",\"cats toys\"]]".utf8))
+        XCTAssertEqual(suggestions, ["cats food", "cats toys"])
+        XCTAssertTrue(SearchSuggest.endpoint(template: "https://www.google.com/search?q=", query: "cats")?.host?.contains("google.com") == true)
+        XCTAssertTrue(SearchSuggest.endpoint(template: "https://www.bing.com/search?q=", query: "cats")?.host?.contains("bing.com") == true)
+        XCTAssertNil(SearchSuggest.endpoint(template: "https://example.com/?q=", query: "cats"))
+        let xml = """
+        <gupdate><app appid="abcdefghijklmnop"><updatecheck codebase="https://example.com/ext.crx" version="1.2.3" /></app></gupdate>
+        """
+        let update = try XCTUnwrap(ExtensionUpdateManifest.package(in: Data(xml.utf8)))
+        XCTAssertEqual(update.url.absoluteString, "https://example.com/ext.crx")
+        XCTAssertEqual(update.version, "1.2.3")
+        XCTAssertNil(ExtensionUpdateManifest.package(in: Data("not xml".utf8)))
+        XCTAssertThrowsError(try FontLibrary.rejectUnsupported(Data("wOFF".utf8), ext: "ttf"))
+        XCTAssertThrowsError(try FontLibrary.rejectUnsupported(Data([0, 1, 2, 3]), ext: "woff2"))
+        XCTAssertNoThrow(try FontLibrary.rejectUnsupported(Data([0, 1, 2, 3]), ext: "otf"))
+        XCTAssertFalse(ScriptVault.persists(isPrivate: true))
+        XCTAssertTrue(ScriptVault.persists(isPrivate: false))
+        let settings = try JSONDecoder().decode(BrowserSettings.self, from: Data("{}".utf8))
+        XCTAssertTrue(settings.searchSuggestions)
+        XCTAssertEqual(settings.homepageURL, "")
+        XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "notifications" }?.level, "Unsupported")
+    }
 }
 

@@ -8,4 +8,4 @@
 
 本 release 由成功完成真机目标编译及模拟器测试的 GitHub Actions 发布。测试日志和 `.xcresult` 在对应运行的 Test Evidence artifact 中。真实设备安装和具体第三方扩展尚需验证。
 
-不含默认浏览器特权、iCloud，也不播放 FairPlay / Widevine。分享扩展的 App Group 要在重签描述文件里启用。详细范围见 README。
+工程写了 `com.apple.developer.web-browser`，但未签名 IPA 不会出现在系统默认浏览器列表。没有 iCloud，也不播放 FairPlay / Widevine。广告规则、用户脚本和扩展都不是对应桌面产品的完整实现，范围以 README 为准。分享扩展的 App Group 要在重签描述文件里启用。

@@ -2,10 +2,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const template = fs.readFileSync('Rikugan/Resources/UserscriptRuntime.js', 'utf8');
-function run(url, override = {}, source = 'globalThis.didRun = true;') {
+function run(url, override = {}, source = 'globalThis.didRun = true;', extras = {}) {
   const config = {id: 'test', name: 'Test', version: '1', handler: 'test', matches: ['https://*.example.com/*'], includes: [], excludes: [], excludeMatches: [], grants: [], runAt: 'document-end', storage: {}, ...override};
   const calls = [];
-  const sandbox = {location: new URL(url), URL, console, setTimeout, window: {webkit: {messageHandlers: {test: {postMessage: body => { calls.push(body); return Promise.resolve(true); }}}}}};
+  const sandbox = {location: new URL(url), URL, console, setTimeout, JSON, window: {webkit: {messageHandlers: {test: {postMessage: body => { calls.push(body); return Promise.resolve(true); }}}}}, ...extras};
   const script = template.replace('/*__CONFIG__*/', JSON.stringify(config)).replace('/*__SOURCE__*/', source);
   new vm.Script(script).runInNewContext(sandbox);
   return {sandbox, calls};
@@ -31,7 +31,33 @@ assert.equal(resources.sandbox.missing, 'undefined');
 const isolated = run('https://example.com/', { isolated: true }, 'try { unsafeWindow.document; globalThis.leaked = true; } catch (error) { globalThis.partial = String(error.message); }');
 assert.equal(isolated.sandbox.leaked, undefined);
 assert.match(isolated.sandbox.partial, /Partial/);
+const page = { title: 'Hello', count: 1 };
+const documentElement = {
+  attrs: {},
+  appendChild(el) { vm.runInNewContext(el.textContent, { window: page, document: { documentElement }, JSON }); },
+  setAttribute(name, value) { this.attrs[name] = value; },
+  getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+  removeAttribute(name) { delete this.attrs[name]; }
+};
+const bridged = run('https://example.com/', { isolated: true }, "unsafeWindow.count = 4; globalThis.read = unsafeWindow.title; globalThis.count = unsafeWindow.count;", {
+  document: { createElement() { return { textContent: '', remove() {} }; }, documentElement }
+});
+assert.equal(bridged.sandbox.read, 'Hello');
+assert.equal(bridged.sandbox.count, 4);
+assert.equal(page.count, 4);
+const menu = run('https://example.com/', { grants: ['none'], isolated: false }, "globalThis.menu = GM_registerMenuCommand('Hi', function () {});");
+assert.equal(menu.calls[0].operation, 'registerMenuCommand');
+assert.equal(typeof menu.sandbox.menu, 'string');
+const xhr = run('https://example.com/', { grants: ['GM_xmlhttpRequest'] }, "const req = GM_xmlhttpRequest({url:'https://example.com/a', onabort(){ globalThis.aborted = true; }}); req.abort();");
+assert.ok(xhr.calls.some(call => call.operation === 'xmlHttpRequest'));
+assert.ok(xhr.calls.some(call => call.operation === 'abortRequest'));
+assert.equal(xhr.sandbox.aborted, true);
+const progress = run('https://example.com/', { grants: ['GM_xmlhttpRequest'] }, "GM_xmlhttpRequest({url:'https://example.com/a', onprogress(event){ globalThis.loaded = event.loaded; globalThis.total = event.total; }});");
+const progressID = progress.calls.find(call => call.operation === 'xmlHttpRequest').args.id;
+progress.sandbox.__rikuganXHREvent({ id: progressID, loaded: 3, total: 9 });
+assert.equal(progress.sandbox.loaded, 3);
+assert.equal(progress.sandbox.total, 9);
 const body = run('https://example.com/a', { runAt: 'document-body' });
 assert.equal(body.sandbox.didRun, true);
-console.log('PASS: userscript runtime syntax, URL guards, exclusions, grants, resources and partial unsafeWindow');
+console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow bridge, menu and xhr abort');
 
