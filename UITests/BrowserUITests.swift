@@ -30,7 +30,7 @@ final class BrowserUITests: XCTestCase {
         app.navigationBars.buttons["完成"].tap()
         app.buttons["browser.profiles"].tap()
         app.buttons["profiles.add"].tap()
-        let nameField = app.textFields.firstMatch
+        let nameField = app.textFields["profiles.name"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 15))
         nameField.tap(); nameField.typeText("工作")
         tap(app, "创建")

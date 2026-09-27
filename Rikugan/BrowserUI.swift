@@ -663,10 +663,16 @@ struct ProfilesView: View {
                             .swipeActions { Button("删除", role: .destructive) { deleting = profile }; Button("重命名") { BrowserPresentation.input(title: "重命名身份", message: "", initial: profile.name) { name in if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty { model.updateProfile(profile.id) { $0.name = String(name.prefix(40)) } } } }.tint(.indigo) }
                     }
                 } footer: { Text("Cookie、网站存储、标签页、书签、浏览记录、扩展设置和脚本数据按身份分开。切换身份会重新载入标签页；网页内未提交的表单不会保存。") }
-                Button("新建身份空间", systemImage: "plus") { adding = true }.accessibilityIdentifier("profiles.add")
+                Section {
+                    Button("新建身份空间", systemImage: "plus") { adding = true }.accessibilityIdentifier("profiles.add")
+                    if adding {
+                        TextField("例如：工作、小号", text: $newName).accessibilityIdentifier("profiles.name")
+                        Button("创建") { model.addProfile(newName); newName = ""; dismiss() }
+                        Button("取消") { adding = false; newName = "" }
+                    }
+                }
             }.navigationTitle("身份空间")
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
-                .alert("新建身份空间", isPresented: $adding) { TextField("例如：工作、小号", text: $newName); Button("取消", role: .cancel) {}; Button("创建") { model.addProfile(newName); newName = ""; dismiss() } }
                 .confirmationDialog("删除「\(deleting?.name ?? "")」及其本地数据？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
                     Button("删除身份", role: .destructive) { if let deleting { model.deleteProfile(deleting.id) }; deleting = nil }
                 }

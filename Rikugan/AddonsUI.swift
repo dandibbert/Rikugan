@@ -33,9 +33,10 @@ struct AddonsView: View {
                                 }
                                 HStack {
                                     Button("打开扩展", systemImage: "arrow.up.forward.app") { dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { session.performExtension(record.id) } }
-                                    Button("检查更新") { Task { await session.updateExtension(record) } }.font(.subheadline)
-                                        .font(.subheadline).buttonStyle(.bordered).disabled(!record.enabled || !session.extensionLoaded(record.id))
+                                        .font(.subheadline).buttonStyle(.bordered)
+                                        .disabled(!record.enabled || !session.extensionLoaded(record.id))
                                         .accessibilityIdentifier("extension.run.\(record.name)")
+                                    Button("检查更新") { Task { await session.updateExtension(record) } }.font(.subheadline)
                                     Spacer()
                                     Toggle("启用", isOn: Binding(get: { record.enabled }, set: { enabled in
                                         toggling.insert(record.id)
@@ -106,8 +107,17 @@ struct AddonsView: View {
                     }
                 }
                 Section {
-                    Button("安装功能自检示例", systemImage: "checkmark.seal") { confirmDemo = true }.accessibilityIdentifier("addons.demo")
-                    Text("示例只匹配 example.com 和本机测试站点，用于检查脚本注入、GM 存储、扩展后台通信、storage、chrome.scripting、chrome.notifications 与弹窗。").font(.caption).foregroundStyle(.secondary)
+                    if confirmDemo {
+                        Button("安装示例") {
+                            confirmDemo = false
+                            Task { await model.installDemos() }
+                        }.accessibilityIdentifier("addons.installDemo")
+                        Button("取消") { confirmDemo = false }
+                        Text("将安装一个示例扩展和一个示例脚本。扩展申请 tabs、storage、scripting、notifications，以及 example.com 和 127.0.0.1 测试页访问权限。").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Button("安装功能自检示例", systemImage: "checkmark.seal") { confirmDemo = true }.accessibilityIdentifier("addons.demo")
+                        Text("示例只匹配 example.com 和本机测试站点，用于检查脚本注入、GM 存储、扩展后台通信、storage、chrome.scripting、chrome.notifications 与弹窗。").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }.navigationTitle("扩展与脚本")
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() }.accessibilityIdentifier("addons.done") } }
@@ -127,10 +137,6 @@ struct AddonsView: View {
                     Button("取消", role: .cancel) {}
                     Button("下载") { let value = storeText; Task { await session.installFromStore(value) } }
                 } message: { Text("会下载 CRX 并进入权限确认。商店若拒绝未签名客户端，会显示失败原因，不会假装已安装。") }
-                .alert("安装自检组件？", isPresented: $confirmDemo) {
-                    Button("取消", role: .cancel) {}
-                    Button("安装示例") { Task { await model.installDemos() } }
-                } message: { Text("将安装一个示例扩展和一个示例脚本。扩展申请 tabs、storage、scripting、notifications，以及 example.com 和 127.0.0.1 测试页访问权限。") }
         }
     }
 }
