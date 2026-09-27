@@ -6,6 +6,8 @@
 
 GitHub Actions 在功能分支推送、针对 `main` 的 pull request，以及 `main` 推送时，用 macOS 上的 `xcodebuild` 编译 **未签名** IPA，并通过 `actions/upload-artifact` 上传名为 `Rikugan-unsigned-IPA` 的 artifact。打开对应 workflow run，下载 `dist/Rikugan-0.2.0-unsigned.ipa`。`main` 上测试成功后，同一份 IPA 也会出现在 prerelease。没有签名证书或描述文件，不能直接点开安装，需要用自己的证书或侧载工具重签。部署目标是 iOS / iPadOS **17.0**，设备产物为 arm64。浏览、用户脚本和广告拦截在 iOS 17 上编译运行。扩展安装走 `WKWebExtension`，系统低于 18.4 时显示「需要 iOS 18.4」，不会另做一套 `chrome.*`。
 
+真机侧载用这次 Actions 运行里的 artifact `Rikugan-unsigned-IPA`（`iphoneos` / arm64，不是模拟器包）。下载 `Rikugan-0.2.0-unsigned.ipa` 后，用 Sideloadly 或 AltStore 重新签名再安装，或用 TrollStore 安装这份未签名包。它没有签给你的设备，也不是 App Store 安装包，直接点开不会装上。若同一次运行另有 `Rikugan-adhoc-IPA`，那只是 `codesign -s -` 的临时签名，同样不是你的设备证书。
+
 默认 Bundle ID：`com.dandibbert.Rikugan`。工程带有 App Group `group.com.dandibbert.Rikugan`，供分享扩展和主 App 交换待打开的链接；未签名包不会激活这个 group，重签时描述文件需要包含同一个 group。`Rikugan.entitlements` 写了 `com.apple.developer.web-browser`。未签名 IPA 没有有效签名，**不会**出现在「设置 → App → 默认 App → 浏览器 App」。只有用包含这项权限的付费描述文件重签之后，系统才可能把它列出来。设置页写的是同一句话。一个 App 内可建立多个身份，不必多开 IPA。
 
 ## 第一版用法

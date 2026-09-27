@@ -634,7 +634,13 @@
     fill(runtimeAPI, 'sendNativeMessage', unsupportedAPI('runtime.sendNativeMessage'));
     fill(runtimeAPI, 'connectNative', unsupportedAPI('runtime.connectNative'));
     fillUnsupportedEvent(runtimeAPI, 'onConnectNative', 'runtime.onConnectNative');
-    fill(bucket(list, 'downloads'), 'download', unsupportedAPI('downloads.download'));
+    var downloadsAPI = bucket(list, 'downloads');
+    ['download', 'search', 'pause', 'resume', 'cancel', 'erase', 'removeFile', 'acceptDanger', 'show', 'showDefaultFolder', 'getFileIcon', 'open', 'setShelfEnabled', 'setUiOptions'].forEach(function (name) {
+      fill(downloadsAPI, name, unsupportedAPI('downloads.' + name));
+    });
+    ['onCreated', 'onChanged', 'onErased', 'onDeterminingFilename'].forEach(function (name) {
+      fillUnsupportedEvent(downloadsAPI, name, 'downloads.' + name);
+    });
     var debuggers = bucket(list, 'debugger');
     fill(debuggers, 'attach', unsupportedAPI('debugger.attach'));
     fill(debuggers, 'detach', unsupportedAPI('debugger.detach'));

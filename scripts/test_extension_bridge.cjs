@@ -461,6 +461,13 @@ function load(extra) {
     unsupportedHost.chrome.downloads.download({ url: 'https://example.com/file.bin' }),
     /Unsupported: downloads.download/
   );
+  await assert.rejects(unsupportedHost.chrome.downloads.search({}), /Unsupported: downloads.search/);
+  await assert.rejects(unsupportedHost.chrome.downloads.pause(1), /Unsupported: downloads.pause/);
+  await assert.rejects(unsupportedHost.chrome.downloads.cancel(1), /Unsupported: downloads.cancel/);
+  await assert.rejects(
+    unsupportedHost.chrome.downloads.onCreated.addListener(function () {}),
+    /Unsupported: downloads.onCreated/
+  );
   await assert.rejects(
     unsupportedHost.chrome.webRequest.handlerBehaviorChanged(),
     /Unsupported: webRequest.handlerBehaviorChanged/

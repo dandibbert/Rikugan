@@ -134,7 +134,11 @@ extension BrowserSession {
         context.hasAccessToPrivateData = false
         context.unsupportedAPIs = [
             "runtime.sendNativeMessage", "runtime.connectNative", "runtime.onConnectNative",
-            "downloads", "downloads.download",
+            "downloads", "downloads.download", "downloads.search", "downloads.pause", "downloads.resume",
+            "downloads.cancel", "downloads.erase", "downloads.removeFile", "downloads.acceptDanger",
+            "downloads.show", "downloads.showDefaultFolder", "downloads.getFileIcon", "downloads.open",
+            "downloads.setShelfEnabled", "downloads.setUiOptions",
+            "downloads.onCreated", "downloads.onChanged", "downloads.onErased", "downloads.onDeterminingFilename",
             "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand", "debugger.getTargets",
             "debugger.onEvent", "debugger.onDetach",
             "webRequest", "webRequest.handlerBehaviorChanged", "webRequest.onBeforeRequest",

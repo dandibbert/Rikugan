@@ -69,6 +69,35 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 90
+      - name: Try ad-hoc device IPA
+        id: adhoc
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p dist-adhoc/Payload
+          cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist-adhoc/Payload/
+          rm -rf dist-adhoc/Payload/Rikugan.app/_CodeSignature
+          find dist-adhoc/Payload -name embedded.mobileprovision -delete
+          codesign --force --deep --sign - dist-adhoc/Payload/Rikugan.app
+          if [ $? -ne 0 ]; then
+            echo "Ad-hoc signing failed without a development team or provisioning profile. The unsigned IPA is still uploaded as Rikugan-unsigned-IPA."
+            exit 1
+          fi
+          if ! codesign --verify --verbose=2 dist-adhoc/Payload/Rikugan.app; then
+            echo "Ad-hoc signature did not verify. Skipping Rikugan-adhoc-IPA. The unsigned IPA is still uploaded."
+            exit 1
+          fi
+          file dist-adhoc/Payload/Rikugan.app/Rikugan
+          ( cd dist-adhoc && zip -qry Rikugan-0.2.0-adhoc.ipa Payload )
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+      - name: Upload ad-hoc IPA
+        if: steps.adhoc.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rikugan-adhoc-IPA
+          path: dist-adhoc/*.ipa
+          if-no-files-found: ignore
+          retention-days: 90
       - name: Test core, extension runtime and profile isolation
         run: |
           set -o pipefail
