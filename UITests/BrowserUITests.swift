@@ -7,7 +7,13 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(app.buttons["home.addons"].waitForExistence(timeout: 30))
         let home = XCTAttachment(screenshot: app.screenshot()); home.name = "01-Home"; home.lifetime = .keepAlways; add(home)
         app.buttons["home.addons"].tap()
-        app.buttons["addons.demo"].tap()
+        let demo = app.buttons["addons.demo"]
+        XCTAssertTrue(demo.waitForExistence(timeout: 20))
+        var nudges = 0
+        while demo.frame.midY > app.windows.element(boundBy: 0).frame.maxY - 12 && nudges < 4 {
+            app.swipeUp(); nudges += 1
+        }
+        demo.tap()
         tap(app, "安装示例")
         tap(app, "好", timeout: 30)
         XCTAssertTrue(app.buttons["extension.run.Rikugan Demo"].waitForExistence(timeout: 20))
@@ -52,6 +58,11 @@ final class BrowserUITests: XCTestCase {
     @MainActor private func tap(_ app: XCUIApplication, _ label: String, timeout: TimeInterval = 20) {
         let button = app.buttons[label]
         XCTAssertTrue(button.waitForExistence(timeout: timeout))
+        let window = app.windows.element(boundBy: 0).frame
+        var nudges = 0
+        while button.exists && button.frame.midY > window.maxY - 12 && nudges < 4 {
+            app.swipeUp(); nudges += 1
+        }
         button.tap()
     }
     @MainActor private func navigate(_ app: XCUIApplication) {

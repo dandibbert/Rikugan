@@ -17,6 +17,20 @@ struct AddonsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    if confirmDemo {
+                        Button("安装示例") {
+                            confirmDemo = false
+                            Task { await model.installDemos() }
+                        }.buttonStyle(.bordered).accessibilityIdentifier("addons.installDemo")
+                        Button("取消") { confirmDemo = false }.buttonStyle(.bordered)
+                        Text("将安装一个示例扩展和一个示例脚本。扩展申请 tabs、storage、scripting、notifications，以及 example.com 和 127.0.0.1 测试页访问权限。").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Button("安装功能自检示例", systemImage: "checkmark.seal") { confirmDemo = true }
+                            .buttonStyle(.bordered).accessibilityIdentifier("addons.demo")
+                        Text("示例只匹配 example.com 和本机测试站点，用于检查脚本注入、GM 存储、扩展后台通信、storage、chrome.scripting、chrome.notifications 与弹窗。").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Picker("组件类型", selection: $kind) { Text("浏览器扩展").tag(0); Text("用户脚本").tag(1) }.pickerStyle(.segmented)
                 if kind == 0 {
                     Section {
@@ -104,19 +118,6 @@ struct AddonsView: View {
                     Button("从 Chrome / Edge 商店安装", systemImage: "bag") { storePrompt = true }
                     Button("新建用户脚本", systemImage: "square.and.pencil") {
                         dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { model.scriptDraft = ScriptDraft(source: ScriptEditor.template) }
-                    }
-                }
-                Section {
-                    if confirmDemo {
-                        Button("安装示例") {
-                            confirmDemo = false
-                            Task { await model.installDemos() }
-                        }.accessibilityIdentifier("addons.installDemo")
-                        Button("取消") { confirmDemo = false }
-                        Text("将安装一个示例扩展和一个示例脚本。扩展申请 tabs、storage、scripting、notifications，以及 example.com 和 127.0.0.1 测试页访问权限。").font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        Button("安装功能自检示例", systemImage: "checkmark.seal") { confirmDemo = true }.accessibilityIdentifier("addons.demo")
-                        Text("示例只匹配 example.com 和本机测试站点，用于检查脚本注入、GM 存储、扩展后台通信、storage、chrome.scripting、chrome.notifications 与弹窗。").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }.navigationTitle("扩展与脚本")
