@@ -640,6 +640,11 @@
     var gate = createBackgroundGate();
     root.__rikuganBackgroundGate = gate;
     root.__rikuganCreateBackgroundGate = createBackgroundGate;
+    // Content scripts must call the native runtime.sendMessage that
+    // WKWebExtensionAPIRuntime.SendMessageFromContentScript awaits. The probe
+    // wrapper called that native function and still resolved undefined, then
+    // painted 扩展后台异常. Leave the native function in place.
+    if (inContentScript()) return gate;
     var runtime = (root.browser && root.browser.runtime) || (root.chrome && root.chrome.runtime);
     if (!runtime) return gate;
     var originalSend = runtime.sendMessage;

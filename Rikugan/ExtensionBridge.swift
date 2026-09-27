@@ -335,9 +335,26 @@ enum ExtensionBridge {
         if !scripts.isEmpty { json["content_scripts"] = scripts }
         var prepend: [String] = []
         if let background = json["background"] as? [String: Any] {
-            if let worker = safeRelative(background["service_worker"] as? String) { prepend.append(worker) }
-            for file in stringList(background["scripts"]) {
-                if let relative = safeRelative(file), !prepend.contains(relative) { prepend.append(relative) }
+            // A type=module document background is loaded as
+            // <script type="module" src="background.js">. WKWebExtensionAPIRuntime
+            // .SendMessageFromContentScript uses that file unpatched. A classic
+            // bridge in front of it is not the script that test loads, and
+            // republishing addListener from the patched module still did not
+            // leave a listener the UI process recorded.
+            let module = (background["type"] as? String) == "module"
+            var moduleScripts = Set<String>()
+            if module {
+                for file in stringList(background["scripts"]) {
+                    if let relative = safeRelative(file) { moduleScripts.insert(relative) }
+                }
+            }
+            if let worker = safeRelative(background["service_worker"] as? String), !moduleScripts.contains(worker) {
+                prepend.append(worker)
+            }
+            if !module {
+                for file in stringList(background["scripts"]) {
+                    if let relative = safeRelative(file), !prepend.contains(relative) { prepend.append(relative) }
+                }
             }
         }
         for script in scripts {

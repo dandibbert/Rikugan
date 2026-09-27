@@ -96,29 +96,11 @@ function onRuntimeMessage(message, sender, sendResponse) {
   }
   return Promise.resolve(payload);
 }
-function publishRuntimeListener() {
-  const events = api && api.runtime && api.runtime.onMessage;
-  if (!events || typeof events.addListener !== 'function') return false;
-  if (typeof events.removeListener === 'function') {
-    try { events.removeListener(onRuntimeMessage); } catch (error) {}
-  }
-  events.addListener(onRuntimeMessage);
-  return true;
-}
-publishRuntimeListener();
-// Xcode 16.4 WebExtensionContext::addListener returns without recording the
-// listener when WebFrameProxy::webFrame(frameIdentifier) is null. A classic
-// background script runs during parsing, in the same burst as that commit, so
-// the IPC is dropped and runtime.sendMessage resolves to undefined. The passing
-// API test (WKWebExtensionAPIRuntime.SendMessageFromContentScript) registers
-// from a type=module document background, after the document has been parsed.
-// Keep publishing through the content-script probe window in case the first
-// module registration is still ahead of the frame proxy.
-if (typeof setInterval === 'function') {
-  let attempts = 0;
-  const timer = setInterval(() => {
-    publishRuntimeListener();
-    attempts += 1;
-    if (attempts >= 160 && typeof clearInterval === 'function') clearInterval(timer);
-  }, 250);
-}
+// Tools/TestWebKitAPI WKWebExtensionAPIRuntime.SendMessageFromContentScript
+// registers this listener once, from an unpatched type=module document
+// background, and the content script awaits browser.runtime.sendMessage.
+// Removing and re-adding the same function on a timer clears
+// m_backgroundContentEventListeners whenever the next add is dropped, and a
+// 40s republish still left the content-script reply undefined.
+const messageEvents = api && api.runtime && api.runtime.onMessage;
+if (messageEvents && typeof messageEvents.addListener === 'function') messageEvents.addListener(onRuntimeMessage);

@@ -252,134 +252,41 @@ function load(extra) {
   const gateHost = load({ chrome: { runtime: {} } });
   assert.equal(typeof gateHost.__rikuganCreateBackgroundGate, 'function');
 
-  let releaseProbe;
-  const probe = new Promise(resolve => { releaseProbe = resolve; });
   const heard = [];
   function backgroundListener(message) {
     heard.push(message);
     return { from: 'listener', n: message.n };
   }
-  function originalSend(message) {
-    if (message && message.source === 'rikugan-bg-probe') return probe;
+  function originalConnect(info) {
+    return { name: info.name, postMessage() {} };
+  }
+  // The content-script page painted 扩展后台异常 / 后台通信与扩展存储计数：?
+  // after the bridge probed native sendMessage and forwarded undefined.
+  // WKWebExtensionAPIRuntime.SendMessageFromContentScript calls
+  // browser.runtime.sendMessage directly. Keep that function.
+  const contentSends = [];
+  function nativeContentSend(message) {
+    contentSends.push(message);
+    if (message && message.type === 'rikugan-probe') return Promise.resolve(undefined);
     return Promise.resolve(backgroundListener(message));
   }
-  const portLog = [];
-  function originalConnect(info) {
-    return {
-      name: info.name,
-      postMessage(message) { portLog.push({ name: info.name, n: message.n, from: message.from }); }
-    };
-  }
-  const coldWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
-  coldWindow.top = coldWindow;
-  const coldHost = load({
-    window: coldWindow,
+  const nativeContentWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
+  nativeContentWindow.top = nativeContentWindow;
+  const contentHost = load({
+    window: nativeContentWindow,
     location: { protocol: 'http:' },
-    chrome: { runtime: { sendMessage: originalSend, connect: originalConnect, onMessage: { addListener() {} } } }
+    chrome: { runtime: { sendMessage: nativeContentSend, connect: originalConnect, onMessage: { addListener() {} } } }
   });
-  assert.equal(coldHost.__rikuganBackgroundGate.state, 'starting');
-  const first = coldHost.chrome.runtime.sendMessage({ n: 1, from: 'content' });
-  const popupMessage = coldHost.chrome.runtime.sendMessage({ n: 2, from: 'popup' });
-  const earlyPort = coldHost.chrome.runtime.connect({ name: 'early', tabId: 3 });
-  earlyPort.postMessage({ n: 1, from: 'content' });
-  earlyPort.postMessage({ n: 2, from: 'popup' });
-  assert.equal(heard.length, 0);
-  assert.equal(portLog.length, 0);
-  assert.equal(earlyPort.pending, true);
-  assert.equal(coldHost.__rikuganBackgroundGate.pendingCount(), 2);
-  releaseProbe({ ready: true });
-  assert.equal((await first).from, 'listener');
-  assert.equal((await first).n, 1);
-  assert.equal((await popupMessage).n, 2);
-  assert.deepEqual(heard.map(message => message.n), [1, 2]);
-  assert.deepEqual(heard.map(message => message.from), ['content', 'popup']);
-  assert.deepEqual(portLog, [{ name: 'early', n: 1, from: 'content' }, { name: 'early', n: 2, from: 'popup' }]);
-  earlyPort.postMessage({ n: 3, from: 'after' });
-  assert.equal(portLog[portLog.length - 1].n, 3);
-  assert.equal(earlyPort.pending, false);
-  assert.equal(coldHost.__rikuganBackgroundGate.state, 'ready');
-
-  let emptyProbes = 0;
-  const retryWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
-  retryWindow.top = retryWindow;
-  const retryHost = load({
-    window: retryWindow,
-    location: { protocol: 'http:' },
-    chrome: {
-      runtime: {
-        sendMessage(message) {
-          if (message && message.source === 'rikugan-bg-probe') {
-            emptyProbes += 1;
-            if (emptyProbes === 1) return Promise.resolve(undefined);
-            return Promise.resolve({ ready: true });
-          }
-          return Promise.resolve({ ok: true, visits: message.type === 'rikugan-probe' ? 8 : 0 });
-        },
-        onMessage: { addListener() {} }
-      }
-    }
-  });
-  assert.equal(retryHost.__rikuganBackgroundGate.state, 'starting');
-  const queuedDuringProbe = retryHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
-  const queuedReply = await queuedDuringProbe;
-  assert.ok(emptyProbes >= 2);
-  assert.equal(queuedReply.ok, true);
-  assert.equal(queuedReply.visits, 8);
-  assert.equal(retryHost.__rikuganBackgroundGate.state, 'ready');
-
-  let callbackAnswers = 0;
-  let userMessagesBeforeReady = 0;
-  const callbackWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
-  callbackWindow.top = callbackWindow;
-  const callbackProbeHost = load({
-    window: callbackWindow,
-    location: { protocol: 'http:' },
-    chrome: {
-      runtime: {
-        sendMessage(message, callback) {
-          if (message && message.source === 'rikugan-bg-probe') {
-            if (typeof callback !== 'function') return undefined;
-            callbackAnswers += 1;
-            callback(callbackAnswers === 1 ? undefined : { ready: true });
-            return undefined;
-          }
-          if (callbackAnswers < 2) userMessagesBeforeReady += 1;
-          return Promise.resolve({ ok: true, visits: 9 });
-        },
-        onMessage: { addListener() {} }
-      }
-    }
-  });
-  assert.equal(callbackProbeHost.__rikuganBackgroundGate.state, 'starting');
-  const callbackQueued = await callbackProbeHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
-  assert.ok(callbackAnswers >= 2);
-  assert.equal(userMessagesBeforeReady, 0);
-  assert.equal(callbackQueued.ok, true);
-  assert.equal(callbackQueued.visits, 9);
-  assert.equal(callbackProbeHost.__rikuganBackgroundGate.state, 'ready');
-
-  const failedWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
-  failedWindow.top = failedWindow;
-  const failedHost = load({
-    window: failedWindow,
-    location: { protocol: 'http:' },
-    chrome: {
-      runtime: {
-        sendMessage(message) {
-          if (message && message.source === 'rikugan-bg-probe') return Promise.reject(new Error('worker missing'));
-          return Promise.resolve({ unexpected: true });
-        },
-        onMessage: { addListener() {} }
-      }
-    }
-  });
-  const rejected = failedHost.chrome.runtime.sendMessage({ n: 9 });
-  const rejectedPort = failedHost.chrome.runtime.connect({ name: 'queued' });
-  await assert.rejects(rejected, /background failed/);
-  assert.equal(failedHost.__rikuganBackgroundGate.state, 'failed');
-  assert.equal(rejectedPort.disconnected, true);
-  await assert.rejects(failedHost.chrome.runtime.sendMessage({ n: 10 }), /background failed/);
-  assert.throws(() => failedHost.chrome.runtime.connect({ name: 'later' }), /background failed/);
+  assert.equal(contentHost.chrome.runtime.sendMessage, nativeContentSend);
+  assert.equal(contentHost.__rikuganBackgroundGate.state, 'notStarted');
+  const undefinedReply = await contentHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
+  assert.equal(undefinedReply, undefined);
+  assert.equal(contentSends.length, 1);
+  assert.equal(contentSends[0].type, 'rikugan-probe');
+  const direct = await contentHost.chrome.runtime.sendMessage({ n: 1, from: 'content' });
+  assert.equal(direct.from, 'listener');
+  assert.equal(direct.n, 1);
+  assert.equal(heard.length, 1);
 
   const callbackHost = load({
     chrome: {
@@ -746,18 +653,34 @@ function load(extra) {
   assert.equal(readonlyDemo && readonlyDemo.ok, true);
   assert.equal(readonlyDemo.visits, 1);
 
-  // Xcode 16.4 WebKit drops runtime.sendMessage while the background has never
-  // loaded (empty listener set). The worker WKWebExtension evaluates is the
-  // bridge prepended onto background.js, and only after loadBackgroundContent.
+  // Service-worker backgrounds still get the classic bridge prepended.
+  // A type=module document background does not: WebKit loads that file as
+  // <script type="module" src="background.js">, and
+  // WKWebExtensionAPIRuntime.SendMessageFromContentScript uses it unpatched.
   function patchWorker(text, bridge) {
     const marker = '/* rikugan-extension-bridge */';
     return text.includes(marker) ? text : bridge + '\n' + text;
+  }
+  function backgroundFilesPatched(manifest) {
+    const background = manifest.background || {};
+    const module = background.type === 'module';
+    const moduleScripts = new Set(module ? (background.scripts || []) : []);
+    const prepend = [];
+    if (background.service_worker && !moduleScripts.has(background.service_worker)) prepend.push(background.service_worker);
+    if (!module) {
+      for (const file of background.scripts || []) {
+        if (!prepend.includes(file)) prepend.push(file);
+      }
+    }
+    return prepend;
   }
   const workerSource = patchWorker(backgroundSource, source);
   assert.equal(patchWorker(workerSource, source), workerSource);
   assert.equal(workerSource.indexOf('/* rikugan-extension-bridge */'), 0);
   assert.ok(workerSource.includes('function onRuntimeMessage'));
-  assert.ok(workerSource.includes('publishRuntimeListener'));
+  assert.equal(backgroundSource.includes('/* rikugan-extension-bridge */'), false);
+  assert.equal(backgroundSource.includes('setInterval'), false);
+  assert.equal(backgroundSource.includes('removeListener'), false);
   function webkit18Send(state, message) {
     if (ExtensionRuntimeDrop(state)) return undefined;
     let reply;
@@ -818,9 +741,8 @@ function load(extra) {
   assert.equal(wokenReply && wokenReply.ok, true);
   assert.equal(wokenReply.visits, 1);
 
-  // A document background has window. WebKit will not deliver runtime.sendMessage
-  // to listeners in that same page, and Xcode 16.4 drops a message sent before
-  // addListener. The prepended bridge must not probe during evaluation.
+  // The document background WebKit loads is background.js itself, not the
+  // bridge prepended onto it. Evaluation registers one listener and sends nothing.
   const documentListeners = [];
   const documentSends = [];
   const documentRuntime = {
@@ -860,10 +782,10 @@ function load(extra) {
     location: { protocol: 'webkit-extension:' }
   };
   documentSandbox.globalThis = documentSandbox;
-  vm.runInNewContext(workerSource, documentSandbox, { filename: 'background-document.js' });
+  vm.runInNewContext(backgroundSource, documentSandbox, { filename: 'background-document.js' });
   assert.equal(documentSends.length, 0);
   assert.equal(documentListeners.length, 1);
-  assert.equal(documentSandbox.__rikuganBackgroundGate.state, 'ready');
+  assert.equal(documentSandbox.__rikuganBackgroundGate, undefined);
   function documentSend(message) {
     let reply;
     let handled = false;
@@ -884,70 +806,12 @@ function load(extra) {
 
   const demoManifest = JSON.parse(fs.readFileSync('Examples/WebExtension/manifest.json', 'utf8'));
   assert.equal(demoManifest.background.type, 'module');
-  assert.deepEqual(demoManifest.background.preferred_environment, ['document']);
+  assert.deepEqual(demoManifest.background.scripts, ['background.js']);
   assert.equal(demoManifest.background.persistent, false);
-
-  // WebExtensionContext::addListener (Xcode 16.4) returns when the frame proxy
-  // is missing. Evaluation-time addListener is dropped. The later interval
-  // publish is what a content-script probe can observe as {ready:true}.
-  const proxyDropListeners = [];
-  let proxyFrameReady = false;
-  const proxyDropRuntime = {
-    id: 'demo',
-    sendMessage() { return Promise.resolve(undefined); },
-    onMessage: {
-      addListener(fn) {
-        if (!proxyFrameReady) return;
-        if (proxyDropListeners.indexOf(fn) < 0) proxyDropListeners.push(fn);
-      },
-      removeListener(fn) {
-        const index = proxyDropListeners.indexOf(fn);
-        if (index >= 0) proxyDropListeners.splice(index, 1);
-      }
-    },
-    connect() { return {}; }
-  };
-  const proxyDropHost = {
-    runtime: proxyDropRuntime,
-    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
-    tabs: { query() { return Promise.resolve([{ id: 4 }]); } },
-    scripting: { insertCSS() { return Promise.resolve(); }, executeScript() { return Promise.resolve([]); } },
-    notifications: { create() { return Promise.resolve('id'); }, getAll() { return Promise.resolve({}); } }
-  };
-  const proxyDropTimers = [];
-  const proxyDropWindow = { addEventListener() {}, removeEventListener() {}, frames: [] };
-  proxyDropWindow.top = proxyDropWindow;
-  const proxyDropSandbox = {
-    browser: proxyDropHost,
-    chrome: proxyDropHost,
-    console,
-    Promise,
-    setTimeout,
-    clearTimeout,
-    setInterval(fn) { proxyDropTimers.push(fn); return proxyDropTimers.length; },
-    clearInterval() {},
-    window: proxyDropWindow,
-    location: { protocol: 'webkit-extension:' }
-  };
-  proxyDropSandbox.globalThis = proxyDropSandbox;
-  vm.runInNewContext(workerSource, proxyDropSandbox, { filename: 'background-late-frame.js' });
-  assert.equal(proxyDropListeners.length, 0);
-  assert.ok(proxyDropTimers.length >= 1);
-  proxyFrameReady = true;
-  proxyDropTimers[0]();
-  assert.equal(proxyDropListeners.length, 1);
-  let proxyDropReply;
-  let proxyDropHandled = false;
-  proxyDropListeners.forEach(listener => {
-    let replied = false;
-    const value = listener({ source: 'rikugan-bg-probe' }, { tab: { id: 4 } }, response => {
-      replied = true;
-      proxyDropReply = response;
-    });
-    if (value === true && replied) proxyDropHandled = true;
-  });
-  assert.equal(proxyDropHandled, true);
-  assert.equal(proxyDropReply.ready, true);
+  assert.equal(demoManifest.background.preferred_environment, undefined);
+  assert.equal(demoManifest.background.service_worker, undefined);
+  assert.deepEqual(backgroundFilesPatched(demoManifest), []);
+  assert.deepEqual(backgroundFilesPatched({ background: { service_worker: 'background.js' } }), ['background.js']);
 
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });
