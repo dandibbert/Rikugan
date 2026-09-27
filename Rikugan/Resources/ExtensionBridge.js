@@ -378,6 +378,33 @@
     });
   }
 
+  function ruleAction(rule) {
+    return rule && rule.action && rule.action.type;
+  }
+
+  function guardDeclarativeNetRequest(list) {
+    ['updateDynamicRules', 'updateSessionRules'].forEach(function (method) {
+      list.forEach(function (api) {
+        if (api[method] && api[method].__rgDNRGuard) return;
+        var original = api[method];
+        var guarded = function (options) {
+          var added = options && options.addRules;
+          if (Array.isArray(added)) {
+            for (var i = 0; i < added.length; i++) {
+              var type = ruleAction(added[i]);
+              if (type === 'redirect') return unsupportedAPI('declarativeNetRequest.redirect')();
+              if (type === 'modifyHeaders') return unsupportedAPI('declarativeNetRequest.modifyHeaders')();
+            }
+          }
+          if (typeof original === 'function') return original.apply(api, arguments);
+          return unsupportedAPI('declarativeNetRequest.' + method)();
+        };
+        guarded.__rgDNRGuard = true;
+        api[method] = guarded;
+      });
+    });
+  }
+
   function relay() {
     if (!inContentScript()) return;
     var runtime = (root.browser && root.browser.runtime) || (root.chrome && root.chrome.runtime);
@@ -600,7 +627,19 @@
     fill(bucket(list, 'scripting'), 'unregisterContentScripts', unsupportedAPI('scripting.unregisterContentScripts'));
     fill(bucket(list, 'scripting'), 'getRegisteredContentScripts', unsupportedAPI('scripting.getRegisteredContentScripts'));
     var webRequestEvents = ['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived', 'onAuthRequired', 'onResponseStarted', 'onCompleted', 'onErrorOccurred'];
-    webRequestEvents.forEach(function (name) { fillUnsupportedEvent(bucket(list, 'webRequest'), name, 'webRequest.' + name); });
+    var webRequestAPI = bucket(list, 'webRequest');
+    webRequestEvents.forEach(function (name) { fillUnsupportedEvent(webRequestAPI, name, 'webRequest.' + name); });
+    fill(webRequestAPI, 'handlerBehaviorChanged', unsupportedAPI('webRequest.handlerBehaviorChanged'));
+    fill(bucket(list, 'runtime'), 'sendNativeMessage', unsupportedAPI('runtime.sendNativeMessage'));
+    fill(bucket(list, 'runtime'), 'connectNative', unsupportedAPI('runtime.connectNative'));
+    var debuggers = bucket(list, 'debugger');
+    fill(debuggers, 'attach', unsupportedAPI('debugger.attach'));
+    fill(debuggers, 'detach', unsupportedAPI('debugger.detach'));
+    fill(debuggers, 'sendCommand', unsupportedAPI('debugger.sendCommand'));
+    fill(debuggers, 'getTargets', unsupportedAPI('debugger.getTargets'));
+    fillUnsupportedEvent(debuggers, 'onEvent', 'debugger.onEvent');
+    fillUnsupportedEvent(debuggers, 'onDetach', 'debugger.onDetach');
+    guardDeclarativeNetRequest(bucket(list, 'declarativeNetRequest'));
     var notes = bucket(list, 'notifications');
     fill(notes, 'create', createNotification);
     fill(notes, 'clear', clearNotification);

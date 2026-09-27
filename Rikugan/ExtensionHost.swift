@@ -134,10 +134,11 @@ extension BrowserSession {
         context.hasAccessToPrivateData = false
         context.unsupportedAPIs = [
             "runtime.sendNativeMessage", "runtime.connectNative",
-            "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand",
-            "webRequest", "webRequest.onBeforeRequest", "webRequest.onBeforeSendHeaders",
-            "webRequest.onHeadersReceived", "webRequest.onAuthRequired", "webRequest.onResponseStarted",
-            "webRequest.onCompleted", "webRequest.onErrorOccurred",
+            "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand", "debugger.getTargets",
+            "debugger.onEvent", "debugger.onDetach",
+            "webRequest", "webRequest.handlerBehaviorChanged", "webRequest.onBeforeRequest",
+            "webRequest.onBeforeSendHeaders", "webRequest.onHeadersReceived", "webRequest.onAuthRequired",
+            "webRequest.onResponseStarted", "webRequest.onCompleted", "webRequest.onErrorOccurred",
             "scripting.registerContentScripts", "scripting.unregisterContentScripts", "scripting.getRegisteredContentScripts"
         ]
         ExtensionBridge.attach(to: context.webViewConfiguration.userContentController, handler: extensionPageBridge)

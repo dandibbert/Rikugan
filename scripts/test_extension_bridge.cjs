@@ -420,5 +420,76 @@ function load(extra) {
   assert.equal(await webkitScripting.chrome.scripting.registerContentScripts([]), 'webkit');
   assert.equal(keptWebKit, true);
 
+  await assert.rejects(
+    unsupportedHost.chrome.debugger.attach({ tabId: 1 }, '1.3'),
+    /Unsupported: debugger.attach/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.debugger.detach({ tabId: 1 }),
+    /Unsupported: debugger.detach/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.debugger.sendCommand({ tabId: 1 }, 'Page.reload'),
+    /Unsupported: debugger.sendCommand/
+  );
+  await assert.rejects(unsupportedHost.chrome.debugger.getTargets(), /Unsupported: debugger.getTargets/);
+  await assert.rejects(
+    unsupportedHost.chrome.debugger.onEvent.addListener(function () {}),
+    /Unsupported: debugger.onEvent/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.runtime.sendNativeMessage('com.example.host', { ping: 1 }),
+    /Unsupported: runtime.sendNativeMessage/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.runtime.connectNative('com.example.host'),
+    /Unsupported: runtime.connectNative/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.webRequest.handlerBehaviorChanged(),
+    /Unsupported: webRequest.handlerBehaviorChanged/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.declarativeNetRequest.updateDynamicRules({
+      addRules: [{ id: 1, action: { type: 'redirect', redirect: { url: 'https://example.com/' } }, condition: { urlFilter: 'a' } }]
+    }),
+    /Unsupported: declarativeNetRequest.redirect/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.declarativeNetRequest.updateSessionRules({
+      addRules: [{ id: 2, action: { type: 'modifyHeaders', responseHeaders: [] }, condition: { urlFilter: 'b' } }]
+    }),
+    /Unsupported: declarativeNetRequest.modifyHeaders/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.declarativeNetRequest.updateDynamicRules({
+      addRules: [{ id: 5, action: { type: 'block' }, condition: { urlFilter: 'e' } }]
+    }),
+    /Unsupported: declarativeNetRequest.updateDynamicRules/
+  );
+  let blockCalls = 0;
+  const dnrHost = load({
+    chrome: {
+      runtime: {},
+      declarativeNetRequest: {
+        updateDynamicRules(options) {
+          blockCalls += 1;
+          return Promise.resolve(options.addRules[0].action.type);
+        }
+      }
+    }
+  });
+  assert.equal(await dnrHost.chrome.declarativeNetRequest.updateDynamicRules({
+    addRules: [{ id: 3, action: { type: 'block' }, condition: { urlFilter: 'c' } }]
+  }), 'block');
+  assert.equal(blockCalls, 1);
+  await assert.rejects(
+    dnrHost.chrome.declarativeNetRequest.updateDynamicRules({
+      addRules: [{ id: 4, action: { type: 'redirect' }, condition: { urlFilter: 'd' } }]
+    }),
+    /Unsupported: declarativeNetRequest.redirect/
+  );
+  assert.equal(blockCalls, 1);
+
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

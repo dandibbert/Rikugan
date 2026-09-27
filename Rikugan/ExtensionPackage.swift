@@ -20,15 +20,15 @@ enum ChromeAPIMatrix {
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
         .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带静态规则由 WebKit 执行，block 可以生效。Rikugan 不实现 redirect、modifyHeaders，也不调用私有 WebKit API。广告拦截是另一套引擎。"),
         .init(api: "webRequest", level: "Unsupported", note: "chrome.webRequest 的 blocking 事件会拒绝为 Unsupported，并列入 unsupportedAPIs。不能在请求发出前同步改头或观察完整请求体。"),
-        .init(api: "debugger", level: "Unsupported", note: "已列入 unsupportedAPIs。不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),
-        .init(api: "nativeMessaging", level: "Unsupported", note: "runtime.sendNativeMessage 与 connectNative 已列入 unsupportedAPIs。")
+        .init(api: "debugger", level: "Unsupported", note: "chrome.debugger.attach、detach、sendCommand、getTargets 以及 onEvent、onDetach 会拒绝为 Unsupported，并列入 unsupportedAPIs。不使用私有 WebKit 检查器 API。"),
+        .init(api: "nativeMessaging", level: "Unsupported", note: "runtime.sendNativeMessage 与 connectNative 调用会拒绝为 Unsupported，并列入 unsupportedAPIs。")
     ]
     struct Method: Equatable { var api: String; var name: String; var level: String; var note: String }
     static let methods: [Method] = [
         .init(api: "runtime", name: "sendMessage", level: "Partial", note: "WebKit 提供时沿用。内容脚本在 background ready 之前调用会进入 BackgroundGate 队列。ready 后按顺序调用原来的 runtime.sendMessage，发送方拿到 background onMessage 的返回值。探测失败进入 failed，排队的 sendMessage 和 connect 拒绝为 background failed。shutdown 之后要等下一次 cold start 才再接受消息。"),
         .init(api: "runtime", name: "connect", level: "Partial", note: "ready 前的 Port 保持 pending，postMessage 先排队。ready 后调用原来的 runtime.connect，按顺序把排队的 postMessage 交给这个 Port，并触发 onConnect。disconnect、重新 connect、多个 port 和关闭标签都会结束对应 port。"),
-        .init(api: "runtime", name: "sendNativeMessage", level: "Unsupported", note: "已列入 unsupportedAPIs。"),
-        .init(api: "runtime", name: "connectNative", level: "Unsupported", note: "已列入 unsupportedAPIs。"),
+        .init(api: "runtime", name: "sendNativeMessage", level: "Unsupported", note: "调用会拒绝为 Unsupported: runtime.sendNativeMessage，并列入 unsupportedAPIs。"),
+        .init(api: "runtime", name: "connectNative", level: "Unsupported", note: "调用会拒绝为 Unsupported: runtime.connectNative，并列入 unsupportedAPIs。"),
         .init(api: "storage", name: "local", level: "Supported", note: "WKWebExtension 扩展存储，按身份隔离。"),
         .init(api: "storage", name: "sync", level: "Partial", note: "走 WebKit 的 sync 区域，不是另一套云同步。"),
         .init(api: "storage", name: "session", level: "Partial", note: "走 WebKit 的 session 区域。"),
@@ -50,10 +50,10 @@ enum ChromeAPIMatrix {
         .init(api: "downloads", name: "download", level: "Partial", note: "浏览器下载列表可用。chrome.downloads 取决于 WebKit，没有第二套实现。"),
         .init(api: "webNavigation", name: "onCommitted", level: "Partial", note: "只有 WebKit 实际发出的导航事件。"),
         .init(api: "declarativeNetRequest", name: "静态 block", level: "Partial", note: "扩展包里的 block 规则由 WebKit 执行。已有 block 测试不能被改坏。"),
-        .init(api: "declarativeNetRequest", name: "redirect", level: "Unsupported", note: "公共 API 不能把网络规则变成真实 HTTP 2xx 重定向。"),
-        .init(api: "declarativeNetRequest", name: "modifyHeaders", level: "Unsupported", note: "不能在 WKWebView 公共 API 上改请求头或响应头。"),
+        .init(api: "declarativeNetRequest", name: "redirect", level: "Unsupported", note: "updateDynamicRules 或 updateSessionRules 的 action.type 为 redirect 时拒绝为 Unsupported: declarativeNetRequest.redirect。不会变成 HTTP 2xx。WebKit 已有的其他规则调用会原样交给 WebKit。"),
+        .init(api: "declarativeNetRequest", name: "modifyHeaders", level: "Unsupported", note: "action.type 为 modifyHeaders 时拒绝为 Unsupported: declarativeNetRequest.modifyHeaders。不能改请求头或响应头。"),
         .init(api: "webRequest", name: "onBeforeRequest", level: "Unsupported", note: "调用会拒绝为 Unsupported: webRequest.onBeforeRequest，并列入 unsupportedAPIs。没有 blocking webRequest。"),
-        .init(api: "debugger", name: "attach", level: "Unsupported", note: "不暴露 debugger，也不使用私有检查器 API。")
+        .init(api: "debugger", name: "attach", level: "Unsupported", note: "调用会拒绝为 Unsupported: debugger.attach。detach、sendCommand、getTargets 同样拒绝。不使用私有检查器 API。")
     ]
     static func additions(old: [String], new: [String]) -> [String] {
         let known = Set(old)
