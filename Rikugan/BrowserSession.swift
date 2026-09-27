@@ -30,6 +30,10 @@ import WebKit
         dataStore = WKWebsiteDataStore(forIdentifier: profileID)
         let config = WKWebExtensionController.Configuration(identifier: profileID)
         config.defaultWebsiteDataStore = dataStore
+        // The default store used by extension APIs and their actual web views must agree.
+        let extensionWebConfiguration = WKWebViewConfiguration()
+        extensionWebConfiguration.websiteDataStore = dataStore
+        config.webViewConfiguration = extensionWebConfiguration
         extensionController = WKWebExtensionController(configuration: config)
         super.init()
         extensionController.delegate = self

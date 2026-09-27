@@ -64,6 +64,7 @@ jobs:
           FIXTURE_PID=$!
           trap 'kill "$FIXTURE_PID" || true' EXIT
           SIMULATOR_ID=$(python3 scripts/select_simulator.py)
+          echo "TEST_SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
           xcrun simctl boot "$SIMULATOR_ID" || true
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
           xcodebuild test -project Rikugan.xcodeproj -scheme Rikugan -configuration Debug \
@@ -73,6 +74,16 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_IDENTITY=- \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES \
             CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} | tee test.log
+      - name: Collect WebKit runtime diagnostics
+        if: always()
+        run: |
+          if [ -n "${TEST_SIMULATOR_ID:-}" ]; then
+            xcrun simctl spawn "$TEST_SIMULATOR_ID" log show --style compact --last 20m \
+              --predicate 'process == "Rikugan" OR subsystem == "com.apple.WebKit"' > webkit-runtime.log 2>&1 || true
+          fi
+          if [ -d TestResults.xcresult ]; then
+            xcrun xcresulttool export diagnostics --path TestResults.xcresult --output-path TestDiagnostics || true
+          fi
       - name: Publish tested prerelease
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -105,5 +116,7 @@ jobs:
             TestResults.xcresult
             build-device.log
             test.log
+            webkit-runtime.log
+            TestDiagnostics/
           retention-days: 30
 

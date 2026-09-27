@@ -108,25 +108,21 @@ extension BrowserSession {
         }
         try extensionController.load(context)
         contexts[record.id] = context; extensionErrors.removeValue(forKey: record.id)
+        if ready {
+            context.didOpenWindow(self)
+            context.didFocusWindow(self)
+            for tab in tabs { context.didOpenTab(tab) }
+            if let tab = activeTab { context.didActivateTab(tab, previousActiveTab: nil) }
+        }
         do {
             if webExtension.hasBackgroundContent {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    context.loadBackgroundContent { error in
-                        if let error { continuation.resume(throwing: error) }
-                        else { continuation.resume() }
-                    }
-                }
+                try await ExtensionBackgroundLoader.load(context)
             }
             guard isActive else { throw RikuganError.message("扩展加载期间身份已关闭。") }
         } catch {
             try? extensionController.unload(context)
             contexts.removeValue(forKey: record.id)
             throw error
-        }
-        if ready {
-            context.didOpenWindow(self)
-            for tab in tabs { context.didOpenTab(tab) }
-            if let tab = activeTab { context.didActivateTab(tab, previousActiveTab: nil) }
         }
     }
     func toggleExtension(_ record: ExtensionRecord, enabled: Bool) async {
