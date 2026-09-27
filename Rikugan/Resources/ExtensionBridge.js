@@ -344,19 +344,33 @@
   function bucket(list, key) {
     var found = [];
     list.forEach(function (ns) {
-      if (!ns[key] || typeof ns[key] !== 'object') ns[key] = {};
-      if (found.indexOf(ns[key]) < 0) found.push(ns[key]);
+      var api;
+      try { api = ns[key]; } catch (error) { api = null; }
+      // WebKit namespace attributes are readonly. Creating a missing API must not throw,
+      // or the service worker script stops before the extension's onMessage listener exists.
+      if (!api || typeof api !== 'object') {
+        api = {};
+        try { ns[key] = api; } catch (error) {}
+      }
+      if (found.indexOf(api) < 0) found.push(api);
     });
     return found;
   }
 
   function fill(list, name, fn) {
-    list.forEach(function (api) { if (typeof api[name] !== 'function') api[name] = fn; });
+    list.forEach(function (api) {
+      try { if (typeof api[name] === 'function') return; } catch (error) { return; }
+      try { api[name] = fn; } catch (error) {}
+    });
   }
 
   function fillEvent(list, name) {
     list.forEach(function (api) {
-      if (!api[name] || typeof api[name].addListener !== 'function') api[name] = notificationEvent();
+      var existing;
+      try { existing = api[name]; } catch (error) { existing = null; }
+      if (!existing || typeof existing.addListener !== 'function') {
+        try { api[name] = notificationEvent(); } catch (error) {}
+      }
     });
   }
 
@@ -372,8 +386,10 @@
   function fillUnsupportedEvent(list, eventName, apiName) {
     var fail = unsupportedAPI(apiName);
     list.forEach(function (api) {
-      if (!api[eventName] || typeof api[eventName].addListener !== 'function') {
-        api[eventName] = { addListener: fail, removeListener: fail, hasListener: function () { return false; } };
+      var existing;
+      try { existing = api[eventName]; } catch (error) { existing = null; }
+      if (!existing || typeof existing.addListener !== 'function') {
+        try { api[eventName] = { addListener: fail, removeListener: fail, hasListener: function () { return false; } }; } catch (error) {}
       }
     });
   }
@@ -400,7 +416,7 @@
           return unsupportedAPI('declarativeNetRequest.' + method)();
         };
         guarded.__rgDNRGuard = true;
-        api[method] = guarded;
+        try { api[method] = guarded; } catch (error) {}
       });
     });
   }
@@ -629,7 +645,7 @@
     var originalSend = runtime.sendMessage;
     var originalConnect = runtime.connect;
     if (typeof originalSend === 'function' || typeof originalConnect === 'function') gate.setTransport({ sendMessage: originalSend, connect: originalConnect });
-    runtime.sendMessage = function (message, options, callback) {
+    var wrappedSend = function (message, options, callback) {
       var responseCallback = typeof options === 'function' ? options : callback;
       var task;
       if (gate.state === 'failed' || gate.state === 'shutdown') task = gate.enqueueMessage(message);
@@ -644,16 +660,16 @@
       }
       return task;
     };
-    runtime.connect = function (info) {
+    try { runtime.sendMessage = wrappedSend; } catch (error) {}
+    var wrappedConnect = function (info) {
       if (gate.state === 'failed' || gate.state === 'shutdown') throw new Error(gate.state === 'shutdown' ? 'background shutdown' : 'background failed');
       if ((gate.state === 'ready' || gate.state === 'idle') && typeof originalConnect === 'function') return originalConnect.apply(runtime, arguments);
       return gate.connect(info || {});
     };
+    try { runtime.connect = wrappedConnect; } catch (error) {}
     if (typeof window === 'undefined') {
+      // The worker script has not registered onMessage yet. Do not send from here.
       gate.markReady();
-      if (typeof originalSend === 'function') {
-        try { originalSend({ source: 'rikugan-bg-ready' }); } catch (error) {}
-      }
     } else if (typeof originalSend === 'function') {
       gate.start();
       var attempts = 0;
@@ -745,11 +761,15 @@
   }
 
   root.installRikuganExtensionBridge = installRikuganExtensionBridge;
-  if (!installRikuganExtensionBridge(root) && typeof setInterval === 'function') {
-    var tries = 0;
-    var timer = setInterval(function () {
-      tries += 1;
-      if (installRikuganExtensionBridge(root) || tries > 40) clearInterval(timer);
-    }, 50);
-  }
+  try {
+    if (!installRikuganExtensionBridge(root) && typeof setInterval === 'function') {
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries += 1;
+        try {
+          if (installRikuganExtensionBridge(root) || tries > 40) clearInterval(timer);
+        } catch (error) { clearInterval(timer); }
+      }, 50);
+    }
+  } catch (error) {}
 })(typeof globalThis !== 'undefined' ? globalThis : this);

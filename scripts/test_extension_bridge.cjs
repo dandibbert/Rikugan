@@ -692,5 +692,59 @@ function load(extra) {
   const ignored = await webkitSend({ type: 'other' });
   assert.equal(ignored, undefined);
 
+  // WebKit's extension namespace is readonly. Assigning a missing Main-world API
+  // such as webRequest throws in the service worker and used to abort background.js
+  // before onMessage.addListener. Content scripts still ran and painted 扩展后台异常.
+  const readonlyListeners = [];
+  const readonlyRuntime = {
+    id: 'demo',
+    sendMessage() { return Promise.resolve(undefined); },
+    onMessage: { addListener(fn) { readonlyListeners.push(fn); } },
+    connect() { return {}; }
+  };
+  const readonlyHost = {
+    runtime: readonlyRuntime,
+    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+    tabs: { query() { return Promise.resolve([{ id: 4 }]); } },
+    scripting: { insertCSS() { return Promise.resolve(); }, executeScript() { return Promise.resolve([]); } },
+    notifications: { create() { return Promise.resolve('id'); }, getAll() { return Promise.resolve({}); } }
+  };
+  const readonlyBrowser = new Proxy(readonlyHost, {
+    set(target, key, value) {
+      if (!Object.prototype.hasOwnProperty.call(target, key)) throw new TypeError('readonly namespace ' + String(key));
+      target[key] = value;
+      return true;
+    }
+  });
+  const readonlySandbox = {
+    browser: readonlyBrowser,
+    chrome: readonlyBrowser,
+    console,
+    Promise,
+    setTimeout,
+    clearTimeout
+  };
+  readonlySandbox.globalThis = readonlySandbox;
+  vm.runInNewContext(source + '\n' + backgroundSource, readonlySandbox, { filename: 'worker.js' });
+  assert.equal(readonlyListeners.length, 1);
+  function readonlySend(message) {
+    let replied = false;
+    let replyValue;
+    function sendResponse(value) {
+      replied = true;
+      replyValue = value;
+    }
+    let handled = false;
+    readonlyListeners.forEach(listener => {
+      if (listener(message, { tab: { id: 4 } }, sendResponse) === true) handled = true;
+    });
+    return handled && replied ? replyValue : undefined;
+  }
+  const readonlyReady = readonlySend({ source: 'rikugan-bg-probe' });
+  assert.equal(readonlyReady && readonlyReady.ready, true);
+  const readonlyDemo = readonlySend({ type: 'rikugan-probe' });
+  assert.equal(readonlyDemo && readonlyDemo.ok, true);
+  assert.equal(readonlyDemo.visits, 1);
+
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });
