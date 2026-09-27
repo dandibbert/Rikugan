@@ -692,7 +692,9 @@ enum BackgroundState: String {
     private var navigationStarted = false
     private var recoveredThisAttempt = false
     private var startWatchdog: Task<Void, Never>?
-    static let navigationStartTimeout: TimeInterval = 10
+    /// Normal starts reach didStartProvisionalNavigation in 0.7–2.2 s (CI, cold simulator
+    /// included); 5 s is > 2× the worst observed normal start.
+    static let navigationStartTimeout: TimeInterval = 5
     func note(_ event: String) {
         timeline.append(String(format: "+%.2fs %@", Date().timeIntervalSince(launchedAt), event))
         if timeline.count > 40 { timeline.removeFirst(timeline.count - 40) }
