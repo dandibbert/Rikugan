@@ -2,43 +2,66 @@ name: Rikugan
 options:
   bundleIdPrefix: com.dandibbert
   deploymentTarget:
-    iOS: "18.4"
+    iOS: "17.0"
   createIntermediateGroups: true
+  developmentLanguage: zh-Hans
 settings:
   base:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
     TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    DEVELOPMENT_TEAM: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
 targets:
   Rikugan:
     type: application
     platform: iOS
     sources:
-      - path: Rikugan
-        excludes: [Resources, Info.plist]
-      - path: Rikugan/Resources
+      - path: Sources/Rikugan
+        excludes:
+          - "Resources/**"
+          - "Info.plist"
+          - "Rikugan.entitlements"
+      - path: Sources/Rikugan/Resources/JS
         buildPhase: resources
+      - path: Sources/Rikugan/Resources/Filters
+        buildPhase: resources
+      - path: Sources/Rikugan/Resources/SelfTest
+        type: folder
+        buildPhase: resources
+      - path: Sources/Rikugan/Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan
-        INFOPLIST_FILE: Rikugan/Info.plist
+        INFOPLIST_FILE: Sources/Rikugan/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        CODE_SIGN_ENTITLEMENTS: ""
     dependencies:
+      - target: RikuganShare
+        embed: true
       - sdk: WebKit.framework
-  RikuganTests:
-    type: bundle.unit-test
+  RikuganShare:
+    type: app-extension
     platform: iOS
-    sources: [Tests]
+    sources:
+      - path: Sources/ShareExtension
+        excludes: ["Info.plist"]
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
-    dependencies:
-      - target: Rikugan
+        PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan.Share
+        INFOPLIST_FILE: Sources/ShareExtension/Info.plist
+        APPLICATION_EXTENSION_API_ONLY: YES
   RikuganUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -46,6 +69,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan.UITests
     dependencies:
       - target: Rikugan
 schemes:
@@ -53,6 +77,6 @@ schemes:
     build:
       targets:
         Rikugan: all
+        RikuganShare: all
     test:
-      targets: [RikuganTests, RikuganUITests]
-
+      targets: [RikuganUITests]

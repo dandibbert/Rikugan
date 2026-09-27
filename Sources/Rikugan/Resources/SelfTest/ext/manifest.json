@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Rikugan Self-Test Extension",
+  "version": "1.0.0",
+  "description": "Compatibility test suite: content scripts, messaging, storage, popup, scripting, permissions, background worker, DNR.",
+  "permissions": ["storage", "scripting", "tabs", "declarativeNetRequest"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "bg.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Self-Test" },
+  "content_scripts": [
+    { "matches": ["http://127.0.0.1/*"], "js": ["cs-start.js"], "run_at": "document_start" },
+    { "matches": ["http://127.0.0.1/*"], "js": ["cs-end.js"], "css": ["cs.css"], "run_at": "document_end" }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "ruleset_1", "enabled": true, "path": "rules.json" }]
+  }
+}

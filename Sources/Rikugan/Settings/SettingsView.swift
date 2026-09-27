@@ -1,0 +1,399 @@
+import SwiftUI
+import PhotosUI
+
+struct SettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    @EnvironmentObject private var manager: TabManager
+    @EnvironmentObject private var profile: ProfileContext
+    @Binding var importKind: BrowserView.ImportKind?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    NavigationLink { ProfilesView() } label: {
+                        Label("身份：\(profile.info.name)", systemImage: profile.info.symbol)
+                    }
+                }
+                Section("浏览") {
+                    NavigationLink { SearchSettingsView() } label: { Label("搜索引擎：\(services.prefs.searchEngine.name)", systemImage: "magnifyingglass") }
+                    NavigationLink { AppearanceSettingsView() } label: { Label("外观与工具栏", systemImage: "paintbrush") }
+                    NavigationLink { HomepageSettingsView() } label: { Label("起始页与壁纸", systemImage: "house") }
+                    NavigationLink { WebFontSettingsView(importKind: $importKind) } label: { Label("网页字体", systemImage: "textformat") }
+                    NavigationLink { DarkModeSettingsView() } label: { Label("网页深色模式", systemImage: "moon") }
+                    NavigationLink { TranslationSettingsView() } label: { Label("网页翻译", systemImage: "character.bubble") }
+                    NavigationLink { NavigationControlSettingsView() } label: { Label("页面跳转控制", systemImage: "arrow.triangle.branch") }
+                }
+                Section("内容") {
+                    NavigationLink { UserscriptManagerView(importKind: $importKind) } label: { Label("用户脚本", systemImage: "curlybraces") }
+                    NavigationLink { ExtensionManagerView(importKind: $importKind) } label: { Label("扩展", systemImage: "puzzlepiece.extension") }
+                    NavigationLink { AdBlockSettingsView() } label: { Label("内容拦截", systemImage: "shield.lefthalf.filled") }
+                    NavigationLink { SiteSettingsListView() } label: { Label("网站设置", systemImage: "slider.horizontal.3") }
+                    NavigationLink { MediaSettingsView() } label: { Label("媒体与下载", systemImage: "play.rectangle") }
+                }
+                Section("隐私与数据") {
+                    NavigationLink { AutofillSettingsView() } label: { Label("密码与自动填充", systemImage: "key") }
+                    NavigationLink { PrivacySettingsView() } label: { Label("清除浏览数据", systemImage: "trash") }
+                    NavigationLink { ImportExportView(importKind: $importKind) } label: { Label("导入与导出", systemImage: "arrow.up.arrow.down.square") }
+                }
+                Section("高级") {
+                    NavigationLink { DeveloperSettingsView() } label: { Label("开发者与网页检查器", systemImage: "hammer") }
+                    NavigationLink { CompatibilityView() } label: { Label("兼容性矩阵", systemImage: "checklist") }
+                    NavigationLink { SelfTestView() } label: { Label("自检（扩展 / 脚本 / 拦截）", systemImage: "stethoscope") }
+                    NavigationLink { AboutView() } label: { Label("关于 Rikugan", systemImage: "info.circle") }
+                }
+            }
+            .navigationTitle("设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
+    }
+}
+
+// MARK: - Search
+
+struct SearchSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    @State private var name = ""
+    @State private var template = ""
+    @State private var keyword = ""
+    @State private var shortcutTemplate = ""
+
+    var body: some View {
+        Form {
+            Section("默认搜索引擎") {
+                Picker("搜索引擎", selection: $services.prefs.searchEngineID) {
+                    ForEach(services.prefs.allEngines) { Text($0.name).tag($0.id) }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+            Section { Toggle("搜索建议", isOn: $services.prefs.searchSuggestions) } footer: {
+                Text("输入时向所选搜索引擎请求建议。无痕模式下不会请求。")
+            }
+            Section("自定义搜索引擎") {
+                ForEach(services.prefs.customEngines) { engine in
+                    VStack(alignment: .leading) {
+                        Text(engine.name)
+                        Text(engine.searchTemplate).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .onDelete { services.prefs.customEngines.remove(atOffsets: $0) }
+                TextField("名称", text: $name)
+                TextField("https://example.com/search?q={query}", text: $template).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("添加") {
+                    guard SearchEngine.isValidTemplate(template) else { ToastCenter.shared.show("模板需要包含 {query}", symbol: "exclamationmark.triangle"); return }
+                    services.prefs.customEngines.append(SearchEngine(id: UUID().uuidString, name: name.isEmpty ? template : name, searchTemplate: template))
+                    name = ""; template = ""
+                }
+            }
+            Section {
+                ForEach(services.prefs.shortcuts) { s in
+                    HStack { Text(s.keyword).bold(); Text(s.template).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                }
+                .onDelete { services.prefs.shortcuts.remove(atOffsets: $0) }
+                TextField("关键词，例如 gh", text: $keyword).textInputAutocapitalization(.never)
+                TextField("https://github.com/search?q={query}", text: $shortcutTemplate).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("添加快捷方式") {
+                    guard !keyword.isEmpty, SearchEngine.isValidTemplate(shortcutTemplate) else { return }
+                    services.prefs.shortcuts.append(URLShortcut(keyword: keyword, template: shortcutTemplate))
+                    keyword = ""; shortcutTemplate = ""
+                }
+            } header: { Text("网址快捷方式") } footer: { Text("在地址栏输入「关键词 空格 内容」，例如「gh swift」。") }
+        }
+        .navigationTitle("搜索")
+    }
+}
+
+// MARK: - Appearance / toolbar
+
+struct AppearanceSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    var body: some View {
+        Form {
+            Section {
+                Picker("地址栏位置（iPhone）", selection: $services.prefs.toolbarPosition) {
+                    Text("底部").tag(ToolbarPosition.bottom)
+                    Text("顶部").tag(ToolbarPosition.top)
+                }
+            }
+            Section {
+                Picker("快捷按钮", selection: Binding(get: { services.prefs.quickActions.first ?? .darkMode }, set: { services.prefs.quickActions = [$0] })) {
+                    ForEach(ToolbarAction.allCases) { Label(QuickActions.title($0), systemImage: QuickActions.symbol($0)).tag($0) }
+                }
+            } footer: { Text("长按工具栏中间的快捷按钮也可以更换。") }
+            Section {
+                Toggle("在后台打开新链接", isOn: $services.prefs.openLinksInBackground)
+                Toggle("默认请求桌面版网站", isOn: $services.prefs.defaultDesktopMode)
+                Toggle("恢复上次的标签页", isOn: $services.prefs.restoreTabs)
+            }
+        }
+        .navigationTitle("外观与工具栏")
+    }
+}
+
+struct HomepageSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    @State private var photo: PhotosPickerItem?
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("新标签页", selection: $services.prefs.homepageMode) {
+                    Text("起始页").tag(HomepageMode.start)
+                    Text("空白页").tag(HomepageMode.blank)
+                    Text("自定义网址").tag(HomepageMode.custom)
+                }
+                if services.prefs.homepageMode == .custom {
+                    TextField("https://", text: $services.prefs.homepageURL).keyboardType(.URL).textInputAutocapitalization(.never)
+                }
+                Toggle("显示经常访问", isOn: $services.prefs.showFrequentlyVisited)
+            }
+            Section("壁纸") {
+                PhotosPicker(selection: $photo, matching: .images) { Label("选择壁纸", systemImage: "photo") }
+                if services.prefs.wallpaperFileName != nil {
+                    Toggle("沉浸式壁纸", isOn: $services.prefs.immersiveWallpaper)
+                    Button("移除壁纸", role: .destructive) { services.prefs.wallpaperFileName = nil }
+                }
+            }
+        }
+        .navigationTitle("起始页")
+        .onChange(of: photo) { _, item in
+            guard let item else { return }
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+                let name = "wallpaper-\(UUID().uuidString).jpg"
+                let image = UIImage(data: data)
+                try? (image?.jpegData(compressionQuality: 0.9) ?? data).write(to: AppPaths.wallpapers.appendingPathComponent(name))
+                services.prefs.wallpaperFileName = name
+            }
+        }
+    }
+}
+
+// MARK: - Web font
+
+struct WebFontSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    @EnvironmentObject private var fonts: FontManager
+    @Binding var importKind: BrowserView.ImportKind?
+    @State private var showPicker = false
+    @State private var excluded = ""
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("使用自定义网页字体", isOn: $services.prefs.webFontEnabled)
+                Button { showPicker = true } label: {
+                    HStack {
+                        Text("系统字体（含描述文件安装的字体）")
+                        Spacer()
+                        Text(services.prefs.webFontFamily.isEmpty ? "未选择" : services.prefs.webFontFamily).foregroundStyle(.secondary)
+                    }
+                }
+                Toggle("代码保持等宽字体", isOn: $services.prefs.webFontKeepMonospace)
+            } footer: {
+                Text("通过配置描述文件安装的第三方字体对 WebKit 全局可用，可直接选择。导入的字体文件通过 FontFace API 注入网页，不受网页 CSP 限制。")
+            }
+            if !services.prefs.webFontFamily.isEmpty {
+                Section("预览") {
+                    Text("六眼 Rikugan — The quick brown fox jumps over the lazy dog. 永和九年，岁在癸丑。")
+                        .font(.custom(services.prefs.webFontFamily, size: 18))
+                }
+            }
+            Section("已导入的字体文件") {
+                ForEach(fonts.imported) { font in
+                    Button {
+                        services.prefs.webFontFamily = font.family
+                    } label: {
+                        HStack {
+                            Text(font.family).font(.custom(font.postScriptName, size: 17))
+                            Spacer()
+                            if services.prefs.webFontFamily == font.family { Image(systemName: "checkmark") }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .onDelete { idx in idx.map { fonts.imported[$0] }.forEach { fonts.delete($0) } }
+                Button { importKind = .font } label: { Label("导入字体文件（TTF / OTF / WOFF2）", systemImage: "square.and.arrow.down") }
+            }
+            Section {
+                ForEach(services.prefs.webFontExcludedHosts, id: \.self) { Text($0) }
+                    .onDelete { services.prefs.webFontExcludedHosts.remove(atOffsets: $0) }
+                HStack {
+                    TextField("example.com", text: $excluded).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("添加") { if !excluded.isEmpty { services.prefs.webFontExcludedHosts.append(excluded.lowercased()); excluded = "" } }
+                }
+            } header: { Text("不替换字体的网站") }
+        }
+        .navigationTitle("网页字体")
+        .sheet(isPresented: $showPicker) {
+            SystemFontPicker { services.prefs.webFontFamily = $0 }
+        }
+    }
+}
+
+struct DarkModeSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    var body: some View {
+        Form {
+            Section {
+                Picker("网页深色模式", selection: $services.prefs.pageDarkMode) {
+                    Text("关").tag(TriState.off)
+                    Text("自动（跟随系统外观）").tag(TriState.auto)
+                    Text("开").tag(TriState.on)
+                }
+                .pickerStyle(.inline)
+            } footer: { Text("这是网页内容的深色模式，而不只是 App 界面。已经是深色的网页会自动跳过。每个网站可在 页面菜单 → 网页深色模式 中单独设置。") }
+            Section("调整") {
+                Stepper("亮度 \(services.prefs.darkModeBrightness)%", value: $services.prefs.darkModeBrightness, in: 50...150, step: 5)
+                Stepper("对比度 \(services.prefs.darkModeContrast)%", value: $services.prefs.darkModeContrast, in: 50...150, step: 5)
+            }
+        }
+        .navigationTitle("网页深色模式")
+    }
+}
+
+struct TranslationSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    var body: some View {
+        Form {
+            Section("翻译服务") {
+                Picker("服务", selection: $services.prefs.translationProvider) {
+                    ForEach(Array(TranslationService.providerOptions.enumerated()), id: \.offset) { _, option in Text(option.name).tag(option.id) }
+                }
+                if services.prefs.translationProvider == "libre" {
+                    TextField("https://libretranslate.example.com", text: $services.prefs.translationServerURL).textInputAutocapitalization(.never)
+                }
+                if services.prefs.translationProvider == "libre" || services.prefs.translationProvider == "deepl" {
+                    SecureField("API Key", text: $services.prefs.translationAPIKey)
+                }
+            }
+            Section("目标语言") {
+                Picker("翻译为", selection: $services.prefs.translationTargetLanguage) {
+                    ForEach(TranslationLanguage.common) { Text($0.name).tag($0.code) }
+                }
+            }
+            Section {
+                ForEach(TranslationLanguage.common.filter { $0.code != services.prefs.translationTargetLanguage }) { language in
+                    Toggle(language.name, isOn: Binding(get: { services.prefs.autoTranslateLanguages.contains(language.code) }, set: { on in
+                        services.prefs.autoTranslateLanguages.removeAll { $0 == language.code }
+                        if on { services.prefs.autoTranslateLanguages.append(language.code) }
+                    }))
+                }
+            } header: { Text("自动翻译这些语言的网页") }
+        }
+        .navigationTitle("网页翻译")
+    }
+}
+
+struct NavigationControlSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    var body: some View {
+        Form {
+            Section {
+                Toggle("阻止跳转到 App Store", isOn: $services.prefs.preventAppStoreRedirect)
+                Toggle("阻止打开外部 App", isOn: $services.prefs.preventExternalAppRedirect)
+                Toggle("阻止弹出窗口", isOn: $services.prefs.blockPopups)
+            } footer: {
+                Text("未阻止时，网页尝试打开其他 App（如 youtube://、weixin://）会先询问。Android intent:// 链接会改用网页提供的备用地址。每个网站可在网站设置中单独允许或阻止。")
+            }
+        }
+        .navigationTitle("页面跳转控制")
+    }
+}
+
+struct MediaSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    var body: some View {
+        Form {
+            Section {
+                Toggle("媒体资源嗅探", isOn: $services.prefs.mediaSnifferEnabled)
+            } footer: { Text("记录网页通过 fetch / XHR / DOM 加载的视频、音频和 M3U8 地址。受 DRM（FairPlay / Widevine）保护的内容不在支持范围内。") }
+            Section("下载位置") {
+                Text("文件 App → 我的 iPhone → Rikugan → Downloads").font(.footnote)
+            }
+        }
+        .navigationTitle("媒体与下载")
+    }
+}
+
+struct PrivacySettingsView: View {
+    @EnvironmentObject private var profile: ProfileContext
+    @State private var confirm = false
+
+    var body: some View {
+        Form {
+            Section {
+                Button("清除历史记录", role: .destructive) { profile.history.clearAll(); ToastCenter.shared.show("历史记录已清除", symbol: "trash") }
+                Button("清除 Cookie 与网站数据", role: .destructive) { confirm = true }
+            } footer: { Text("只影响当前身份「\(profile.info.name)」。无痕标签页的数据在关闭后自动丢弃。") }
+        }
+        .navigationTitle("清除浏览数据")
+        .confirmationDialog("清除所有网站数据？将退出所有网站的登录。", isPresented: $confirm, titleVisibility: .visible) {
+            Button("清除", role: .destructive) {
+                Task { await profile.clearWebsiteData(); ToastCenter.shared.show("网站数据已清除", symbol: "trash") }
+            }
+        }
+    }
+}
+
+struct DeveloperSettingsView: View {
+    @EnvironmentObject private var services: AppServices
+    var body: some View {
+        Form {
+            Section {
+                Toggle("允许 Safari 网页检查器", isOn: $services.prefs.webInspectorEnabled)
+            } footer: { Text("开启后可在 Mac 的 Safari → 开发 菜单中调试 Rikugan 的网页（WKWebView.isInspectable）。扩展后台页面始终可调试。") }
+            Section {
+                Toggle("应用内控制台（实验）", isOn: $services.prefs.consoleCaptureEnabled)
+                Toggle("位置权限按网站询问", isOn: $services.prefs.geolocationShim)
+            } footer: { Text("应用内检查器可查看 console 输出、执行 JavaScript、查看 DOM 与资源。新设置在下次加载页面时生效。") }
+        }
+        .navigationTitle("开发者")
+    }
+}
+
+struct CompatibilityView: View {
+    var body: some View {
+        List {
+            Section("Chrome 扩展 API") {
+                ForEach(ChromeAPIMatrix.entries) { entry in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack { Text(entry.level.symbol); Text("chrome." + entry.namespace).font(.body.monospaced()); Spacer(); Text(entry.level.rawValue).font(.caption).foregroundStyle(.secondary) }
+                        if !entry.note.isEmpty { Text(entry.note).font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
+            }
+            Section("用户脚本 API") {
+                ForEach(Array(GMCompatibility.table.enumerated()), id: \.offset) { _, entry in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack { Text(entry.level.symbol); Text(entry.api).font(.callout.monospaced()) }
+                        if !entry.note.isEmpty { Text(entry.note).font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
+            }
+        }
+        .navigationTitle("兼容性矩阵")
+    }
+}
+
+struct AboutView: View {
+    @EnvironmentObject private var services: AppServices
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("版本", value: services.appVersion)
+                LabeledContent("引擎", value: "WebKit / WKWebView")
+            }
+            Section("默认浏览器") {
+                Text(services.defaultBrowserStatus).font(.footnote)
+            }
+            Section {
+                Text("Rikugan 是一个原生 iOS / iPadOS 浏览器，内置用户脚本管理器、Chrome MV3 兼容运行时、内容拦截与网页工具。没有信息流、推荐内容或广告。").font(.footnote)
+            }
+        }
+        .navigationTitle("关于")
+    }
+}
