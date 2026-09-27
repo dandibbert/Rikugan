@@ -5,11 +5,23 @@ struct ExtensionNoticeRecord: Equatable {
     var id: String
     var title: String
     var message: String
+    var buttons: [String] = []
+    var extensionID: String = ""
+}
+
+struct ExtensionNotificationEvent: Equatable {
+    var type: String
+    var notificationID: String
+    var buttonIndex: Int = -1
+    var extensionID: String = ""
 }
 
 struct ExtensionHostCall: Equatable {
+    var kind: String = ""
     var css: String? = nil
     var code: String? = nil
+    var files: [String] = []
+    var isolated: Bool = false
     var error: String? = nil
 }
 
@@ -37,33 +49,46 @@ enum ExtensionBridge {
 
     static func command(api: String, details: [String: Any]) -> ExtensionHostCall {
         let files = stringList(details["files"])
-        if !files.isEmpty { return ExtensionHostCall(error: "files are not forwarded") }
         switch api {
         case "scripting.insertCSS":
-            guard let css = details["css"] as? String else { return ExtensionHostCall(error: "css string is required") }
-            return ExtensionHostCall(css: css)
+            let css = details["css"] as? String
+            if css == nil && files.isEmpty { return ExtensionHostCall(error: "css string or files is required") }
+            return ExtensionHostCall(kind: "css", css: css, files: files)
         case "scripting.executeScript":
-            if let code = details["code"] as? String, !code.isEmpty { return ExtensionHostCall(code: code) }
+            let world = (details["world"] as? String)?.uppercased() ?? "ISOLATED"
+            let isolated = world != "MAIN"
+            if !files.isEmpty { return ExtensionHostCall(kind: "script", files: files, isolated: isolated) }
+            if let code = details["code"] as? String, !code.isEmpty { return ExtensionHostCall(kind: "script", code: code, isolated: isolated) }
             if let function = details["func"] as? String, !function.isEmpty {
-                return ExtensionHostCall(code: "(\(function)).apply(null, \(jsonText(details["args"] ?? [])))")
+                return ExtensionHostCall(kind: "script", code: "(\(function)).apply(null, \(jsonText(details["args"] ?? [])))", isolated: isolated)
             }
-            return ExtensionHostCall(error: "func or code string is required")
+            return ExtensionHostCall(error: "func, code, or files is required")
         default:
             return ExtensionHostCall(error: "unsupported")
         }
     }
 
-    static func apply(api: String, details: [String: Any], records: inout [String: ExtensionNoticeRecord], deliver: (String, String) -> Void) -> ExtensionHostOutcome {
+    static func apply(api: String, details: [String: Any], records: inout [String: ExtensionNoticeRecord], deliver: (ExtensionNoticeRecord) -> Void) -> ExtensionHostOutcome {
         switch api {
         case "notifications.create":
             let options = details["options"] as? [String: Any] ?? [:]
             let explicit = details["id"] as? String ?? ""
             let id = explicit.isEmpty ? UUID().uuidString : explicit
-            let title = options["title"] as? String ?? ""
-            let message = (options["message"] as? String) ?? (options["body"] as? String) ?? ""
-            records[id] = ExtensionNoticeRecord(id: id, title: title, message: message)
-            deliver(title, message)
+            let record = ExtensionNoticeRecord(id: id, title: options["title"] as? String ?? "", message: noticeMessage(options), buttons: buttonTitles(options["buttons"]), extensionID: details["extensionId"] as? String ?? "")
+            records[id] = record
+            deliver(record)
             return ExtensionHostOutcome(result: id)
+        case "notifications.update":
+            let id = details["id"] as? String ?? ""
+            guard var record = records[id] else { return ExtensionHostOutcome(result: false) }
+            let options = details["options"] as? [String: Any] ?? [:]
+            if let title = options["title"] as? String { record.title = title }
+            if options["message"] != nil || options["body"] != nil { record.message = noticeMessage(options) }
+            if options["buttons"] != nil { record.buttons = buttonTitles(options["buttons"]) }
+            if let extensionID = details["extensionId"] as? String, !extensionID.isEmpty { record.extensionID = extensionID }
+            records[id] = record
+            deliver(record)
+            return ExtensionHostOutcome(result: true)
         case "notifications.clear":
             let id = details["id"] as? String ?? ""
             if id.isEmpty {
@@ -72,12 +97,39 @@ enum ExtensionBridge {
             }
             return ExtensionHostOutcome(result: records.removeValue(forKey: id) != nil)
         case "notifications.getAll":
-            var map: [String: [String: String]] = [:]
-            for (key, value) in records { map[key] = ["title": value.title, "message": value.message] }
+            var map: [String: [String: Any]] = [:]
+            for (key, value) in records {
+                map[key] = ["title": value.title, "message": value.message, "buttons": value.buttons]
+            }
             return ExtensionHostOutcome(result: map)
         default:
             return ExtensionHostOutcome(error: "unsupported")
         }
+    }
+
+    static func loadSources(_ names: [String], packages: [(url: URL, directory: Bool)], strict: Bool) -> Result<[String], String> {
+        guard !names.isEmpty else { return .success([]) }
+        for name in names {
+            if safeRelative(name) == nil { return .failure("invalid file \(name)") }
+        }
+        let candidates = strict ? Array(packages.prefix(1)) : packages
+        guard !candidates.isEmpty else { return .failure("missing file \(names[0])") }
+        var missing = names[0]
+        for package in candidates {
+            var texts: [String] = []
+            var failed = false
+            for name in names {
+                switch readSource(name, package: package.url, directory: package.directory) {
+                case .success(let text): texts.append(text)
+                case .failure(let error):
+                    missing = error
+                    failed = true
+                }
+                if failed { break }
+            }
+            if !failed { return .success(texts) }
+        }
+        return .failure(missing)
     }
 
     static func install(at url: URL, directory: Bool, source: String) throws {
@@ -208,6 +260,33 @@ enum ExtensionBridge {
         guard let path, !path.isEmpty, !path.hasPrefix("/"), !path.contains("\\"), !path.contains("\0") else { return nil }
         if path.split(separator: "/").contains("..") { return nil }
         return path
+    }
+
+    private static func noticeMessage(_ options: [String: Any]) -> String {
+        (options["message"] as? String) ?? (options["body"] as? String) ?? ""
+    }
+
+    private static func buttonTitles(_ value: Any?) -> [String] {
+        let list = value as? [Any] ?? []
+        return list.compactMap { item in
+            if let text = item as? String { return text }
+            if let object = item as? [String: Any] { return object["title"] as? String }
+            if let object = item as? NSDictionary { return object["title"] as? String }
+            return nil
+        }
+    }
+
+    private static func readSource(_ name: String, package: URL, directory: Bool) -> Result<String, String> {
+        guard let relative = safeRelative(name) else { return .failure("invalid file \(name)") }
+        if directory {
+            let file = package.appendingPathComponent(relative)
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return .failure("missing file \(relative)") }
+            return .success(text)
+        }
+        guard let data = try? Data(contentsOf: package), let bytes = ZipArchive.extract(data: data, path: relative), let text = String(data: bytes, encoding: .utf8) else {
+            return .failure("missing file \(relative)")
+        }
+        return .success(text)
     }
 
     private static func stringList(_ value: Any?) -> [String] {

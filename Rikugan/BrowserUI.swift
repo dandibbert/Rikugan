@@ -22,9 +22,23 @@ struct RootView: View {
             VStack(spacing: 8) {
                 if model.working { HStack(spacing: 10) { ProgressView(); Text("正在处理导入…").font(.subheadline) }.padding().background(.regularMaterial, in: Capsule()) }
                 if let toast = model.noticeToast {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(toast.title).font(.subheadline.weight(.semibold))
-                        if !toast.body.isEmpty { Text(toast.body).font(.caption).lineLimit(2) }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Button { model.activateExtensionNotice(toast) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(toast.title).font(.subheadline.weight(.semibold))
+                                if !toast.body.isEmpty { Text(toast.body).font(.caption).lineLimit(2) }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        if !toast.buttons.isEmpty {
+                            HStack {
+                                ForEach(Array(toast.buttons.enumerated()), id: \.offset) { index, title in
+                                    Button(title) { model.activateExtensionNotice(toast, button: index) }
+                                        .buttonStyle(.bordered)
+                                        .font(.caption)
+                                }
+                            }
+                        }
                     }
                     .padding(12)
                     .frame(maxWidth: 360, alignment: .leading)
@@ -845,10 +859,24 @@ struct SettingsView: View {
                 Section("网页通知") {
                     if model.notices.isEmpty { Text("还没有网页通知。允许后会出现在这里，并提交系统本地通知。").font(.footnote).foregroundStyle(.secondary) }
                     ForEach(model.notices) { notice in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(notice.title).font(.subheadline)
-                            if !notice.body.isEmpty { Text(notice.body).font(.caption) }
-                            Text(notice.host).font(.caption2).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Button { model.activateExtensionNotice(notice) } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(notice.title).font(.subheadline)
+                                    if !notice.body.isEmpty { Text(notice.body).font(.caption) }
+                                    Text(notice.host).font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            if !notice.buttons.isEmpty {
+                                HStack {
+                                    ForEach(Array(notice.buttons.enumerated()), id: \.offset) { index, title in
+                                        Button(title) { model.activateExtensionNotice(notice, button: index) }
+                                            .buttonStyle(.bordered)
+                                            .font(.caption)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

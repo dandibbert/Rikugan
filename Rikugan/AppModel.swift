@@ -10,6 +10,9 @@ struct PageNotice: Identifiable, Equatable {
     var title: String
     var body: String
     var date = Date()
+    var extensionNotificationID = ""
+    var extensionRuntimeID = ""
+    var buttons: [String] = []
 }
 
 @MainActor final class AppModel: ObservableObject {
@@ -23,6 +26,7 @@ struct PageNotice: Identifiable, Equatable {
     @Published var notices: [PageNotice] = []
     @Published var noticeToast: PageNotice?
     var extensionNotices: [String: ExtensionNoticeRecord] = [:]
+    var pendingExtensionEvents: [ExtensionNotificationEvent] = []
     let downloadCenter = DownloadCenter()
     let windows = WindowRegistry()
     let root: URL
@@ -54,12 +58,47 @@ struct PageNotice: Identifiable, Equatable {
         registerFonts()
     }
 
-    func deliverNotice(host: String, title: String, body: String) {
-        let notice = PageNotice(host: host, title: title, body: body)
+    func deliverNotice(host: String, title: String, body: String, extensionNotificationID: String = "", extensionRuntimeID: String = "", buttons: [String] = []) {
+        let notice = PageNotice(host: host, title: title, body: body, extensionNotificationID: extensionNotificationID, extensionRuntimeID: extensionRuntimeID, buttons: buttons)
         notices.insert(notice, at: 0)
         if notices.count > 40 { notices.removeLast(notices.count - 40) }
         noticeToast = notice
-        SystemNotifications.deliver(title: title, body: body.isEmpty ? host : body)
+        SystemNotifications.deliver(title: title, body: body.isEmpty ? host : body, identifier: extensionNotificationID)
+    }
+    func deliverExtensionNotice(_ record: ExtensionNoticeRecord) {
+        if let index = notices.firstIndex(where: { $0.extensionNotificationID == record.id && !$0.extensionNotificationID.isEmpty }) {
+            notices[index].title = record.title
+            notices[index].body = record.message
+            notices[index].buttons = record.buttons
+            notices[index].extensionRuntimeID = record.extensionID
+            noticeToast = notices[index]
+            SystemNotifications.deliver(title: record.title, body: record.message.isEmpty ? record.id : record.message, identifier: record.id)
+            return
+        }
+        deliverNotice(host: "extension", title: record.title, body: record.message, extensionNotificationID: record.id, extensionRuntimeID: record.extensionID, buttons: record.buttons)
+    }
+    func removeExtensionNotices(ids: [String]) {
+        let chosen = Set(ids.filter { !$0.isEmpty })
+        guard !chosen.isEmpty else { return }
+        notices.removeAll { chosen.contains($0.extensionNotificationID) }
+        if let toast = noticeToast, chosen.contains(toast.extensionNotificationID) { noticeToast = nil }
+        SystemNotifications.withdraw(Array(chosen))
+    }
+    func activateExtensionNotice(_ notice: PageNotice, button: Int? = nil) {
+        guard !notice.extensionNotificationID.isEmpty else { return }
+        pendingExtensionEvents.append(ExtensionNotificationEvent(type: button == nil ? "clicked" : "button", notificationID: notice.extensionNotificationID, buttonIndex: button ?? -1, extensionID: notice.extensionRuntimeID))
+        if pendingExtensionEvents.count > 40 { pendingExtensionEvents.removeFirst(pendingExtensionEvents.count - 40) }
+    }
+    func takeExtensionEvents(extensionID: String) -> [[String: Any]] {
+        let chosen = pendingExtensionEvents.enumerated().filter { _, event in
+            extensionID.isEmpty || event.extensionID.isEmpty || event.extensionID == extensionID
+        }
+        for item in chosen.reversed() { pendingExtensionEvents.remove(at: item.offset) }
+        return chosen.map { _, event in
+            var payload: [String: Any] = ["type": event.type, "notificationId": event.notificationID]
+            if event.type == "button" { payload["buttonIndex"] = event.buttonIndex }
+            return payload
+        }
     }
     func start() {
         guard session == nil else { return }
@@ -295,14 +334,15 @@ enum SystemNotifications {
             }
         }
     }
-    static func deliver(title: String, body: String) {
+    static func deliver(title: String, body: String, identifier: String = "") {
         let center = UNUserNotificationCenter.current()
+        let requestID = identifier.isEmpty ? UUID().uuidString : identifier
         center.getNotificationSettings { settings in
             let post = {
                 let content = UNMutableNotificationContent()
                 content.title = String(title.prefix(120))
                 content.body = String(body.prefix(500))
-                center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+                center.add(UNNotificationRequest(identifier: requestID, content: content, trigger: nil))
             }
             switch settings.authorizationStatus {
             case .authorized, .provisional, .ephemeral:
@@ -313,6 +353,13 @@ enum SystemNotifications {
                 break
             }
         }
+    }
+    static func withdraw(_ identifiers: [String]) {
+        let ids = identifiers.filter { !$0.isEmpty }
+        guard !ids.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: ids)
+        center.removeDeliveredNotifications(withIdentifiers: ids)
     }
 }
 

@@ -88,21 +88,18 @@
         else resolve(data ? data.result : undefined);
       }
       var native = handler();
-      if (native && typeof native.postMessage === 'function') {
+      if (native && typeof native.postMessage === 'function' && !isolatedRequest(payload)) {
         root.__rgExtPending = root.__rgExtPending || {};
         root.__rgExtPending[payload.id] = take;
         native.postMessage(payload);
         return;
       }
       if (inContentScript()) {
-        function onResult(event) {
-          var data = event && event.data;
-          if (!data || data.source !== 'rikugan-extension-host-result' || data.id !== payload.id) return;
-          window.removeEventListener('message', onResult);
-          take(data);
-        }
-        window.addEventListener('message', onResult);
-        window.postMessage({ source: 'rikugan-extension-host', payload: payload }, '*');
+        askPage(payload).then(function (result) {
+          if (!isolatedRequest(payload)) { resolve(result); return; }
+          try { resolve(evalSources(result && result.sources)); }
+          catch (error) { reject(error); }
+        }, reject);
         return;
       }
       var named = payload.details && payload.details.target && payload.details.target.tabId;
@@ -117,10 +114,17 @@
     promise.then(function (value) { callback(value); }, function () { callback(); });
   }
 
+  function runtimeId() {
+    try {
+      var rt = (root.chrome && root.chrome.runtime) || (root.browser && root.browser.runtime);
+      return rt && rt.id ? String(rt.id) : '';
+    } catch (error) { return ''; }
+  }
+
   function copiedDetails(details) {
     var source = details || {};
     var target = source.target || {};
-    var body = {};
+    var body = { extensionId: runtimeId() };
     if (target.tabId != null) body.target = { tabId: target.tabId };
     else body.target = {};
     if (source.world != null) body.world = source.world;
@@ -133,25 +137,42 @@
     return body;
   }
 
-  function rejectFiles(details) {
-    if (details && Object.prototype.toString.call(details.files) === '[object Array]' && details.files.length) {
-      return Promise.reject(new Error('files are not forwarded'));
-    }
-    return null;
+  function isolatedRequest(payload) {
+    return payload && payload.api === 'scripting.executeScript' && (!payload.details || payload.details.world !== 'MAIN');
+  }
+
+  function evalSources(sources) {
+    var results = [];
+    (sources || []).forEach(function (source) { results.push({ result: (0, eval)(String(source)) }); });
+    return results;
+  }
+
+  function askPage(payload) {
+    return new Promise(function (resolve, reject) {
+      function onResult(event) {
+        var data = event && event.data;
+        if (!data || data.source !== 'rikugan-extension-host-result' || data.id !== payload.id) return;
+        window.removeEventListener('message', onResult);
+        if (data.error) reject(new Error(data.error));
+        else resolve(data.result);
+      }
+      window.addEventListener('message', onResult);
+      window.postMessage({ source: 'rikugan-extension-host', payload: payload }, '*');
+    });
   }
 
   function insertCSS(details) {
-    var rejected = rejectFiles(details);
-    if (rejected) return rejected;
-    if (!details || details.css == null) return Promise.reject(new Error('css string is required'));
-    return deliver({ id: nextId(), api: 'scripting.insertCSS', details: copiedDetails(details) });
+    var body = copiedDetails(details);
+    var hasFiles = body.files && body.files.length;
+    if ((details == null || details.css == null) && !hasFiles) return Promise.reject(new Error('css string or files is required'));
+    return deliver({ id: nextId(), api: 'scripting.insertCSS', details: body });
   }
 
   function executeScript(details) {
-    var rejected = rejectFiles(details);
-    if (rejected) return rejected;
     var body = copiedDetails(details);
-    if (!body.func && !body.code) return Promise.reject(new Error('func or code string is required'));
+    var hasFiles = body.files && body.files.length;
+    if (!body.func && !body.code && !hasFiles) return Promise.reject(new Error('func, code, or files is required'));
+    if (!body.world) body.world = 'ISOLATED';
     return deliver({ id: nextId(), api: 'scripting.executeScript', details: body });
   }
 
@@ -164,15 +185,55 @@
   function createNotification(idOrOptions, options, maybeCallback) {
     var callback = typeof options === 'function' ? options : maybeCallback;
     var normalized = notificationOptions(idOrOptions, typeof options === 'function' ? {} : options);
+    normalized.extensionId = runtimeId();
     return finish(deliver({ id: nextId(), api: 'notifications.create', details: normalized }), callback);
   }
 
   function clearNotification(id, callback) {
-    return finish(deliver({ id: nextId(), api: 'notifications.clear', details: { id: typeof id === 'string' ? id : '' } }), callback);
+    return finish(deliver({ id: nextId(), api: 'notifications.clear', details: { id: typeof id === 'string' ? id : '', extensionId: runtimeId() } }), callback);
   }
 
   function getAllNotifications(callback) {
-    return finish(deliver({ id: nextId(), api: 'notifications.getAll', details: {} }), callback);
+    return finish(deliver({ id: nextId(), api: 'notifications.getAll', details: { extensionId: runtimeId() } }), callback);
+  }
+
+  function updateNotification(id, options, callback) {
+    var cb = typeof options === 'function' ? options : callback;
+    var opts = options && typeof options === 'object' ? options : {};
+    return finish(deliver({ id: nextId(), api: 'notifications.update', details: { id: typeof id === 'string' ? id : '', options: opts, extensionId: runtimeId() } }), cb);
+  }
+
+  function notificationEvent() {
+    var list = [];
+    return {
+      addListener: function (fn) { if (typeof fn === 'function' && list.indexOf(fn) < 0) list.push(fn); },
+      removeListener: function (fn) { var index = list.indexOf(fn); if (index >= 0) list.splice(index, 1); },
+      hasListener: function (fn) { return list.indexOf(fn) >= 0; },
+      _emit: function () {
+        var args = Array.prototype.slice.call(arguments);
+        list.slice().forEach(function (fn) { try { fn.apply(null, args); } catch (error) {} });
+      }
+    };
+  }
+
+  function emitNotification(event) {
+    if (!event) return;
+    var id = event.notificationId || event.notificationID;
+    var seen = [];
+    [root.chrome, root.browser].forEach(function (ns) {
+      if (!ns || !ns.notifications || seen.indexOf(ns.notifications) >= 0) return;
+      seen.push(ns.notifications);
+      if (event.type === 'clicked' && ns.notifications.onClicked && typeof ns.notifications.onClicked._emit === 'function') ns.notifications.onClicked._emit(id);
+      if (event.type === 'button' && ns.notifications.onButtonClicked && typeof ns.notifications.onButtonClicked._emit === 'function') ns.notifications.onButtonClicked._emit(id, event.buttonIndex);
+    });
+  }
+
+  function pollNotifications() {
+    return deliver({ id: nextId(), api: 'notifications.poll', details: { extensionId: runtimeId() } }).then(function (events) {
+      if (!Array.isArray(events)) return [];
+      events.forEach(emitNotification);
+      return events;
+    }, function () { return []; });
   }
 
   function namespaces() {
@@ -196,6 +257,12 @@
     list.forEach(function (api) { if (typeof api[name] !== 'function') api[name] = fn; });
   }
 
+  function fillEvent(list, name) {
+    list.forEach(function (api) {
+      if (!api[name] || typeof api[name].addListener !== 'function') api[name] = notificationEvent();
+    });
+  }
+
   function relay() {
     if (!inContentScript()) return;
     var runtime = (root.browser && root.browser.runtime) || (root.chrome && root.chrome.runtime);
@@ -204,6 +271,13 @@
     runtime.onMessage.addListener(function (message, sender, sendResponse) {
       if (!message || message.source !== 'rikugan-extension-host' || !message.payload) return;
       var payload = message.payload;
+      if (isolatedRequest(payload)) {
+        askPage(payload).then(function (prepared) {
+          try { sendResponse({ result: evalSources(prepared && prepared.sources) }); }
+          catch (error) { sendResponse({ error: String(error && error.message || error) }); }
+        }, function (error) { sendResponse({ error: String(error && error.message || error) }); });
+        return true;
+      }
       function onResult(event) {
         var data = event && event.data;
         if (!data || data.source !== 'rikugan-extension-host-result' || data.id !== payload.id) return;
@@ -224,10 +298,20 @@
     var list = namespaces();
     fill(bucket(list, 'scripting'), 'insertCSS', insertCSS);
     fill(bucket(list, 'scripting'), 'executeScript', executeScript);
-    fill(bucket(list, 'notifications'), 'create', createNotification);
-    fill(bucket(list, 'notifications'), 'clear', clearNotification);
-    fill(bucket(list, 'notifications'), 'getAll', getAllNotifications);
+    var notes = bucket(list, 'notifications');
+    fill(notes, 'create', createNotification);
+    fill(notes, 'clear', clearNotification);
+    fill(notes, 'getAll', getAllNotifications);
+    fill(notes, 'update', updateNotification);
+    fillEvent(notes, 'onClicked');
+    fillEvent(notes, 'onButtonClicked');
     relay();
+    if (typeof window === 'undefined' && !handler() && typeof setInterval === 'function' && !root.__rikuganNotificationPoll) {
+      root.__rikuganNotificationPoll = true;
+      var pollTimer = setInterval(function () { pollNotifications(); }, 1000);
+      if (pollTimer && typeof pollTimer.unref === 'function') pollTimer.unref();
+    }
+    root.__rikuganPollNotifications = pollNotifications;
     return host.chrome || host.browser;
   }
 

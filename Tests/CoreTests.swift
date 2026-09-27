@@ -280,6 +280,9 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(notifications.note.contains("create"))
         XCTAssertTrue(notifications.note.contains("clear"))
         XCTAssertTrue(notifications.note.contains("getAll"))
+        XCTAssertTrue(notifications.note.contains("update"))
+        XCTAssertTrue(notifications.note.contains("onClicked"))
+        XCTAssertFalse(notifications.note.contains("onClicked、按钮和 update 没有"))
         XCTAssertFalse(notifications.note.contains("不会被记成成功"))
         XCTAssertFalse(notifications.note.contains("没有自研 chrome.notifications"))
         let scripting = try XCTUnwrap(ChromeAPIMatrix.entries.first { $0.api == "scripting" })
@@ -342,25 +345,45 @@ final class CoreTests: XCTestCase {
         let code = ExtensionBridge.command(api: "scripting.executeScript", details: ["func": "function () { return 1 }", "args": [2]])
         XCTAssertTrue(code.code?.contains("function () { return 1 }") == true)
         XCTAssertTrue(code.code?.contains("[2]") == true)
+        XCTAssertTrue(code.isolated)
         XCTAssertNil(code.error)
+        let mainWorld = ExtensionBridge.command(api: "scripting.executeScript", details: ["code": "1", "world": "MAIN"])
+        XCTAssertFalse(mainWorld.isolated)
+        XCTAssertEqual(mainWorld.code, "1")
         let files = ExtensionBridge.command(api: "scripting.executeScript", details: ["files": ["a.js"], "code": "1"])
-        XCTAssertEqual(files.error, "files are not forwarded")
-        XCTAssertNil(files.code)
+        XCTAssertNil(files.error)
+        XCTAssertEqual(files.files, ["a.js"])
+        XCTAssertTrue(files.isolated)
+        let cssFiles = ExtensionBridge.command(api: "scripting.insertCSS", details: ["files": ["a.css"], "world": "ISOLATED"])
+        XCTAssertNil(cssFiles.error)
+        XCTAssertEqual(cssFiles.kind, "css")
+        XCTAssertEqual(cssFiles.files, ["a.css"])
         var records: [String: ExtensionNoticeRecord] = [:]
         var delivered: [(String, String)] = []
-        let created = ExtensionBridge.apply(api: "notifications.create", details: ["id": "rikugan-demo", "options": ["title": "Rikugan", "message": "通知已创建"]], records: &records) { title, message in
-            delivered.append((title, message))
+        let created = ExtensionBridge.apply(api: "notifications.create", details: ["id": "rikugan-demo", "options": ["title": "Rikugan", "message": "通知已创建", "buttons": [["title": "Open"]]]], records: &records) { record in
+            delivered.append((record.title, record.message))
         }
         XCTAssertEqual(created.result as? String, "rikugan-demo")
         XCTAssertNil(created.error)
         XCTAssertEqual(records["rikugan-demo"]?.title, "Rikugan")
         XCTAssertEqual(records["rikugan-demo"]?.message, "通知已创建")
+        XCTAssertEqual(records["rikugan-demo"]?.buttons, ["Open"])
         XCTAssertEqual(delivered.first?.0, "Rikugan")
         XCTAssertEqual(delivered.first?.1, "通知已创建")
-        let listed = ExtensionBridge.apply(api: "notifications.getAll", details: [:], records: &records) { _, _ in }
-        let map = try XCTUnwrap(listed.result as? [String: [String: String]])
-        XCTAssertEqual(map["rikugan-demo"]?["message"], "通知已创建")
-        let cleared = ExtensionBridge.apply(api: "notifications.clear", details: ["id": "rikugan-demo"], records: &records) { _, _ in }
+        let updated = ExtensionBridge.apply(api: "notifications.update", details: ["id": "rikugan-demo", "options": ["title": "Updated", "message": "changed"]], records: &records) { record in
+            delivered.append((record.title, record.message))
+        }
+        XCTAssertEqual(updated.result as? Bool, true)
+        XCTAssertEqual(records["rikugan-demo"]?.title, "Updated")
+        XCTAssertEqual(records["rikugan-demo"]?.message, "changed")
+        XCTAssertEqual(records["rikugan-demo"]?.buttons, ["Open"])
+        XCTAssertEqual(delivered.last?.0, "Updated")
+        let missingUpdate = ExtensionBridge.apply(api: "notifications.update", details: ["id": "missing"], records: &records) { _ in }
+        XCTAssertEqual(missingUpdate.result as? Bool, false)
+        let listed = ExtensionBridge.apply(api: "notifications.getAll", details: [:], records: &records) { _ in }
+        let map = try XCTUnwrap(listed.result as? [String: [String: Any]])
+        XCTAssertEqual(map["rikugan-demo"]?["message"] as? String, "changed")
+        let cleared = ExtensionBridge.apply(api: "notifications.clear", details: ["id": "rikugan-demo"], records: &records) { _ in }
         XCTAssertEqual(cleared.result as? Bool, true)
         XCTAssertNil(records["rikugan-demo"])
         let bridge = "/* rikugan-extension-bridge */\nfunction installRikuganExtensionBridge(){}"
@@ -390,6 +413,16 @@ final class CoreTests: XCTestCase {
         let packedWorker = try XCTUnwrap(unpacked.first { $0.0 == "background.js" }?.1)
         XCTAssertTrue(String(data: packedWorker, encoding: .utf8)?.contains(ExtensionBridge.marker) == true)
         XCTAssertTrue(unpacked.contains { $0.0 == "rikugan-host-bridge.js" })
+        try Data("body{color:red}".utf8).write(to: directory.appendingPathComponent("a.css"))
+        try Data("1+1".utf8).write(to: directory.appendingPathComponent("a.js"))
+        let loaded = ExtensionBridge.loadSources(["a.js", "a.css"], packages: [(url: directory, directory: true)], strict: true)
+        XCTAssertEqual(try loaded.get(), ["1+1", "body{color:red}"])
+        let missingFile = ExtensionBridge.loadSources(["missing.js"], packages: [(url: directory, directory: true)], strict: true)
+        guard case .failure(let missingMessage) = missingFile else { return XCTFail("missing file should fail") }
+        XCTAssertTrue(missingMessage.contains("missing file"))
+        let invalidFile = ExtensionBridge.loadSources(["../secret.js"], packages: [(url: directory, directory: true)], strict: true)
+        guard case .failure(let invalidMessage) = invalidFile else { return XCTFail("invalid path should fail") }
+        XCTAssertTrue(invalidMessage.contains("invalid file"))
         let reply = ExtensionBridge.pageReply(id: "rg1", result: ["rikugan-demo": ["title": "Rikugan", "message": "通知已创建"]], error: nil)
         XCTAssertTrue(reply.contains("通知已创建"))
         XCTAssertTrue(reply.contains("__rgExtHostDone"))

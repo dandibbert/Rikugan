@@ -28,11 +28,13 @@ function load(extra) {
 
   const scriptPromise = popup.chrome.scripting.executeScript({
     target: { tabId: 3 },
+    world: 'MAIN',
     func: function () { return 1; },
     args: [2]
   });
   const scriptMessage = posted[posted.length - 1];
   assert.equal(scriptMessage.api, 'scripting.executeScript');
+  assert.equal(scriptMessage.details.world, 'MAIN');
   assert.match(scriptMessage.details.func, /function/);
   assert.deepEqual(scriptMessage.details.args, [2]);
   popup.__rgExtPending[scriptMessage.id]({ result: [{ result: 1 }] });
@@ -46,9 +48,20 @@ function load(extra) {
   assert.equal(note.details.options.message, '通知已创建');
   popup.__rgExtPending[note.id]({ result: 'rikugan-demo' });
   assert.equal(await notePromise, 'rikugan-demo');
-  const before = posted.length;
-  await assert.rejects(popup.chrome.scripting.executeScript({ files: ['a.js'], code: '1' }), /files are not forwarded/);
-  assert.equal(posted.length, before);
+  const filePromise = popup.chrome.scripting.executeScript({ files: ['injected.js'], world: 'MAIN' });
+  const fileMessage = posted[posted.length - 1];
+  assert.equal(fileMessage.api, 'scripting.executeScript');
+  assert.deepEqual(fileMessage.details.files, ['injected.js']);
+  assert.equal(fileMessage.details.world, 'MAIN');
+  popup.__rgExtPending[fileMessage.id]({ result: [{ result: 1 }] });
+  assert.deepEqual(await filePromise, [{ result: 1 }]);
+  const cssFilePromise = popup.chrome.scripting.insertCSS({ files: ['a.css'], world: 'ISOLATED' });
+  const cssFile = posted[posted.length - 1];
+  assert.equal(cssFile.api, 'scripting.insertCSS');
+  assert.deepEqual(cssFile.details.files, ['a.css']);
+  assert.equal(cssFile.details.world, 'ISOLATED');
+  popup.__rgExtPending[cssFile.id]({ result: null });
+  assert.equal(await cssFilePromise, null);
 
   let nativeCalls = 0;
   function nativeInsert() { nativeCalls += 1; return Promise.resolve('native'); }
@@ -99,19 +112,69 @@ function load(extra) {
     location: { protocol: 'http:' },
     chrome: { runtime: { onMessage: { addListener(fn) { contentRuntime = fn; } } } }
   });
-  const contentPromise = content.chrome.scripting.executeScript({ code: 'document.title' });
+  const contentPromise = content.chrome.scripting.executeScript({ code: 'document.title', world: 'MAIN' });
   assert.equal(page[0].source, 'rikugan-extension-host');
   assert.equal(page[0].payload.api, 'scripting.executeScript');
   assert.equal(page[0].payload.details.code, 'document.title');
+  assert.equal(page[0].payload.details.world, 'MAIN');
   listeners[0]({ data: { source: 'rikugan-extension-host-result', id: page[0].payload.id, result: 'fixture' } });
   assert.equal(await contentPromise, 'fixture');
+  const isolatedPromise = content.chrome.scripting.executeScript({ files: ['injected.js'] });
+  const isolatedMessage = page[page.length - 1].payload;
+  assert.equal(isolatedMessage.api, 'scripting.executeScript');
+  assert.equal(isolatedMessage.details.world, 'ISOLATED');
+  assert.deepEqual(isolatedMessage.details.files, ['injected.js']);
+  listeners[listeners.length - 1]({ data: { source: 'rikugan-extension-host-result', id: isolatedMessage.id, result: { sources: ['2+2'] } } });
+  assert.equal(JSON.stringify(await isolatedPromise), JSON.stringify([{ result: 4 }]));
   assert.equal(typeof contentRuntime, 'function');
   let responded = null;
   const relayed = contentRuntime({ source: 'rikugan-extension-host', payload: { id: 'from-worker', api: 'notifications.create', details: { id: 'rikugan-demo', options: { title: 'Rikugan', message: '通知已创建' } } } }, {}, value => { responded = value; });
   assert.equal(relayed, true);
-  assert.equal(page[1].payload.id, 'from-worker');
+  const relayedPage = page.find(item => item.payload && item.payload.id === 'from-worker');
+  assert.equal(relayedPage.payload.id, 'from-worker');
   listeners[listeners.length - 1]({ data: { source: 'rikugan-extension-host-result', id: 'from-worker', result: 'rikugan-demo' } });
   assert.equal(JSON.stringify(responded), JSON.stringify({ result: 'rikugan-demo' }));
+
+  const record = { id: 'rikugan-demo', title: 'Rikugan', message: '通知已创建', buttons: [] };
+  const clicks = [];
+  const buttonClicks = [];
+  const noteWorker = load({
+    chrome: {
+      runtime: { id: 'ext-1' },
+      tabs: {
+        sendMessage(_tabId, message, callback) {
+          const payload = message.payload;
+          if (payload.api === 'notifications.update') {
+            const options = payload.details.options || {};
+            record.title = options.title;
+            record.message = options.message;
+            record.buttons = (options.buttons || []).map(button => button.title);
+            callback({ result: true });
+            return;
+          }
+          if (payload.api === 'notifications.poll') {
+            callback({ result: [
+              { type: 'clicked', notificationId: record.id },
+              { type: 'button', notificationId: record.id, buttonIndex: 0 }
+            ] });
+            return;
+          }
+          callback({ result: null });
+        },
+        query(_query, callback) { callback([{ id: 4 }]); }
+      }
+    }
+  });
+  noteWorker.chrome.notifications.onClicked.addListener(id => clicks.push(id));
+  noteWorker.chrome.notifications.onButtonClicked.addListener((id, index) => buttonClicks.push([id, index]));
+  const updated = await noteWorker.chrome.notifications.update('rikugan-demo', { title: 'Updated', message: 'changed', buttons: [{ title: 'Open' }] });
+  assert.equal(updated, true);
+  assert.equal(record.title, 'Updated');
+  assert.equal(record.message, 'changed');
+  assert.deepEqual(record.buttons, ['Open']);
+  await noteWorker.__rikuganPollNotifications();
+  assert.deepEqual(clicks, ['rikugan-demo']);
+  assert.deepEqual(buttonClicks, [['rikugan-demo', 0]]);
 
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

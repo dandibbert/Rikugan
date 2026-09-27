@@ -283,31 +283,88 @@ import WebKit
     }
     func handleExtensionHost(api: String, details: [String: Any], tab: BrowserTab?) async -> ExtensionHostOutcome {
         guard !extensionContextBox.isEmpty else { return ExtensionHostOutcome(error: "没有已载入的扩展。") }
+        if api == "notifications.poll" {
+            let extensionID = details["extensionId"] as? String ?? ""
+            return ExtensionHostOutcome(result: model?.takeExtensionEvents(extensionID: extensionID) ?? [])
+        }
         if api.hasPrefix("notifications.") {
             guard let model else { return ExtensionHostOutcome(error: "没有通知记录。") }
+            let before = Set(model.extensionNotices.keys)
             var records = model.extensionNotices
-            let outcome = ExtensionBridge.apply(api: api, details: details, records: &records) { title, message in
-                model.deliverNotice(host: "extension", title: title, body: message)
+            let outcome = ExtensionBridge.apply(api: api, details: details, records: &records) { record in
+                model.deliverExtensionNotice(record)
             }
             model.extensionNotices = records
+            if api == "notifications.clear" {
+                model.removeExtensionNotices(ids: Array(before.subtracting(records.keys)))
+            }
             return outcome
         }
         let call = ExtensionBridge.command(api: api, details: details)
         if let error = call.error { return ExtensionHostOutcome(error: error) }
-        guard let target = tab ?? activeTab else { return ExtensionHostOutcome(error: "没有目标标签页。") }
-        if let css = call.css {
-            let inserted = await injectExtensionCSS(css, tab: target)
-            return inserted ? ExtensionHostOutcome(result: NSNull()) : ExtensionHostOutcome(error: "没有插入样式。")
-        }
-        if let code = call.code {
-            switch await evaluateExtensionScript(code, tab: target) {
-            case .success(let value):
-                return ExtensionHostOutcome(result: [["result": ExtensionBridge.boxed(value)]])
-            case .failure(let error):
-                return ExtensionHostOutcome(error: error.localizedDescription)
+        var texts: [String] = []
+        if !call.files.isEmpty {
+            let runtimeID = details["extensionId"] as? String ?? ""
+            let located = extensionPackages(preferring: runtimeID)
+            switch ExtensionBridge.loadSources(call.files, packages: located.packages, strict: located.strict) {
+            case .success(let sources): texts = sources
+            case .failure(let message): return ExtensionHostOutcome(error: message)
             }
         }
-        return ExtensionHostOutcome(error: "不支持的扩展调用。")
+        if call.isolated {
+            var sources = texts
+            if let code = call.code, !code.isEmpty { sources.append(code) }
+            guard !sources.isEmpty else { return ExtensionHostOutcome(error: "func, code, or files is required") }
+            return ExtensionHostOutcome(result: ["sources": sources])
+        }
+        guard let target = tab ?? activeTab else { return ExtensionHostOutcome(error: "没有目标标签页。") }
+        if call.kind == "css" {
+            if let css = call.css {
+                let inserted = await injectExtensionCSS(css, tab: target)
+                if !inserted { return ExtensionHostOutcome(error: "没有插入样式。") }
+            }
+            for text in texts {
+                let inserted = await injectExtensionCSS(text, tab: target)
+                if !inserted { return ExtensionHostOutcome(error: "没有插入样式。") }
+            }
+            return ExtensionHostOutcome(result: NSNull())
+        }
+        var results: [Any] = []
+        for text in texts {
+            switch await evaluateExtensionScript(text, tab: target) {
+            case .success(let value): results.append(["result": ExtensionBridge.boxed(value)])
+            case .failure(let error): return ExtensionHostOutcome(error: error.localizedDescription)
+            }
+        }
+        if let code = call.code, !code.isEmpty {
+            switch await evaluateExtensionScript(code, tab: target) {
+            case .success(let value): results.append(["result": ExtensionBridge.boxed(value)])
+            case .failure(let error): return ExtensionHostOutcome(error: error.localizedDescription)
+            }
+        }
+        guard !results.isEmpty else { return ExtensionHostOutcome(error: "不支持的扩展调用。") }
+        return ExtensionHostOutcome(result: results)
+    }
+
+    func extensionPackages(preferring runtimeID: String) -> (packages: [(url: URL, directory: Bool)], strict: Bool) {
+        guard let model else { return ([], false) }
+        func score(_ record: ExtensionRecord) -> Int {
+            let id = runtimeID.lowercased()
+            if id.isEmpty { return 0 }
+            if record.id.uuidString.lowercased() == id { return 3 }
+            if !record.storeID.isEmpty, record.storeID.lowercased() == id { return 2 }
+            if record.relativePath.lowercased().contains(id) { return 1 }
+            return 0
+        }
+        let ranked = profile.extensions.sorted { score($0) > score($1) }
+        let matched = ranked.filter { score($0) > 0 }
+        let chosen = matched.isEmpty ? ranked : matched
+        let packages = chosen.map { record -> (url: URL, directory: Bool) in
+            let url = model.directory(profileID).appendingPathComponent(record.relativePath)
+            let directory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            return (url, directory)
+        }
+        return (packages, !matched.isEmpty)
     }
 }
 

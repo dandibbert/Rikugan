@@ -6,7 +6,7 @@ enum ChromeAPIMatrix {
     static let entries: [Entry] = [
         .init(api: "runtime", level: "Supported", note: "由 WKWebExtension 实现 onMessage、sendMessage、connect、getURL、id。不是自研 chrome.runtime。sendNativeMessage / connectNative 明确禁用。"),
         .init(api: "storage", level: "Supported", note: "由 WKWebExtension 的扩展存储提供 local / sync / session，按身份隔离。"),
-        .init(api: "scripting", level: "Partial", note: "扩展脚本调用 chrome.scripting.insertCSS 与 chrome.scripting.executeScript。WebKit 已实现时沿用 WebKit，不覆盖。没有这些方法时，service worker 与 content script 里的桥把 css 字符串、func/code 字符串转发到 BrowserSession.insertExtensionCSS / executeExtensionScript，目标是扩展点名的标签页，否则是当前标签页的顶层页面世界。world 与 files 丢弃，files 返回错误。不是第二套完整 chrome.scripting。"),
+        .init(api: "scripting", level: "Partial", note: "扩展脚本调用 chrome.scripting.insertCSS 与 chrome.scripting.executeScript。WebKit 已实现时沿用 WebKit，不覆盖。没有这些方法时，service worker 与 content script 里的桥转发 css、func/code 和 files。files 从扩展包读取，缺失则返回错误。executeScript 默认 ISOLATED，在扩展 content script 世界执行；world 为 MAIN 时在页面世界执行。insertCSS 写入页面 CSSOM，并接受 world。不是第二套完整 chrome.scripting。"),
         .init(api: "tabs", level: "Partial", note: "query、create、update、reload、remove、activate。窗口管理只覆盖 App 内窗口。"),
         .init(api: "permissions", level: "Supported", note: "安装确认、可选权限与网站权限变更都会再次询问。"),
         .init(api: "content_scripts", level: "Supported", note: "matches、exclude_matches、js、css、run_at、all_frames。"),
@@ -16,7 +16,7 @@ enum ChromeAPIMatrix {
         .init(api: "cookies", level: "Partial", note: "只能访问当前身份网站存储里 WebKit 暴露的 cookie。"),
         .init(api: "downloads", level: "Partial", note: "浏览器自己的下载管理器可用；chrome.downloads 取决于 WebKit。"),
         .init(api: "i18n", level: "Partial", note: "跟随扩展包内的 _locales，缺少的文案不会伪造。"),
-        .init(api: "notifications", level: "Partial", note: "扩展脚本调用 chrome.notifications.create、clear、getAll 时，桥把记录交给 App 内通知列表和 SystemNotifications.deliver。页面 Notification 仍走同一条系统通知。onClicked、按钮和 update 没有。不是完整 chrome.notifications。"),
+        .init(api: "notifications", level: "Partial", note: "扩展脚本调用 chrome.notifications.create、update、clear、getAll。create 与 update 写入通知记录、App 内列表，并提交 UNUserNotificationCenter。按钮保存在记录上。点按列表行触发 onClicked，点按按钮触发 onButtonClicked，由后台轮询取回。系统通知本身不能深链按钮。不是完整 chrome.notifications。"),
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
         .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带 DNR 由 WebKit 执行。Rikugan 的广告拦截是独立引擎，不把扩展改写成用户脚本。"),
         .init(api: "debugger", level: "Unsupported", note: "已列入 unsupportedAPIs。不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),
