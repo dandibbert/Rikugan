@@ -1,6 +1,21 @@
 import UIKit
 import WebKit
 
+enum SiteFontChoice {
+    struct Fonts: Equatable {
+        var body: String
+        var heading: String
+        var mono: String
+    }
+
+    /// nil keeps the profile fonts. "" turns the override off. Any other site font replaces the body and drops the global heading and mono.
+    static func resolve(siteFont: String?, globalBody: String, globalHeading: String, globalMono: String) -> Fonts {
+        if siteFont == "" { return Fonts(body: "", heading: "", mono: "") }
+        if let siteFont { return Fonts(body: siteFont, heading: "", mono: "") }
+        return Fonts(body: globalBody, heading: globalHeading, mono: globalMono)
+    }
+}
+
 extension BrowserSession {
     func deliverScriptNotification(scriptID: String, noticeID: String) {
         guard let uuid = UUID(uuidString: scriptID), let script = profile.scripts.first(where: { $0.id == uuid }) else { return }
@@ -143,11 +158,15 @@ extension BrowserTab: WKScriptMessageHandler {
         let host = webView.url?.host
         let site = session?.profile.site(for: host)
         let mode = site?.darkMode ?? session?.profile.settings.darkMode ?? "off"
-        let siteFont = site?.fontFamily
-        let disabled = siteFont == ""
-        let family = disabled ? "" : (siteFont ?? session?.profile.settings.webFontFamily ?? "")
-        let heading = siteFont == nil && !disabled ? (session?.profile.settings.headingFontFamily ?? "") : ""
-        let mono = siteFont == nil && !disabled ? (session?.profile.settings.monospaceFontFamily ?? "") : ""
+        let fonts = SiteFontChoice.resolve(
+            siteFont: site?.fontFamily,
+            globalBody: session?.profile.settings.webFontFamily ?? "",
+            globalHeading: session?.profile.settings.headingFontFamily ?? "",
+            globalMono: session?.profile.settings.monospaceFontFamily ?? ""
+        )
+        let family = fonts.body
+        let heading = fonts.heading
+        let mono = fonts.mono
         var face = ""
         if let font = session?.profile.settings.importedFonts.first(where: { $0.family == family }), let session, let model = session.model {
             let file = model.directory(session.profileID).appendingPathComponent("Fonts").appendingPathComponent(font.fileName)

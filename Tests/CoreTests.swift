@@ -697,6 +697,10 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/a.js")!, lines: ["||cdn.example^$script"], kind: "script"), .block)
         XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/a.css")!, lines: ["||cdn.example^$stylesheet"], kind: "css"), .block)
         XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/api")!, lines: ["||cdn.example^$xmlhttprequest"], kind: "xhr"), .block)
+        XCTAssertEqual(AdBlockEngine.canonicalResource("fetch"), AdBlockEngine.canonicalResource("xhr"))
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/api")!, lines: ["||cdn.example^"], kind: "fetch"), .block)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/api")!, lines: ["||cdn.example^$xmlhttprequest"], kind: "fetch"), .block)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/api")!, lines: ["||cdn.example^$script"], kind: "fetch"), .none)
         XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/page")!, lines: ["||cdn.example^$document"], kind: "navigation"), .block)
         XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/video/index.m3u8")!, lines: ["||cdn.example^$media"], kind: "hls"), .block)
         XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/video/index.m3u8")!, lines: ["||cdn.example^$script"], kind: "hls"), .none)
@@ -723,6 +727,15 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(clean["passwords"])
         XCTAssertNil(clean["pageText"])
         XCTAssertEqual(clean["omitted"] as? [String], DiagnosticsExport.omitted)
+    }
+
+    func testSiteFontPrecedence() {
+        let globals = SiteFontChoice.resolve(siteFont: nil, globalBody: "Font A", globalHeading: "Heading", globalMono: "Mono")
+        XCTAssertEqual(globals, SiteFontChoice.Fonts(body: "Font A", heading: "Heading", mono: "Mono"))
+        let site = SiteFontChoice.resolve(siteFont: "Font B", globalBody: "Font A", globalHeading: "Heading", globalMono: "Mono")
+        XCTAssertEqual(site, SiteFontChoice.Fonts(body: "Font B", heading: "", mono: ""))
+        let disabled = SiteFontChoice.resolve(siteFont: "", globalBody: "Font A", globalHeading: "Heading", globalMono: "Mono")
+        XCTAssertEqual(disabled, SiteFontChoice.Fonts(body: "", heading: "", mono: ""))
     }
 }
 
