@@ -30,6 +30,7 @@ targets:
         SUPPORTS_MACCATALYST: NO
     dependencies:
       - sdk: WebKit.framework
+      - sdk: JavaScriptCore.framework
   RikuganTests:
     type: bundle.unit-test
     platform: iOS

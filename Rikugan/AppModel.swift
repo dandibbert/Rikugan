@@ -119,6 +119,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
             guard let url = URL(string: dependency), url.scheme?.lowercased() == "https" else { throw RikuganError.message("@require 只接受 HTTPS 地址。") }
             script.dependencies.append(try await ScriptNetwork.downloadText(url))
         }
+        try UserScriptSyntax.validate(script.dependencies.joined(separator: "\n;\n") + "\n;\n" + script.source)
         updateProfile(profileID) { profile in
             if let i = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[i] = script }
             else { profile.scripts.append(script) }

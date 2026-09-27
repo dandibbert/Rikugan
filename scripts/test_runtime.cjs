@@ -5,7 +5,17 @@ const template = fs.readFileSync('Rikugan/Resources/UserscriptRuntime.js', 'utf8
 function run(url, override = {}, source = 'globalThis.didRun = true;') {
   const config = {id: 'test', name: 'Test', version: '1', handler: 'test', matches: ['https://*.example.com/*'], includes: [], excludes: [], excludeMatches: [], grants: [], runAt: 'document-end', storage: {}, ...override};
   const calls = [];
-  const sandbox = {location: new URL(url), URL, console, setTimeout, window: {webkit: {messageHandlers: {test: {postMessage: body => { calls.push(body); return Promise.resolve(true); }}}}}};
+  const nativeStorage = new Map(Object.entries(config.storage));
+  const bridge = body => {
+    calls.push(body);
+    const {operation, args} = body;
+    if (operation === 'getValue') return Promise.resolve({exists: nativeStorage.has(args.key), value: nativeStorage.get(args.key) ?? null});
+    if (operation === 'setValue') nativeStorage.set(args.key, args.value);
+    if (operation === 'deleteValue') nativeStorage.delete(args.key);
+    if (operation === 'listValues') return Promise.resolve([...nativeStorage.keys()]);
+    return Promise.resolve(true);
+  };
+  const sandbox = {location: new URL(url), URL, console, setTimeout, window: {webkit: {messageHandlers: {test: {postMessage: bridge}}}}};
   const script = template.replace('/*__CONFIG__*/', JSON.stringify(config)).replace('/*__SOURCE__*/', source);
   new vm.Script(script).runInNewContext(sandbox);
   return {sandbox, calls};
@@ -22,4 +32,19 @@ assert.equal(storage.sandbox.before, 1); assert.equal(storage.sandbox.after, 2);
 assert.equal(storage.sandbox.unauthorized, 'undefined');
 assert.equal(storage.calls[0].operation, 'setValue');
 console.log('PASS: userscript runtime syntax, URL guards, exclusions, grants and synchronous storage');
+async function testAsyncStorage() {
+  const {sandbox} = run('https://example.com/', {grants: ['GM.getValue', 'GM.setValue', 'GM.deleteValue', 'GM.listValues'], storage: {nullable: null}}, `
+    globalThis.result = (async () => {
+      const nullable = await GM.getValue('nullable', 'fallback');
+      const missing = await GM.getValue('missing', 'fallback');
+      await GM.setValue('answer', 42);
+      const answer = await GM.getValue('answer');
+      await GM.deleteValue('nullable');
+      return [nullable, missing, answer, (await GM.listValues()).length];
+    })();
+  `);
+  assert.deepEqual(Array.from(await sandbox.result), [null, 'fallback', 42, 1]);
+  console.log('PASS: asynchronous GM storage preserves null and distinguishes missing values');
+}
+testAsyncStorage().catch(error => { console.error(error); process.exitCode = 1; });
 

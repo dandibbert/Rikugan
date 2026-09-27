@@ -193,7 +193,7 @@ struct ScriptEditor: View {
             }.navigationTitle(draft.existingID == nil ? "安装用户脚本" : "编辑用户脚本").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(saving) }
-                    ToolbarItem(placement: .confirmationAction) { Button(saving ? "保存中…" : "保存并启用") {
+                    ToolbarItem(placement: .confirmationAction) { Button(saving ? "保存中…" : (draft.existingID == nil ? "保存并启用" : "保存")) {
                         saving = true
                         Task { do { try await model.installScript(source, existingID: draft.existingID); dismiss() } catch { self.error = error.localizedDescription }; saving = false }
                     }.bold().disabled(saving) }

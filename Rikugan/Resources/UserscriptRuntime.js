@@ -72,7 +72,7 @@
     const request = xhr(details); request.catch(() => {}); return {abort: request.abort};
   } : undefined;
   const GM = {info: GM_info, addStyle, log: GM_log};
-  if (allowed('getValue')) GM.getValue = async (key, fallback) => { const value = await call('getValue', {key: String(key)}); return value === null ? fallback : value; };
+  if (allowed('getValue')) GM.getValue = async (key, fallback) => { const result = await call('getValue', {key: String(key)}); return result.exists ? result.value : fallback; };
   if (allowed('setValue')) GM.setValue = async (key, value) => { values[String(key)] = clone(value); return call('setValue', {key: String(key), value}); };
   if (allowed('deleteValue')) GM.deleteValue = async key => { delete values[String(key)]; return call('deleteValue', {key: String(key)}); };
   if (allowed('listValues')) GM.listValues = () => call('listValues');

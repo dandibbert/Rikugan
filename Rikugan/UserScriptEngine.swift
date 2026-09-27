@@ -62,7 +62,11 @@ struct ScriptCommand: Identifiable {
         switch operation {
         case "getValue", "listValues":
             let storage = Self.values(script)
-            replyHandler(operation == "listValues" ? Array(storage.keys) : (storage[args["key"] as? String ?? ""] ?? NSNull()), nil)
+            if operation == "listValues" { replyHandler(Array(storage.keys), nil) }
+            else {
+                let key = args["key"] as? String ?? ""
+                replyHandler(["exists": storage.keys.contains(key), "value": storage[key] ?? NSNull()], nil)
+            }
         case "setValue", "deleteValue":
             guard let key = args["key"] as? String, key.utf8.count < 4096 else { replyHandler(nil, "无效的存储键。"); return }
             var values = Self.values(script)

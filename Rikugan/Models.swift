@@ -113,6 +113,7 @@ struct UserScript: Codable, Identifiable, Equatable {
         }
         let requires = metadata["require"] ?? []
         guard requires.count <= 8 else { throw RikuganError.message("一个脚本最多允许 8 个 @require 依赖。") }
+        try UserScriptSyntax.validate(source)
         return UserScript(name: metadata["name"]?.first ?? "未命名脚本", version: metadata["version"]?.first ?? "1.0",
                           description: metadata["description"]?.first ?? "", source: source, matches: matches, includes: includes,
                           excludes: metadata["exclude"] ?? [], excludeMatches: metadata["exclude-match"] ?? [],

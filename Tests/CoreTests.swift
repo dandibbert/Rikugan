@@ -38,6 +38,12 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try UserScript.parse(source.replacingOccurrences(of: "GM_getValue", with: "none")))
         XCTAssertThrowsError(try UserScript.parse("not a userscript"))
     }
+    func testUserScriptSyntaxIsCheckedWithoutExecution() {
+        XCTAssertNoThrow(try UserScriptSyntax.validate("throw new Error('must not execute');"))
+        XCTAssertThrowsError(try UserScriptSyntax.validate("function broken( {"))
+        XCTAssertThrowsError(try UserScript.parse(source + "\nconst broken = ;"))
+        XCTAssertNoThrow(try UserScriptSyntax.validate("const literal = `}); globalThis.injected = true; ({`;"))
+    }
     func testCrossOriginPolicy() {
         let origin = URL(string: "https://example.com")!
         XCTAssertTrue(URLRules.connectionAllowed(URL(string: "https://api.example.com/v1")!, origin: origin, rules: ["api.example.com"]))

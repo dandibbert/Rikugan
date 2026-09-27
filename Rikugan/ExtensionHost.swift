@@ -16,7 +16,8 @@ extension BrowserSession {
     func prepareExtension(_ input: URL) async throws -> PreparedExtension {
         guard let model else { throw RikuganError.message("身份已关闭。") }
         let id = UUID()
-        let values = try input.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+        let values = try input.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isSymbolicLink != true else { throw RikuganError.message("扩展来源不能是符号链接。") }
         let directory = values.isDirectory == true
         let relative = "Extensions/" + id.uuidString + (directory ? "" : ".zip")
         let destination = model.directory(profileID).appendingPathComponent(relative)
@@ -26,7 +27,7 @@ extension BrowserSession {
             let keys: [URLResourceKey] = [.isSymbolicLinkKey, .fileSizeKey]
             guard let enumerator = FileManager.default.enumerator(at: input, includingPropertiesForKeys: keys) else { throw RikuganError.message("不能读取扩展文件夹。") }
             var count = 0, size = 0
-            for case let file as URL in enumerator {
+            while let file = enumerator.nextObject() as? URL {
                 let info = try file.resourceValues(forKeys: Set(keys)); count += 1; size += info.fileSize ?? 0
                 guard info.isSymbolicLink != true, count <= 10000, size <= 128 * 1024 * 1024 else { throw RikuganError.message("文件夹含符号链接或超过扩展大小限制。") }
             }
@@ -72,6 +73,9 @@ extension BrowserSession {
         for permission in record.allowedPermissions { context.setPermissionStatus(.grantedExplicitly, for: WKWebExtension.Permission(rawValue: permission)) }
         for pattern in record.allowedPatterns {
             if let match = try? WKWebExtension.MatchPattern(string: pattern) { context.setPermissionStatus(.grantedExplicitly, for: match) }
+        }
+        for pattern in record.requestedPatterns where !record.allowedPatterns.contains(pattern) {
+            if let match = try? WKWebExtension.MatchPattern(string: pattern) { context.setPermissionStatus(.deniedExplicitly, for: match) }
         }
         try extensionController.load(context)
         contexts[record.id] = context; extensionErrors.removeValue(forKey: record.id)
