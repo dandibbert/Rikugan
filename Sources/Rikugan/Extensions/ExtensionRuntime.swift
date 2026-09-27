@@ -95,6 +95,20 @@ import Combine
         ext.alarms.removeAll()
     }
 
+    /// Observed chrome.* traffic per extension (calls / errors per API and context). Used by the
+    /// Diagnostics page and the real-extension compatibility report — evidence, not claims.
+    struct APIStat: Codable { var calls = 0; var errors = 0; var contexts: Set<String> = []; var lastError: String? }
+    private(set) var apiStats: [String: [String: APIStat]] = [:]
+
+    func recordAPICall(_ extID: String, api: String, context: String, error: String?) {
+        guard !extID.isEmpty, !api.isEmpty else { return }
+        var stat = apiStats[extID, default: [:]][api, default: APIStat()]
+        stat.calls += 1
+        stat.contexts.insert(context)
+        if let error { stat.errors += 1; stat.lastError = String(error.prefix(200)) }
+        apiStats[extID, default: [:]][api] = stat
+    }
+
     /// Unsupported chrome.* calls per extension (shown in Diagnostics / compatibility reports).
     @Published private(set) var unsupportedCalls: [String: [String: Int]] = [:]
 
@@ -547,7 +561,7 @@ import Combine
 
     /// Probes whether this WebKit build accepts `redirect` / `modify-headers` content-rule actions.
     static func probeDNRCapabilities() async -> DNRConverter.Capabilities {
-        let store = WKContentRuleListStore.default()
+        guard let store = WKContentRuleListStore.default() else { return DNRConverter.Capabilities() }
         let redirect = #"[{"trigger":{"url-filter":"^rikugan-probe://"},"action":{"type":"redirect","redirect":{"url":"https://example.com/"}}}]"#
         let headers = #"[{"trigger":{"url-filter":"^rikugan-probe://"},"action":{"type":"modify-headers","request-headers":[{"header":"X-Rikugan","operation":"set","value":"1"}]}}]"#
         let r = await store.rkCompile("rikugan-probe-redirect", redirect) != nil

@@ -50,6 +50,20 @@ import UserNotifications
     // MARK: Entry point
 
     func handle(_ body: [String: Any], message: WKScriptMessage, worldName: String) async throws -> Any? {
+        let api = body["api"] as? String ?? ""
+        let extID = body["ext"] as? String ?? ""
+        let ctx = body["ctx"] as? String ?? "content"
+        do {
+            let value = try await handleCall(body, message: message, worldName: worldName)
+            if !api.hasPrefix("runtime._") { runtime.recordAPICall(extID, api: api, context: ctx, error: nil) }
+            return value
+        } catch {
+            runtime.recordAPICall(extID, api: api, context: ctx, error: error.localizedDescription)
+            throw error
+        }
+    }
+
+    private func handleCall(_ body: [String: Any], message: WKScriptMessage, worldName: String) async throws -> Any? {
         guard let extID = body["ext"] as? String, let ext = runtime.loaded[extID], ext.record.enabled else {
             throw RikuganError("Extension is not enabled")
         }
