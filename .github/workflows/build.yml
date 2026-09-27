@@ -73,7 +73,7 @@ jobs:
           xcodebuild test -project Rikugan.xcodeproj -scheme Rikugan -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build \
             -resultBundlePath TestResults.xcresult -parallel-testing-enabled NO \
-            -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 \
+            -test-timeouts-enabled YES -maximum-test-execution-time-allowance 360 \
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_IDENTITY=- \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES \
             CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} | tee test.log

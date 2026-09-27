@@ -14,7 +14,9 @@ enum ExtensionBackgroundError: LocalizedError {
     private var continuation: CheckedContinuation<Void, Error>?
     private var deadline: Task<Void, Never>?
 
-    static func load(_ context: WKWebExtensionContext, timeout: TimeInterval = 12) async throws {
+    // A cold simulator can spend over ten seconds merely launching WebContent.
+    // Do not tear down a valid load just as its navigation begins.
+    static func load(_ context: WKWebExtensionContext, timeout: TimeInterval = 45) async throws {
         let loader = ExtensionBackgroundLoader()
         try await withCheckedThrowingContinuation { continuation in
             loader.continuation = continuation
