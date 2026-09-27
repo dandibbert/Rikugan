@@ -220,5 +220,25 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(ExtensionCompatibility.safeRelativePath("../escape.js"))
         XCTAssertFalse(ExtensionCompatibility.safeRelativePath("https://example.com/remote.js"))
     }
+
+    @MainActor func testPageToolsEvaluateInRealWebViewOnMainActor() async throws {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let loaded = expectation(description: "Local fixture loaded")
+        let delegate = PageToolsLoadProbe(loaded)
+        webView.navigationDelegate = delegate
+        webView.loadHTMLString("<html><body><p id='probe'>real-webview</p></body></html>", baseURL: nil)
+        await fulfillment(of: [loaded], timeout: 20)
+        let result = await PageTools.call("document.getElementById('probe').textContent", in: webView)
+        XCTAssertEqual(result as? String, "real-webview")
+        webView.navigationDelegate = nil
+    }
+}
+
+@MainActor private final class PageToolsLoadProbe: NSObject, WKNavigationDelegate {
+    private let expectation: XCTestExpectation
+    init(_ expectation: XCTestExpectation) { self.expectation = expectation }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { expectation.fulfill() }
 }
 

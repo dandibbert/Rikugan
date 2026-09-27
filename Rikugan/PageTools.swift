@@ -11,14 +11,14 @@ enum PageTools {
         return fontSource + "\n" + text
     }()
 
-    static func install(on controller: WKUserContentController, cosmeticCSS: String) {
+    @MainActor static func install(on controller: WKUserContentController, cosmeticCSS: String) {
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         guard !cosmeticCSS.isEmpty, let literal = jsString(cosmeticCSS) else { return }
         let css = "(function(){try{var s=document.createElement('style');s.id='rikugan-cosmetic';s.textContent=\(literal);(document.documentElement||document.head).appendChild(s);}catch(e){}})();"
         controller.addUserScript(WKUserScript(source: css, injectionTime: .atDocumentStart, forMainFrameOnly: false))
     }
 
-    static func call(_ expression: String, in webView: WKWebView) async -> Any? {
+    @MainActor static func call(_ expression: String, in webView: WKWebView) async -> Any? {
         let script = "(function(){try{if(!globalThis.RikuganPageTools){\(source)} return \(expression);}catch(e){return {error:String(e)};}})()"
         return await withCheckedContinuation { continuation in
             webView.evaluateJavaScript(script) { value, _ in continuation.resume(returning: value) }
@@ -62,7 +62,7 @@ enum BlockListCoordinator {
         for tab in session.tabs { tab.syncContentRules() }
     }
 
-    private static func compile(_ store: WKContentRuleListStore, identifier: String, json: String) async throws -> WKContentRuleList {
+    @MainActor private static func compile(_ store: WKContentRuleListStore, identifier: String, json: String) async throws -> WKContentRuleList {
         try await withCheckedThrowingContinuation { continuation in
             store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
                 if let list { continuation.resume(returning: list) }

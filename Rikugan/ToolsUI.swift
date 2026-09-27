@@ -136,7 +136,7 @@ struct ImageSheet: View {
     }
 }
 
-final class PhotoSaver: NSObject {
+@MainActor final class PhotoSaver: NSObject {
     private var continuation: CheckedContinuation<Void, Never>?
     func write(_ image: UIImage) async {
         await withCheckedContinuation { continuation in
