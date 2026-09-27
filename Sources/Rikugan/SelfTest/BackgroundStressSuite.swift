@@ -158,6 +158,10 @@ import WebKit
         }
         ctx.extras["rounds"] = log
         ctx.extras["webViewsAtEnd"] = RikuganWebView.liveByPurpose
+        ctx.extras["stuckStartRecoveries"] = bg.stuckStartRecoveries
+        // Informational (always recorded, visible in the summary): how often WebKit never started a
+        // background navigation and a fresh web view had to be used.
+        ctx.record("（记录）后台导航未启动→更换 WebView 的次数", true, "\(bg.stuckStartRecoveries) of \(bg.startCount) starts")
         ctx.extras["failedRounds"] = failedRounds
         ctx.extras["seconds"] = Date().timeIntervalSince(suiteStart)
         ctx.record("压力测试总计", failedRounds == 0, String(format: "%d/%d rounds passed in %.1fs", total - failedRounds, total, Date().timeIntervalSince(suiteStart)))

@@ -685,6 +685,14 @@ enum BackgroundState: String {
     /// Navigation / resource timeline of the current start attempt (for diagnostics of stalls).
     private(set) var timeline: [String] = []
     private var launchedAt = Date()
+    /// Navigations of a fresh background web view that WebKit never started (observed
+    /// intermittently in the iOS 26 simulator). Each one is recovered once with a new web view and
+    /// counted here — visible in Diagnostics and the self-test reports, never silent.
+    private(set) var stuckStartRecoveries = 0
+    private var navigationStarted = false
+    private var recoveredThisAttempt = false
+    private var startWatchdog: Task<Void, Never>?
+    static let navigationStartTimeout: TimeInterval = 10
     func note(_ event: String) {
         timeline.append(String(format: "+%.2fs %@", Date().timeIntervalSince(launchedAt), event))
         if timeline.count > 40 { timeline.removeFirst(timeline.count - 40) }
@@ -731,8 +739,42 @@ enum BackgroundState: String {
         runtime.registerPage(webView, extID: ext.id, kind: "background")
         BackgroundHostContainer.shared.attach(webView)
         guard let url = URL(string: ext.baseURL + ExtensionSchemeHandler.backgroundPagePath) else { fail("invalid background URL"); return }
-        webView.load(URLRequest(url: url))
+        recoveredThisAttempt = false
+        loadPage(webView, url: url)
         armDeadline(Self.commitTimeout, phase: "page did not commit (WebContent process launch / main thread busy)")
+    }
+
+    private func loadPage(_ webView: WKWebView, url: URL) {
+        navigationStarted = false
+        webView.load(URLRequest(url: url))
+        startWatchdog?.cancel()
+        startWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.navigationStartTimeout * 1_000_000_000))
+            guard let self, !Task.isCancelled, self.webView === webView, !self.navigationStarted,
+                  self.state == .starting || self.state == .waking else { return }
+            self.recoverStuckStart(url: url)
+        }
+    }
+
+    /// WebKit never started the navigation: replace the web view once (bounded, counted, logged).
+    private func recoverStuckStart(url: URL) {
+        guard !recoveredThisAttempt else {
+            fail("navigation of the background page never started (also after one fresh web view)")
+            return
+        }
+        recoveredThisAttempt = true
+        stuckStartRecoveries += 1
+        note("navigation not started after \(Int(Self.navigationStartTimeout)) s → fresh web view (recovery #\(stuckStartRecoveries))")
+        ErrorLog.shared.record("background navigation did not start; replaced the web view (recovery #\(stuckStartRecoveries))", source: ext.displayName)
+        tearDownWebView()
+        let configuration = runtime.extensionPageConfiguration(for: ext, kind: "background")
+        let webView = RikuganWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration, purpose: "background")
+        webView.navigationDelegate = self
+        webView.isInspectable = true
+        self.webView = webView
+        runtime.registerPage(webView, extID: ext.id, kind: "background")
+        BackgroundHostContainer.shared.attach(webView)
+        loadPage(webView, url: url)
     }
 
     /// Two explicit phases: the background page must commit within `commitTimeout`, then its
@@ -770,6 +812,7 @@ enum BackgroundState: String {
     private func fail(_ reason: String) {
         note("fail: \(reason)")
         startupDeadline?.cancel()
+        startWatchdog?.cancel()
         state = .failed
         failureReason = reason
         runtime.updateRecord(ext.id) { $0.lastErrors.append("后台运行时启动失败：\(reason)") }
@@ -793,6 +836,7 @@ enum BackgroundState: String {
 
     func stop() {
         startupDeadline?.cancel()
+        startWatchdog?.cancel()
         idleTimer?.invalidate()
         tearDownWebView()
         let resumed = waiters
@@ -876,7 +920,10 @@ enum BackgroundState: String {
 
     // MARK: Navigation delegate
 
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { note("didStartProvisional") }
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        note("didStartProvisional")
+        if self.webView === webView { navigationStarted = true; startWatchdog?.cancel() }
+    }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         note("didCommit")
         guard self.webView === webView, state == .starting || state == .waking else { return }
@@ -910,7 +957,7 @@ enum BackgroundState: String {
     /// Diagnostic description used by the self-test and the Diagnostics page.
     var diagnostics: String {
         let history = transitions.suffix(8).map { $0.1.rawValue }.joined(separator: "→")
-        return "state=\(state.rawValue) starts=\(startCount) url=\(webView?.url?.lastPathComponent ?? "nil") loading=\(webView?.isLoading ?? false) window=\(webView?.window != nil) history=\(history)" +
+        return "state=\(state.rawValue) starts=\(startCount) stuckStartRecoveries=\(stuckStartRecoveries) url=\(webView?.url?.lastPathComponent ?? "nil") loading=\(webView?.isLoading ?? false) window=\(webView?.window != nil) history=\(history)" +
             (failureReason.map { " failure=\($0)" } ?? "") + " timeline=[" + timeline.joined(separator: "; ") + "]"
     }
 }
