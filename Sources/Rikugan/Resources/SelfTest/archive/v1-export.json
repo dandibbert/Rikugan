@@ -1,0 +1,27 @@
+{
+  "format": "rikugan-export",
+  "version": 1,
+  "exportedAt": "2026-06-01T10:00:00Z",
+  "preferences": { "searchEngineID": "duckduckgo", "blockPopups": true },
+  "sessions": [
+    {
+      "tabs": [
+        { "id": "8D1C63F4-0000-4000-8000-000000000001", "url": "http://127.0.0.1/lifecycle/page.html?n=v1a", "title": "v1 A", "groupID": null, "desktopMode": false, "lastActiveAt": "2026-06-01T09:00:00Z", "pinned": false },
+        { "id": "8D1C63F4-0000-4000-8000-000000000002", "url": "http://127.0.0.1/lifecycle/page.html?n=v1b", "title": "v1 B", "groupID": "8D1C63F4-0000-4000-8000-0000000000A1", "desktopMode": false, "lastActiveAt": "2026-06-01T09:30:00Z", "pinned": false }
+      ],
+      "groups": [ { "id": "8D1C63F4-0000-4000-8000-0000000000A1", "name": "V1 Group", "createdAt": "2026-05-01T00:00:00Z" } ],
+      "selectedTabID": "8D1C63F4-0000-4000-8000-000000000002",
+      "selectedGroupID": "8D1C63F4-0000-4000-8000-0000000000A1"
+    }
+  ],
+  "siteSettings": [ { "host": "v1.example", "desktopMode": true } ],
+  "bookmarks": [
+    { "id": "8D1C63F4-0000-4000-8000-0000000000B1", "title": "V1 Bookmark", "url": "https://v1.example/", "parentID": null, "isFolder": false, "order": 0, "createdAt": "2026-05-01T00:00:00Z" }
+  ],
+  "adBlockCustomRules": "v1.example##.v1-ad",
+  "adBlockSubscriptions": [],
+  "adBlockAllowlist": ["v1-allowed.example"],
+  "userscripts": [
+    { "source": "// ==UserScript==\n// @name V1 Script\n// @namespace https://rikugan.local/v1\n// @version 1.0\n// @match https://v1.example/*\n// @grant none\n// ==/UserScript==\ndocument.documentElement.dataset.v1 = '1';\n", "enabled": true, "values": {} }
+  ]
+}

@@ -212,6 +212,25 @@ final class ArchiveTests: XCTestCase {
         XCTAssertEqual(archive.contentBlocking.customRules, "x.com##.y")
     }
 
+    /// The checked-in v1 file (also used by the in-app archive suite) migrates losslessly.
+    func testV1FixtureFileMigrates() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/Rikugan/Resources/SelfTest/archive/v1-export.json")
+        let archive = try ArchiveCodec.decode(Data(contentsOf: file))
+        XCTAssertEqual(archive.formatVersion, RikuganArchive.currentFormatVersion)
+        let profile = try XCTUnwrap(archive.profiles.first)
+        XCTAssertEqual(profile.windows.first?.tabs.map(\.title), ["v1 A", "v1 B"])
+        XCTAssertEqual(profile.windows.first?.groups.map(\.name), ["V1 Group"])
+        XCTAssertEqual(profile.windows.first?.selectedTabID, UUID(uuidString: "8D1C63F4-0000-4000-8000-000000000002"))
+        XCTAssertEqual(profile.bookmarks.map(\.title), ["V1 Bookmark"])
+        XCTAssertEqual(profile.siteSettings.map(\.host), ["v1.example"])
+        XCTAssertEqual(profile.userscripts.first?.name, "V1 Script")
+        XCTAssertNotNil(profile.userscripts.first?.source)
+        XCTAssertEqual(archive.settings.searchEngineID, "duckduckgo")
+        XCTAssertEqual(archive.contentBlocking.allowlist, ["v1-allowed.example"])
+        XCTAssertEqual(archive.excluded, RikuganArchive.excludedAlways)
+    }
+
     func testSiteSettingsTolerantDecoding() throws {
         let site = try JSONDecoder().decode(SiteSettings.self, from: Data(#"{"host":"A.com","darkMode":"on","unknown":1}"#.utf8))
         XCTAssertEqual(site.host, "a.com")

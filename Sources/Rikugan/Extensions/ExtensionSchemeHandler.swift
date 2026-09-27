@@ -24,6 +24,8 @@ final class ExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
             fail(task, code: NSURLErrorFileDoesNotExist); return
         }
         let path = url.path.isEmpty ? "/" : url.path
+        let background = ext.background?.webView === webView ? ext.background : nil
+        background?.note("serve \(path)")
         // Requests initiated by web pages must target web accessible resources.
         if let document = task.request.mainDocumentURL, document.scheme != runtime.scheme,
            !ext.manifest.isWebAccessible(path, from: document) {
@@ -38,6 +40,7 @@ final class ExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
             data = contents
             mime = MIME.type(forExtension: fileURL.pathExtension)
         } else {
+            background?.note("missing \(path)")
             fail(task, code: NSURLErrorFileDoesNotExist); return
         }
         let headers = [
@@ -48,7 +51,7 @@ final class ExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
         ]
         guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers) else { return }
         lock.lock(); let cancelled = stopped.remove(ObjectIdentifier(task)) != nil; lock.unlock()
-        guard !cancelled else { return }
+        guard !cancelled else { background?.note("cancelled \(path)"); return }
         task.didReceive(response)
         task.didReceive(data)
         task.didFinish()

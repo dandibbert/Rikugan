@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Rikugan Stress Extension",
+  "version": "1.0.0",
+  "description": "Background runtime stress fixture: messaging, ports, storage across cold start / idle / wake.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "bg.js" },
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [{ "matches": ["http://127.0.0.1/stress/*"], "js": ["cs.js"], "run_at": "document_start" }]
+}

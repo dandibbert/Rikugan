@@ -89,8 +89,8 @@ jobs:
           path: build.log
           retention-days: 14
 
-  selftest:
-    name: Simulator self-test (extension + userscript + adblock)
+  sim-build:
+    name: Build for simulator tests
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -103,29 +103,68 @@ jobs:
         run: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           xcodegen generate
-      - name: Run UI self-test on simulator
+      - name: Build for testing (iOS Simulator, Debug)
         run: |
           set -o pipefail
-          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k in sorted(d, reverse=True) if "iOS" in k for x in d[k] if x["name"].startswith("iPhone")))')
-          echo "Simulator: $SIMULATOR_ID"
-          xcrun simctl boot "$SIMULATOR_ID" || true
-          xcrun simctl bootstatus "$SIMULATOR_ID" -b
-          xcodebuild test -project Rikugan.xcodeproj -scheme Rikugan -configuration Debug \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build \
-            -resultBundlePath SelfTest.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee selftest.log | grep -E "error:|Test Case|SELFTEST|\*\*" || true
-          grep -q "\*\* TEST SUCCEEDED \*\*" selftest.log
+          xcodebuild build-for-testing -project Rikugan.xcodeproj -scheme Rikugan -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO \
+            RIKUGAN_GIT_COMMIT=${GITHUB_SHA::12} RIKUGAN_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%MZ) 2>&1 | tee build-sim.log | grep -E "error:|\*\*" || true
+          grep -q "\*\* TEST BUILD SUCCEEDED \*\*" build-sim.log
+          ls build/Build/Products/*.xctestrun
+          tar -C build/Build -czf sim-products.tgz Products
+      - name: Show compiler errors
+        if: failure()
+        run: grep -E "error:" build-sim.log | sort -u | head -150 || true
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: selftest-evidence
-          path: |
-            SelfTest.xcresult
-            selftest.log
-          retention-days: 14
+          name: sim-products
+          path: sim-products.tgz
+          retention-days: 3
+
+  simtests:
+    name: "Simulator: ${{ matrix.suite }}"
+    needs: sim-build
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { suite: core, test: testSelfTestSuitePasses }
+          - { suite: pageworld, test: testPageWorldSuite }
+          - { suite: fonts, test: testFontSuite }
+          - { suite: dnr, test: testDNRSuite }
+          - { suite: lifecycle, test: testTabLifecycleSuite }
+          - { suite: stress, test: testBackgroundStressSuite }
+          - { suite: archive, test: testArchiveRoundTripSuite }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/sim-test
+        with:
+          suite: ${{ matrix.suite }}
+          test: ${{ matrix.test }}
+          stress-rounds: "30"
+
+  compat:
+    name: "Simulator: real extension compatibility (report)"
+    needs: sim-build
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download real extensions (failures are recorded, not fatal)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/fetch_compat_extensions.py compat-packages
+      - uses: ./.github/actions/sim-test
+        with:
+          suite: compat
+          test: testRealExtensionCompatReport
+          compat-dir: compat-packages
 
   release:
     name: Publish prerelease
-    needs: [core-tests, ipa, selftest]
+    needs: [core-tests, ipa, simtests]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:

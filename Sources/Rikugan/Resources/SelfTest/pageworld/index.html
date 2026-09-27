@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page world test</title>
+<script>
+  // Page-owned globals the userscripts must (or must not) see.
+  window.pageValue = 41;
+  window.pageFunction = function (x) { return 'pf:' + x; };
+  window.pageObject = { nested: { n: 1 }, list: [1, 2] };
+  window.pageEvents = [];
+  document.addEventListener('rk-from-script', function (e) {
+    window.pageEvents.push(String(e.detail));
+  });
+</script>
+</head>
+<body>
+<h1>Userscript page-world test</h1>
+<iframe id="frame" src="/pageworld/frame.html" width="200" height="60"></iframe>
+</body>
+</html>

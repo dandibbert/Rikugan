@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNR resource-type test</title>
+<link rel="stylesheet" href="/dnr/block-style.css">
+<link rel="stylesheet" href="/dnr/ok-style.css">
+<style>
+  @font-face { font-family: "BlockFont"; src: url("/dnr/block-font.ttf"); }
+  @font-face { font-family: "OkFont"; src: url("/dnr/ok-font.ttf"); }
+  .bf { font-family: "BlockFont"; } .of { font-family: "OkFont"; }
+</style>
+</head>
+<body>
+<p class="bf">font a</p><p class="of">font b</p>
+<img src="/dnr/block-image.png" alt=""><img src="/dnr/ok-image.png" alt="">
+<audio src="/dnr/block-media.wav" preload="auto"></audio>
+<audio src="/dnr/ok-media.wav" preload="auto"></audio>
+<video src="/dnr/block-hls.m3u8" preload="auto" muted playsinline></video>
+<iframe src="/dnr/block-frame.html" width="10" height="10"></iframe>
+<iframe src="/dnr/ok-frame.html" width="10" height="10"></iframe>
+<script src="/dnr/block-script.js"></script>
+<script src="/dnr/ok-script.js"></script>
+<script src="/dnr/allow-script.js"></script>
+<script src="/dnr/allow-other.js"></script>
+<script src="/dnr/redirect-src.js"></script>
+<script>
+  const done = [];
+  const mark = (k, v) => { document.documentElement.setAttribute('data-' + k, v); };
+  const xhr = (url, key) => new Promise((resolve) => {
+    const r = new XMLHttpRequest();
+    r.open('GET', url);
+    r.onload = () => { mark(key, 'loaded:' + r.status); resolve(); };
+    r.onerror = () => { mark(key, 'error'); resolve(); };
+    r.send();
+  });
+  const get = (url, key) => fetch(url, { cache: 'no-store' }).then((r) => r.text().then((t) => { mark(key, 'loaded:' + r.status); return t; }), () => { mark(key, 'error'); return null; });
+  done.push(xhr('/dnr/block-xhr.json', 'block-xhr'), xhr('/dnr/ok-xhr.json', 'ok-xhr'));
+  done.push(get('/dnr/block-fetch.json', 'block-fetch'), get('/dnr/ok-fetch.json', 'ok-fetch'));
+  done.push(get('/echo-headers?dnr', 'echo').then((t) => { if (t !== null) mark('echo-body', t); }));
+  done.push(get('/echo-headers?control', 'echo-control').then((t) => { if (t !== null) mark('echo-control-body', t); }));
+  window.addEventListener('load', () => { Promise.all(done).then(() => mark('dnr-done', '1')); });
+</script>
+</body>
+</html>

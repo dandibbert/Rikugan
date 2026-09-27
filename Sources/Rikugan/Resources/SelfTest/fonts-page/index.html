@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Font override test</title>
+<style>
+  @font-face { font-family: "PageIcons"; src: url("/fonts/TestIcons.ttf") format("truetype"); }
+  @font-face { font-family: "PageCustomText"; src: url("/fonts/TestIcons.ttf") format("truetype"); }
+  body { font: 20px Georgia, serif; }
+  h1 { font-size: 20px; font-weight: normal; }
+  code { font-size: 20px; }
+  .fa { font-family: "PageIcons"; font-style: normal; font-size: 20px; }
+  .glyph { font-family: "PageIcons"; font-size: 20px; }
+  .material-icons { font-family: "PageIcons"; font-size: 20px; }
+  .custom { font-family: "PageCustomText", serif; font-size: 20px; }
+  span { white-space: nowrap; }
+</style>
+</head>
+<body>
+<p><span id="body">xxxx</span></p>
+<h1><span id="heading">xxxx</span></h1>
+<p><code id="mono">xxxx</code></p>
+<p><span id="emoji">😀👍</span></p>
+<p><i id="icon-class" class="fa">&#xE001;</i></p>
+<p><span id="icon-pua" class="glyph">&#xE001;</span></p>
+<p><span id="icon-ligature" class="material-icons">home</span></p>
+<p><span id="custom" class="custom">xxxx</span></p>
+<p id="late-holder"></p>
+<script>
+  // Content added after load must be handled too (MutationObserver path).
+  window.addEventListener('load', function () {
+    const s = document.createElement('span');
+    s.id = 'late'; s.textContent = 'xxxx';
+    document.getElementById('late-holder').appendChild(s);
+  });
+</script>
+</body>
+</html>

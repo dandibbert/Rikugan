@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rikugan extension compatibility page</title>
+<style>body { background: #ffffff; color: #111111; font: 17px -apple-system, sans-serif; margin: 16px; } .ad-banner { height: 40px; background: #fc0; }</style>
+</head>
+<body>
+<h1>Extension compatibility test</h1>
+<p id="p1">The quick brown fox jumps over the lazy dog. This paragraph gives translation extensions some real English text to work on.</p>
+<p id="p2">Browsers on iOS use WebKit. Extensions written for Chrome expect a different engine, so every feature needs to be verified on a real page.</p>
+<div class="ad-banner adsbygoogle" id="ad-slot">advertisement</div>
+<script>
+  const mark = (k, v) => document.documentElement.setAttribute('data-' + k, v);
+  // Network probes: a well-known ad script and a neutral control resource.
+  const probe = (key, url, tag) => {
+    const el = document.createElement(tag);
+    el.onload = () => mark(key, 'loaded');
+    el.onerror = () => mark(key, 'error');
+    el.src = url + (url.includes('?') ? '&' : '?') + 'rk=' + Date.now();
+    (tag === 'script' ? document.head : document.body).appendChild(el);
+  };
+  probe('ad', 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js', 'script');
+  probe('control', 'https://www.google.com/favicon.ico', 'img');
+</script>
+</body>
+</html>

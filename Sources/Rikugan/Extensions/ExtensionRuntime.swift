@@ -643,6 +643,13 @@ enum BackgroundState: String {
     private(set) var failureReason: String?
     private(set) var startCount = 0
     private(set) var restartsAfterFailure = 0
+    /// Navigation / resource timeline of the current start attempt (for diagnostics of stalls).
+    private(set) var timeline: [String] = []
+    private var launchedAt = Date()
+    func note(_ event: String) {
+        timeline.append(String(format: "+%.2fs %@", Date().timeIntervalSince(launchedAt), event))
+        if timeline.count > 40 { timeline.removeFirst(timeline.count - 40) }
+    }
     private var queue: [String] = []
     private var waiters: [CheckedContinuation<Bool, Never>] = []
     private var pendingLifecycleEvent: (() -> Void)?
@@ -673,6 +680,9 @@ enum BackgroundState: String {
         state = newState
         failureReason = nil
         startCount += 1
+        launchedAt = Date()
+        timeline.removeAll()
+        note("launch \(newState.rawValue)")
         let configuration = runtime.extensionPageConfiguration(for: ext, kind: "background")
         let webView = RikuganWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration, purpose: "background")
         webView.navigationDelegate = self
@@ -693,6 +703,7 @@ enum BackgroundState: String {
     /// Ready signal: `runtime._ready` from the shim after the background scripts ran, or the
     /// didFinish check. Idempotent; ignored unless starting / waking.
     func markReady() {
+        note("ready signal (state=\(state.rawValue))")
         guard state == .starting || state == .waking else { return }
         startupDeadline?.cancel()
         state = .ready
@@ -710,6 +721,7 @@ enum BackgroundState: String {
     }
 
     private func fail(_ reason: String) {
+        note("fail: \(reason)")
         startupDeadline?.cancel()
         state = .failed
         failureReason = reason
@@ -817,7 +829,11 @@ enum BackgroundState: String {
 
     // MARK: Navigation delegate
 
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { note("didStartProvisional") }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { note("didCommit") }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        note("didFinish")
         // Second ready signal: once the page and its scripts finished loading and the chrome shim exists.
         Task {
             let present = (try? await webView.rkCall("return typeof globalThis.__rikuganChrome === 'object' && document.readyState === 'complete';", world: .page)) as? Bool ?? false
@@ -844,7 +860,7 @@ enum BackgroundState: String {
     var diagnostics: String {
         let history = transitions.suffix(8).map { $0.1.rawValue }.joined(separator: "→")
         return "state=\(state.rawValue) starts=\(startCount) url=\(webView?.url?.lastPathComponent ?? "nil") loading=\(webView?.isLoading ?? false) window=\(webView?.window != nil) history=\(history)" +
-            (failureReason.map { " failure=\($0)" } ?? "")
+            (failureReason.map { " failure=\($0)" } ?? "") + " timeline=[" + timeline.joined(separator: "; ") + "]"
     }
 }
 

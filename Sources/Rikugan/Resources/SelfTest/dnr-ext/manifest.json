@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Rikugan DNR Test Extension",
+  "version": "1.0.0",
+  "description": "declarativeNetRequest regression rules for the self-test (block per resource type, allow override, redirect, modifyHeaders).",
+  "permissions": ["declarativeNetRequest"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "dnr_test", "enabled": true, "path": "rules.json" }]
+  }
+}
