@@ -89,6 +89,26 @@ struct PageNotice: Identifiable, Equatable {
         pendingExtensionEvents.append(ExtensionNotificationEvent(type: button == nil ? "clicked" : "button", notificationID: notice.extensionNotificationID, buttonIndex: button ?? -1, extensionID: notice.extensionRuntimeID))
         if pendingExtensionEvents.count > 40 { pendingExtensionEvents.removeFirst(pendingExtensionEvents.count - 40) }
     }
+    func queueExtensionEvent(type: String, notificationID: String, byUser: Bool, extensionID: String) {
+        guard !notificationID.isEmpty else { return }
+        pendingExtensionEvents.append(ExtensionNotificationEvent(type: type, notificationID: notificationID, byUser: byUser, extensionID: extensionID))
+        if pendingExtensionEvents.count > 40 { pendingExtensionEvents.removeFirst(pendingExtensionEvents.count - 40) }
+    }
+    func dismissExtensionNotice(_ notice: PageNotice, byUser: Bool) {
+        let id = notice.extensionNotificationID
+        let extensionID = notice.extensionRuntimeID
+        if id.isEmpty {
+            notices.removeAll { $0.id == notice.id }
+            if noticeToast?.id == notice.id { noticeToast = nil }
+            return
+        }
+        extensionNotices.removeValue(forKey: id)
+        removeExtensionNotices(ids: [id])
+        queueExtensionEvent(type: "closed", notificationID: id, byUser: byUser, extensionID: extensionID)
+    }
+    func showExtensionNotificationSettings(_ notice: PageNotice) {
+        queueExtensionEvent(type: "settings", notificationID: notice.extensionNotificationID, byUser: true, extensionID: notice.extensionRuntimeID)
+    }
     func takeExtensionEvents(extensionID: String) -> [[String: Any]] {
         let chosen = pendingExtensionEvents.enumerated().filter { _, event in
             extensionID.isEmpty || event.extensionID.isEmpty || event.extensionID == extensionID
@@ -97,6 +117,7 @@ struct PageNotice: Identifiable, Equatable {
         return chosen.map { _, event in
             var payload: [String: Any] = ["type": event.type, "notificationId": event.notificationID]
             if event.type == "button" { payload["buttonIndex"] = event.buttonIndex }
+            if event.type == "closed" { payload["byUser"] = event.byUser }
             return payload
         }
     }
@@ -351,6 +372,16 @@ enum SystemNotifications {
                 center.requestAuthorization(options: [.alert, .sound]) { granted, _ in if granted { post() } }
             default:
                 break
+            }
+        }
+    }
+    static func allowsAlerts() async -> Bool {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                switch settings.authorizationStatus {
+                case .authorized, .provisional, .ephemeral: continuation.resume(returning: true)
+                default: continuation.resume(returning: false)
+                }
             }
         }
     }

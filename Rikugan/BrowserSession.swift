@@ -30,6 +30,7 @@ import WebKit
     var replaceJSON = "[]"
     var removeParams: [AdBlockEngine.QueryStrip] = []
     var privateScriptValues: [UUID: [String: Any]] = [:]
+    private var bridgeTabSerial = 0
     private var scriptRefresh: Task<Void, Never>?
     private var stopped = false
     var profile: BrowserProfile { model?.state.profiles.first { $0.id == profileID } ?? BrowserProfile(name: "个人") }
@@ -52,6 +53,7 @@ import WebKit
         loadFaviconCache()
         let saved = profile.tabs.isEmpty ? [SavedTab()] : profile.tabs
         tabs = saved.map { BrowserTab(saved: $0, session: self) }
+        for tab in tabs { tab.bridgeTabID = allocateBridgeTabID() }
         selectedID = saved.contains(where: { $0.id == profile.selectedTabID }) ? profile.selectedTabID : saved.first?.id
     }
     func start() async {
@@ -98,6 +100,7 @@ import WebKit
         if let groupID { saved.groupID = groupID }
         let tab = BrowserTab(saved: saved, session: self, configuration: configuration)
         tab.windowID = windowID
+        tab.bridgeTabID = allocateBridgeTabID()
         tabs.append(tab)
         if #available(iOS 18.4, *) { extensionController.didOpenTab(tab) }
         if let windowID {
@@ -287,16 +290,24 @@ import WebKit
             let extensionID = details["extensionId"] as? String ?? ""
             return ExtensionHostOutcome(result: model?.takeExtensionEvents(extensionID: extensionID) ?? [])
         }
+        if api == "notifications.getPermissionLevel" {
+            let granted = await SystemNotifications.allowsAlerts()
+            return ExtensionHostOutcome(result: ExtensionBridge.permissionLevel(authorized: granted))
+        }
         if api.hasPrefix("notifications.") {
             guard let model else { return ExtensionHostOutcome(error: "没有通知记录。") }
-            let before = Set(model.extensionNotices.keys)
-            var records = model.extensionNotices
+            let before = model.extensionNotices
+            var records = before
             let outcome = ExtensionBridge.apply(api: api, details: details, records: &records) { record in
                 model.deliverExtensionNotice(record)
             }
             model.extensionNotices = records
             if api == "notifications.clear" {
-                model.removeExtensionNotices(ids: Array(before.subtracting(records.keys)))
+                let removed = Set(before.keys).subtracting(records.keys)
+                model.removeExtensionNotices(ids: Array(removed))
+                for id in removed {
+                    model.queueExtensionEvent(type: "closed", notificationID: id, byUser: false, extensionID: before[id]?.extensionID ?? "")
+                }
             }
             return outcome
         }
@@ -317,17 +328,40 @@ import WebKit
             guard !sources.isEmpty else { return ExtensionHostOutcome(error: "func, code, or files is required") }
             return ExtensionHostOutcome(result: ["sources": sources])
         }
-        guard let target = tab ?? activeTab else { return ExtensionHostOutcome(error: "没有目标标签页。") }
+        let named = tabForScripting(call.tabID)
+        if !call.tabID.isEmpty && named == nil && tab == nil {
+            return ExtensionHostOutcome(error: "没有目标标签页。")
+        }
+        guard let target = named ?? tab ?? activeTab else { return ExtensionHostOutcome(error: "没有目标标签页。") }
+        let fanOut = ExtensionBridge.spansFrames(allFrames: call.allFrames, frameIDs: call.frameIDs)
         if call.kind == "css" {
-            if let css = call.css {
+            var sheets: [String] = []
+            if let css = call.css { sheets.append(css) }
+            sheets.append(contentsOf: texts)
+            if fanOut {
+                let script = ExtensionBridge.frameCSS(sheets: sheets, frameIDs: call.frameIDs, allFrames: call.allFrames)
+                switch await evaluateExtensionScript(script, tab: target) {
+                case .success(let value):
+                    if (value as? Bool) == false { return ExtensionHostOutcome(error: "没有插入样式。") }
+                    return ExtensionHostOutcome(result: NSNull())
+                case .failure(let error): return ExtensionHostOutcome(error: error.localizedDescription)
+                }
+            }
+            for css in sheets {
                 let inserted = await injectExtensionCSS(css, tab: target)
                 if !inserted { return ExtensionHostOutcome(error: "没有插入样式。") }
             }
-            for text in texts {
-                let inserted = await injectExtensionCSS(text, tab: target)
-                if !inserted { return ExtensionHostOutcome(error: "没有插入样式。") }
-            }
             return ExtensionHostOutcome(result: NSNull())
+        }
+        if fanOut {
+            var sources = texts
+            if let code = call.code, !code.isEmpty { sources.append(code) }
+            guard !sources.isEmpty else { return ExtensionHostOutcome(error: "func, code, or files is required") }
+            let script = ExtensionBridge.frameRunner(sources: sources, frameIDs: call.frameIDs, allFrames: call.allFrames)
+            switch await evaluateExtensionScript(script, tab: target) {
+            case .success(let value): return ExtensionHostOutcome(result: ExtensionBridge.boxed(value))
+            case .failure(let error): return ExtensionHostOutcome(error: error.localizedDescription)
+            }
         }
         var results: [Any] = []
         for text in texts {
@@ -344,6 +378,19 @@ import WebKit
         }
         guard !results.isEmpty else { return ExtensionHostOutcome(error: "不支持的扩展调用。") }
         return ExtensionHostOutcome(result: results)
+    }
+
+    func allocateBridgeTabID() -> Int {
+        bridgeTabSerial += 1
+        return bridgeTabSerial
+    }
+
+    func tabForScripting(_ token: String) -> BrowserTab? {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let uuid = UUID(uuidString: trimmed) { return tabs.first { $0.id == uuid } }
+        if let number = Int(trimmed) { return tabs.first { $0.bridgeTabID == number } }
+        return nil
     }
 
     func extensionPackages(preferring runtimeID: String) -> (packages: [(url: URL, directory: Bool)], strict: Bool) {
@@ -416,6 +463,7 @@ extension BrowserSession {
     var installedRuleLists: [WKContentRuleList] = []
     var pageHandlerInstalled = false
     var isExtensionPage = false
+    var bridgeTabID = 0
     var refreshTask: Task<Void, Never>?
     var findNeedle = ""
     var findCursor = 0

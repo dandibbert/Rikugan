@@ -117,7 +117,7 @@ function load(extra) {
   assert.equal(page[0].payload.api, 'scripting.executeScript');
   assert.equal(page[0].payload.details.code, 'document.title');
   assert.equal(page[0].payload.details.world, 'MAIN');
-  listeners[0]({ data: { source: 'rikugan-extension-host-result', id: page[0].payload.id, result: 'fixture' } });
+  listeners[listeners.length - 1]({ data: { source: 'rikugan-extension-host-result', id: page[0].payload.id, result: 'fixture' } });
   assert.equal(await contentPromise, 'fixture');
   const isolatedPromise = content.chrome.scripting.executeScript({ files: ['injected.js'] });
   const isolatedMessage = page[page.length - 1].payload;
@@ -155,7 +155,9 @@ function load(extra) {
           if (payload.api === 'notifications.poll') {
             callback({ result: [
               { type: 'clicked', notificationId: record.id },
-              { type: 'button', notificationId: record.id, buttonIndex: 0 }
+              { type: 'button', notificationId: record.id, buttonIndex: 0 },
+              { type: 'closed', notificationId: record.id, byUser: true },
+              { type: 'settings', notificationId: record.id }
             ] });
             return;
           }
@@ -172,9 +174,70 @@ function load(extra) {
   assert.equal(record.title, 'Updated');
   assert.equal(record.message, 'changed');
   assert.deepEqual(record.buttons, ['Open']);
+  const closed = [];
+  const settings = [];
+  noteWorker.chrome.notifications.onClosed.addListener((id, byUser) => closed.push([id, byUser]));
+  noteWorker.chrome.notifications.onShowSettings.addListener(() => settings.push('settings'));
   await noteWorker.__rikuganPollNotifications();
   assert.deepEqual(clicks, ['rikugan-demo']);
   assert.deepEqual(buttonClicks, [['rikugan-demo', 0]]);
+  assert.deepEqual(closed, [['rikugan-demo', true]]);
+  assert.deepEqual(settings, ['settings']);
+
+  const routed = [];
+  const nativePosted = [];
+  const routedBox = load({
+    chrome: {
+      runtime: { id: 'ext-1' },
+      tabs: {
+        sendMessage(tabId, message, callback) {
+          routed.push({ tabId, api: message.payload.api, target: message.payload.details.target });
+          if (message.payload.api === 'notifications.getPermissionLevel') callback({ result: 'granted' });
+          else callback({ result: [{ result: 7 }] });
+        },
+        query(_query, callback) { callback([{ id: 4 }]); }
+      }
+    },
+    webkit: { messageHandlers: { rikuganExtension: { postMessage(payload) { nativePosted.push(payload); } } } }
+  });
+  const routedResult = await routedBox.chrome.scripting.executeScript({ target: { tabId: 9, allFrames: true, frameIds: [0, 1] }, world: 'MAIN', code: '1' });
+  assert.equal(routed[0].tabId, 9);
+  assert.equal(routed[0].api, 'scripting.executeScript');
+  assert.equal(routed[0].target.allFrames, true);
+  assert.deepEqual(routed[0].target.frameIds, [0, 1]);
+  assert.equal(nativePosted.length, 0);
+  assert.equal(JSON.stringify(routedResult), JSON.stringify([{ result: 7 }]));
+  const levelPromise = routedBox.chrome.notifications.getPermissionLevel();
+  const levelPosted = nativePosted[nativePosted.length - 1];
+  assert.equal(levelPosted.api, 'notifications.getPermissionLevel');
+  routedBox.__rgExtPending[levelPosted.id]({ result: 'denied' });
+  assert.equal(await levelPromise, 'denied');
+
+  const frameListeners = [];
+  const pageMessages = [];
+  const frameWindow = {
+    postMessage(data) { pageMessages.push(data); },
+    addEventListener(_type, fn) { frameListeners.push(fn); },
+    removeEventListener() {},
+    top: null,
+    frames: [{
+      frames: [],
+      postMessage(data) {
+        frameListeners.forEach(fn => fn({ data: { source: 'rikugan-extension-frame-result', id: data.id, result: [{ result: 9 }] } }));
+      }
+    }]
+  };
+  frameWindow.top = frameWindow;
+  const framed = load({
+    window: frameWindow,
+    location: { protocol: 'http:' },
+    chrome: { runtime: { onMessage: { addListener() {} } } }
+  });
+  const again = framed.chrome.scripting.executeScript({ code: '2+2', target: { allFrames: true } });
+  const asked = pageMessages[pageMessages.length - 1];
+  assert.equal(asked.payload.details.target.allFrames, true);
+  frameListeners[frameListeners.length - 1]({ data: { source: 'rikugan-extension-host-result', id: asked.payload.id, result: { sources: ['2+2'] } } });
+  assert.equal(JSON.stringify(await again), JSON.stringify([{ result: 4 }, { result: 9 }]));
 
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

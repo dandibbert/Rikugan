@@ -13,6 +13,7 @@ struct ExtensionNotificationEvent: Equatable {
     var type: String
     var notificationID: String
     var buttonIndex: Int = -1
+    var byUser = false
     var extensionID: String = ""
 }
 
@@ -22,6 +23,9 @@ struct ExtensionHostCall: Equatable {
     var code: String? = nil
     var files: [String] = []
     var isolated: Bool = false
+    var allFrames = false
+    var frameIDs: [Int] = []
+    var tabID: String = ""
     var error: String? = nil
 }
 
@@ -49,24 +53,101 @@ enum ExtensionBridge {
 
     static func command(api: String, details: [String: Any]) -> ExtensionHostCall {
         let files = stringList(details["files"])
+        let target = details["target"] as? [String: Any] ?? [:]
+        let frames = frameRequest(target)
         switch api {
         case "scripting.insertCSS":
             let css = details["css"] as? String
             if css == nil && files.isEmpty { return ExtensionHostCall(error: "css string or files is required") }
-            return ExtensionHostCall(kind: "css", css: css, files: files)
+            return ExtensionHostCall(kind: "css", css: css, files: files, allFrames: frames.all, frameIDs: frames.ids, tabID: tabToken(target["tabId"]))
         case "scripting.executeScript":
             let world = (details["world"] as? String)?.uppercased() ?? "ISOLATED"
             let isolated = world != "MAIN"
-            if !files.isEmpty { return ExtensionHostCall(kind: "script", files: files, isolated: isolated) }
-            if let code = details["code"] as? String, !code.isEmpty { return ExtensionHostCall(kind: "script", code: code, isolated: isolated) }
+            if !files.isEmpty { return ExtensionHostCall(kind: "script", files: files, isolated: isolated, allFrames: frames.all, frameIDs: frames.ids, tabID: tabToken(target["tabId"])) }
+            if let code = details["code"] as? String, !code.isEmpty { return ExtensionHostCall(kind: "script", code: code, isolated: isolated, allFrames: frames.all, frameIDs: frames.ids, tabID: tabToken(target["tabId"])) }
             if let function = details["func"] as? String, !function.isEmpty {
-                return ExtensionHostCall(kind: "script", code: "(\(function)).apply(null, \(jsonText(details["args"] ?? [])))", isolated: isolated)
+                return ExtensionHostCall(kind: "script", code: "(\(function)).apply(null, \(jsonText(details["args"] ?? [])))", isolated: isolated, allFrames: frames.all, frameIDs: frames.ids, tabID: tabToken(target["tabId"]))
             }
             return ExtensionHostCall(error: "func, code, or files is required")
         default:
             return ExtensionHostCall(error: "unsupported")
         }
     }
+
+    static func spansFrames(allFrames: Bool, frameIDs: [Int]) -> Bool {
+        if allFrames { return true }
+        return !frameIDs.isEmpty && frameIDs != [0]
+    }
+
+    static func frameRunner(sources: [String], frameIDs: [Int], allFrames: Bool) -> String {
+        let ids = allFrames ? "null" : jsonText(frameIDs)
+        return """
+        (function(){
+          var sources = \(jsonText(sources));
+          var ids = \(ids);
+          function collect(win, bag) {
+            bag.push(win);
+            var count = 0;
+            try { count = win.frames.length; } catch (error) { count = 0; }
+            for (var index = 0; index < count; index += 1) {
+              try { collect(win.frames[index], bag); } catch (error) { bag.push(null); }
+            }
+          }
+          var frames = [];
+          collect(window, frames);
+          var chosen = ids || frames.map(function (_, index) { return index; });
+          var results = [];
+          chosen.forEach(function (index) {
+            var frame = frames[index];
+            if (!frame) { results.push({ error: 'frame unavailable' }); return; }
+            sources.forEach(function (source) {
+              try { results.push({ result: frame.eval(String(source)) }); }
+              catch (error) { results.push({ error: String(error && error.message || error) }); }
+            });
+          });
+          return results;
+        })()
+        """
+    }
+
+    static func frameCSS(sheets: [String], frameIDs: [Int], allFrames: Bool) -> String {
+        let ids = allFrames ? "null" : jsonText(frameIDs)
+        return """
+        (function(){
+          var sheets = \(jsonText(sheets));
+          var ids = \(ids);
+          function collect(win, bag) {
+            bag.push(win);
+            var count = 0;
+            try { count = win.frames.length; } catch (error) { count = 0; }
+            for (var index = 0; index < count; index += 1) {
+              try { collect(win.frames[index], bag); } catch (error) { bag.push(null); }
+            }
+          }
+          function insert(frame, css) {
+            var doc = frame.document;
+            if (!doc || !doc.createElement) return false;
+            var style = doc.createElement('style');
+            style.setAttribute('data-rikugan-extension', '1');
+            style.textContent = css;
+            (doc.head || doc.documentElement).appendChild(style);
+            return true;
+          }
+          var frames = [];
+          collect(window, frames);
+          var chosen = ids || frames.map(function (_, index) { return index; });
+          var inserted = false;
+          chosen.forEach(function (index) {
+            var frame = frames[index];
+            if (!frame) return;
+            sheets.forEach(function (css) { if (insert(frame, css)) inserted = true; });
+          });
+          return inserted;
+        })()
+        """
+    }
+
+    static func permissionLevel(authorized: Bool) -> String { authorized ? "granted" : "denied" }
 
     static func apply(api: String, details: [String: Any], records: inout [String: ExtensionNoticeRecord], deliver: (ExtensionNoticeRecord) -> Void) -> ExtensionHostOutcome {
         switch api {
@@ -287,6 +368,23 @@ enum ExtensionBridge {
             return .failure("missing file \(relative)")
         }
         return .success(text)
+    }
+
+    private static func frameRequest(_ target: [String: Any]) -> (all: Bool, ids: [Int]) {
+        let all = (target["allFrames"] as? Bool) ?? (target["allFrames"] as? NSNumber)?.boolValue ?? false
+        let ids = (target["frameIds"] as? [Any] ?? []).compactMap { item -> Int? in
+            if let value = item as? Int { return value }
+            if let value = item as? NSNumber { return value.intValue }
+            return nil
+        }
+        return (all, ids)
+    }
+
+    private static func tabToken(_ value: Any?) -> String {
+        if let text = value as? String { return text }
+        if let number = value as? NSNumber { return number.stringValue }
+        if let number = value as? Int { return String(number) }
+        return ""
     }
 
     private static func stringList(_ value: Any?) -> [String] {

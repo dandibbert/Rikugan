@@ -30,10 +30,15 @@ struct RootView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        if !toast.buttons.isEmpty {
+                        if !toast.buttons.isEmpty || !toast.extensionNotificationID.isEmpty {
                             HStack {
                                 ForEach(Array(toast.buttons.enumerated()), id: \.offset) { index, title in
                                     Button(title) { model.activateExtensionNotice(toast, button: index) }
+                                        .buttonStyle(.bordered)
+                                        .font(.caption)
+                                }
+                                if !toast.extensionNotificationID.isEmpty {
+                                    Button("通知设置") { model.showExtensionNotificationSettings(toast) }
                                         .buttonStyle(.bordered)
                                         .font(.caption)
                                 }
@@ -868,15 +873,23 @@ struct SettingsView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            if !notice.buttons.isEmpty {
+                            if !notice.buttons.isEmpty || !notice.extensionNotificationID.isEmpty {
                                 HStack {
                                     ForEach(Array(notice.buttons.enumerated()), id: \.offset) { index, title in
                                         Button(title) { model.activateExtensionNotice(notice, button: index) }
                                             .buttonStyle(.bordered)
                                             .font(.caption)
                                     }
+                                    if !notice.extensionNotificationID.isEmpty {
+                                        Button("通知设置") { model.showExtensionNotificationSettings(notice) }
+                                            .buttonStyle(.bordered)
+                                            .font(.caption)
+                                    }
                                 }
                             }
+                        }
+                        .swipeActions {
+                            Button("关闭", role: .destructive) { model.dismissExtensionNotice(notice, byUser: true) }
                         }
                     }
                 }
