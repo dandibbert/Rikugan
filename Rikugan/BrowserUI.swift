@@ -10,7 +10,7 @@ struct RootView: View {
             else { ProgressView("正在打开 Rikugan") }
         }
         .tint(.indigo)
-        .sheet(item: $model.scriptDraft) { ScriptEditor(draft: $0) }
+        .sheet(item: $model.scriptDraft, onDismiss: model.scriptEditorDidDismiss) { ScriptEditor(draft: $0) }
         .sheet(item: $model.preparedExtension) { ExtensionInstaller(prepared: $0) }
         .onChange(of: model.message) { _, value in
             guard let value else { return }
@@ -631,6 +631,7 @@ struct SettingsView: View {
                     }
                 }
                 Section("备份") {
+                    NavigationLink("待处理分享（\(model.pendingShareCount)）") { ShareQueueView() }
                     Button("导出标签页和设置") { if let url = try? model.exportBackup() { BrowserPresentation.share([url]) } }
                     Button("导入备份") { importing = true }
                 }

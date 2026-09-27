@@ -104,13 +104,15 @@ struct UserScript: Codable, Identifiable, Equatable {
         "none", "GM_info", "GM.info", "GM_addStyle", "GM.addStyle", "GM_log", "GM.log",
         "GM_getValue", "GM.getValue", "GM_setValue", "GM.setValue", "GM_deleteValue", "GM.deleteValue",
         "GM_listValues", "GM.listValues", "GM_xmlhttpRequest", "GM.xmlHttpRequest",
+        "GM_addValueChangeListener", "GM.addValueChangeListener", "GM_removeValueChangeListener", "GM.removeValueChangeListener",
         "GM_setClipboard", "GM.setClipboard", "GM_openInTab", "GM.openInTab",
         "GM_registerMenuCommand", "GM.registerMenuCommand", "GM_unregisterMenuCommand", "GM.unregisterMenuCommand",
         "GM_getResourceText", "GM.getResourceText", "GM_getResourceURL", "GM.getResourceURL", "unsafeWindow"
     ]
 
     static let capabilityNotes: [String: String] = [
-        "GM_getValue": "Supported。同步读取本页缓存，写入后其他标签用 GM.getValue 或刷新。",
+        "GM_getValue": "Supported。同步镜像通过原生通知跨标签/iframe 更新；GM.getValue 从原生存储读取。",
+        "GM_addValueChangeListener": "Supported。提供旧值、新值和 remote；按脚本、身份、无痕会话隔离，删除使用 undefined。",
         "GM_xmlhttpRequest": "Partial。无 Cookie、无流式进度，单次 8 MB，按 @connect 检查重定向。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
         "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",

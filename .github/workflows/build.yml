@@ -27,6 +27,7 @@ jobs:
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           python3 scripts/prepare_resources.py
           node scripts/test_runtime.cjs
+          node scripts/test_storage_events.cjs
           node scripts/test_page_tools.cjs
           node scripts/test_web_fonts.cjs
           python3 scripts/test_fixture_server.py
@@ -51,7 +52,7 @@ jobs:
           find dist/Payload -name embedded.mobileprovision -delete
           file dist/Payload/Rikugan.app/Rikugan
           cd dist
-          zip -qry Rikugan-0.3.0-unsigned.ipa Payload
+          zip -qry Rikugan-0.4.0-unsigned.ipa Payload
           rm -rf Payload
           shasum -a 256 *.ipa > SHA256SUMS.txt
       - name: Upload installable artifact
@@ -119,9 +120,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v0.3.0-build.${GITHUB_RUN_NUMBER}"
+          TAG="v0.4.0-build.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" dist/*.ipa dist/tests.zip dist/SHA256SUMS.txt \
-            --title "Rikugan 0.3.0 · build ${GITHUB_RUN_NUMBER}" \
+            --title "Rikugan 0.4.0 · build ${GITHUB_RUN_NUMBER}" \
             --target "$GITHUB_SHA" --prerelease --notes-file docs/RELEASE_NOTES.md
       - name: Export test screenshots
         if: always()

@@ -26,6 +26,7 @@ import Combine
     private var memoryWarning: AnyCancellable?
     // Private GM values live only for the current private browsing session.
     var privateScriptStorage: [UUID: String] = [:]
+    let scriptStorage = ScriptStorageHub()
     var profile: BrowserProfile { model?.state.profiles.first { $0.id == profileID } ?? BrowserProfile(name: "个人") }
     var activeTab: BrowserTab? { tabs.first { $0.id == selectedID } ?? tabs.first }
     var isActive: Bool { !stopped && model?.state.activeProfileID == profileID }
@@ -358,6 +359,7 @@ import Combine
 extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         isHome = false; restored = true
+        scriptEngine.resetDocument()
         pageError = nil; session?.commands.removeAll { $0.tabID == id }
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

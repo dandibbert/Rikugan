@@ -1,7 +1,12 @@
 import SwiftUI
 import WebKit
 
-struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var existingID: UUID? }
+struct ScriptDraft: Identifiable {
+    var id = UUID()
+    var source: String
+    var existingID: UUID?
+    var profileID: UUID?
+}
 
 @MainActor final class AppModel: ObservableObject {
     @Published var state: AppState
@@ -10,7 +15,10 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
     @Published var scriptDraft: ScriptDraft?
     @Published var preparedExtension: PreparedExtension?
     @Published var working = false
-    @Published var pendingShare: (action: String, value: String)?
+    @Published var pendingShareCount = 0
+    private var presentedShareID: UUID?
+    private var shareQueuePaused = false
+    var shareInbox: ShareInbox { ShareInbox(container: root) }
     let downloadCenter = DownloadCenter()
     let root: URL
     let isTesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
@@ -39,6 +47,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         message = warning
         downloadCenter.activate(self)
         registerFonts()
+        pendingShareCount = (try? shareInbox.items().count) ?? 0
     }
 
     func start() {
@@ -89,38 +98,78 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         guard url.scheme?.lowercased() == "rikugan" else { handleFile(url); return }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let action = items.first { $0.name == "action" }?.value ?? (url.host == "search" ? "search" : "open")
-        if url.host == "pending" || items.first(where: { $0.name == "action" }) == nil && url.host == "pending" {
+        if url.host == "pending" {
             consumeShareFile(); return
         }
         if let value = items.first(where: { $0.name == "url" })?.value ?? items.first(where: { $0.name == "text" })?.value {
-            pendingShare = (action, value); applyPendingShare(); return
+            do {
+                var item = try ShareInputReader.text(value)
+                if action == "search" { item.kind = .search }
+                try shareInbox.enqueue(SharedBatch(items: [item]))
+                refreshShareCount(); applyPendingShare()
+            } catch { message = error.localizedDescription }
+            return
         }
         consumeShareFile()
     }
     func consumeShareFile() {
-        guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppGroupID.suite) else { return }
-        let file = container.appendingPathComponent("share-inbox.json")
-        guard let data = try? Data(contentsOf: file),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return }
-        try? FileManager.default.removeItem(at: file)
-        let action = json["action"] ?? "open"
-        let link = json["url"] ?? ""
-        let text = json["text"] ?? ""
-        let value = action == "search" || link.isEmpty ? text : link
-        guard !value.isEmpty else { return }
-        pendingShare = (action, value)
-        applyPendingShare()
+        do {
+            if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppGroupID.suite) {
+                try ShareInbox(container: container).transfer(to: shareInbox)
+                let legacy = container.appendingPathComponent("share-inbox.json")
+                if FileManager.default.fileExists(atPath: legacy.path) {
+                    guard (try legacy.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= 32_000,
+                          let json = try JSONSerialization.jsonObject(with: Data(contentsOf: legacy)) as? [String: String] else {
+                        throw ShareInboxError.invalid("旧版分享内容无效，未删除原文件。")
+                    }
+                    let value = json["action"] == "search" || (json["url"] ?? "").isEmpty ? (json["text"] ?? "") : (json["url"] ?? "")
+                    var item = try ShareInputReader.text(value)
+                    if json["action"] == "search" { item.kind = .search }
+                    try shareInbox.enqueue(SharedBatch(items: [item]))
+                    try FileManager.default.removeItem(at: legacy)
+                }
+            }
+            refreshShareCount(); applyPendingShare()
+        } catch { message = "接收分享失败，原内容保留：\(error.localizedDescription)" }
     }
     func applyPendingShare() {
-        guard let pending = pendingShare, let session, session.ready else { return }
-        pendingShare = nil
-        let target = pending.action == "search"
-            ? URLRules.searchURL(pending.value, template: profile.searchEngine)
-            : URLRules.inputURL(pending.value, searchEngine: profile.searchEngine)
-        if let url = target, ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
-            if session.activeTab?.isHome == true { session.activeTab?.navigate(url) } else { session.addTab(url: url) }
-        } else { message = "分享内容不能作为普通网页打开。" }
+        guard !shareQueuePaused, !working, scriptDraft == nil, presentedShareID == nil,
+              preparedExtension == nil, let session, session.ready else { return }
+        do {
+            for item in try shareInbox.items() {
+                if item.kind == .script {
+                    _ = try UserScript.parse(item.value)
+                    presentedShareID = item.id
+                    scriptDraft = ScriptDraft(source: item.value, profileID: session.profileID)
+                    return // No script is installed until the editor confirms it.
+                }
+                let url = item.kind == .search ? URLRules.searchURL(item.value, template: profile.searchEngine) : URL(string: item.value)
+                guard let url, ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { throw ShareInboxError.invalid("分享内容不能作为网页打开。") }
+                if session.activeTab?.isHome == true { session.activeTab?.navigate(url) }
+                else { session.addTab(url: url) }
+                try shareInbox.acknowledge(item.id)
+                refreshShareCount()
+            }
+        } catch {
+            shareQueuePaused = true
+            message = "分享队列已暂停，内容仍保留。可在设置的「待处理分享」继续或移除：\(error.localizedDescription)"
+        }
     }
+    func scriptEditorDidDismiss() {
+        if let id = presentedShareID {
+            do { try shareInbox.acknowledge(id) } catch { message = error.localizedDescription; shareQueuePaused = true }
+            presentedShareID = nil; refreshShareCount()
+        }
+        // The prior sheet is now actually dismissed; presenting the next one
+        // earlier lets SwiftUI replace or lose the user's confirmation sheet.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            self?.applyPendingShare()
+        }
+    }
+    func resumeShareQueue() { shareQueuePaused = false; applyPendingShare() }
+    func discardShare(_ id: UUID) throws { try shareInbox.acknowledge(id); refreshShareCount() }
+    func refreshShareCount() { pendingShareCount = (try? shareInbox.items().count) ?? 0 }
     func handleFile(_ url: URL) {
         Task {
             working = true; defer { working = false }
@@ -153,8 +202,9 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
             scriptDraft = ScriptDraft(source: text)
         } catch { message = error.localizedDescription }
     }
-    func installScript(_ source: String, existingID: UUID? = nil) async throws {
+    func installScript(_ source: String, existingID: UUID? = nil, expectedProfileID: UUID? = nil) async throws {
         let profileID = state.activeProfileID
+        guard expectedProfileID == nil || expectedProfileID == profileID else { throw RikuganError.message("确认安装期间身份已切换，请关闭后在目标身份重新导入。") }
         var script = try UserScript.parse(source)
         if let old = profile.scripts.first(where: { $0.id == existingID }) {
             script.id = old.id; script.storageJSON = old.storageJSON; script.enabled = old.enabled

@@ -1,5 +1,9 @@
 # Rikugan · 六眼
 
+## 0.4.0 · 分享安装与跨页面脚本通信
+
+新增 `.user.js` 文件/源码分享，多条消息不再共用单个覆盖槽；主 App 逐个展示脚本源码与权限并等待确认。设置中的「待处理分享」可继续或移除。新增 GM_addValueChangeListener / GM_removeValueChangeListener、GM.* 异步对应接口和跨标签/iframe 存储镜像，按脚本、身份及无痕会话隔离。下载文件名为 `Rikugan-0.4.0-unsigned.ipa`；设备签名和第三方扩展兼容仍以实际设备验证为准。
+
 ## 0.3.0 · 最新规格续做
 
 本轮加入标签按需创建/内存压力挂起与 WebKit 状态恢复、v2→v3 备份迁移和引用校验、无痕新标签及 GM 存储隔离；修复脚本元数据更新和重复重装；下载统一使用带当前身份 Cookie 的 WKDownload，支持进度、暂停、服务器支持时的续传、取消与失败记录。具体实现、自动化测试入口和未完成项见 `docs/IMPLEMENTATION_STATUS.md`。

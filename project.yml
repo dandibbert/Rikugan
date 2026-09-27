@@ -9,7 +9,7 @@ settings:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
     TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: "0.3.0"
+    MARKETING_VERSION: "0.4.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGNING_ALLOWED: NO
     CODE_SIGNING_REQUIRED: NO
@@ -25,6 +25,7 @@ targets:
         excludes: [Resources, Info.plist, Rikugan.entitlements]
       - path: Rikugan/Resources
         buildPhase: resources
+      - path: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan
@@ -45,6 +46,7 @@ targets:
     sources:
       - path: ShareExtension
         excludes: [Info.plist, RikuganShare.entitlements]
+      - path: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan.Share

@@ -3,7 +3,13 @@
 以用户在 2026-09-27 上传的《Rikugan - Teak-like iOS Browser 功能规格》及随后修订为准。
 保留现有 iOS 18.4 WKWebExtension 架构，不另造一套伪 chrome.*。
 
-## 本轮 0.3.0
+## 0.4.0 续做
+
+新增脚本文件/源码分享读取、原子多项分享批次、App Group→主 App 本地队列转移、逐个源码/权限确认、待处理分享管理。临时文件在 NSItemProvider 回调内读取，脚本不会通过 URL 参数传递，也不会自动执行。分享必须带 App Group 签名；没有权限时明确提供复制退路。由 ShareInboxTests 覆盖排序、重复转移、重启保留、安全校验和实际 NSItemProvider 读取；外部 App 分享面板仍需真机验证。
+
+新增 GM_addValueChangeListener / GM_removeValueChangeListener 及 GM.* 对应接口；本地和远端事件含旧值、新值、remote，删除与 null 区分；同步镜像随原生事件更新。按脚本、身份、无痕隔离；Swift 写盘成功才发送事件。ScriptEventTests 验证真实页面、第二标签、iframe 和无痕，Node 覆盖重叠写入、重复值、取消监听及隔离。以对应 CI 结果为验收，不以测试源码存在代替运行通过。
+
+## 0.3.0 已交付
 
 | 规格/缺口 | 实现 | 验证入口 |
 | --- | --- | --- |
@@ -29,10 +35,10 @@
 
 ## 尚未关闭的验收项
 
-- Share Extension 目前接收网页链接/文本；`.user.js` 文件的完整分享安装链路、连续多条分享队列仍缺少实现/设备验收。
+- Share Extension 的源码/文件读取和队列已实现；外部 App→真实分享面板→带 App Group 证书的主 App 链路仍需设备验收。
 - 第三方扩展逐个兼容验收、完整 Worker 语义、更多 Chrome API/规则语法不能承诺；不是所有桌面扩展都能运行。
 - 长期真实内存压力、跨窗口交互、无痕页所有外部打开入口、图片保存/视频/PiP/AirPlay、权限和证书 App Group 行为需要真机验证。
 - 页面 JS 堆不会在挂起后恢复；App 被系统杀死后仅恢复持久化普通标签资料；媒体/下载没有无限后台运行保证。
-- 脚本跨标签 value-change listener、完整同步 XHR/FormData/流式事件尚未实现。
+- GM 完整同步 XHR/FormData/流式事件尚未实现。
 
 PlayCover 仅可作部分启动/UI 冒烟测试，不能代替以上真实 iOS 验收。

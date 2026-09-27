@@ -12,12 +12,24 @@ struct ScriptCommand: Identifiable {
     weak var tab: BrowserTab?
     private var handlers: [(name: String, world: WKContentWorld)] = []
     private var scripts: [String: UserScript] = [:]
+    private struct Client {
+        let scriptID: UUID
+        let frame: WKFrameInfo
+        let world: WKContentWorld
+    }
+    private var clients: [String: Client] = [:]
     private static let template: String = {
         guard let url = Bundle.main.url(forResource: "UserscriptRuntime", withExtension: "js"), let source = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return source
     }()
 
     func configure(_ controller: WKUserContentController, scripts enabledScripts: [UserScript]) {
+        let previous = scripts
+        clients = clients.filter { _, client in
+            guard let next = enabledScripts.first(where: { $0.id == client.scriptID && $0.enabled }),
+                  let old = previous.values.first(where: { $0.id == client.scriptID }) else { return false }
+            return next.source == old.source
+        }
         for handler in handlers { controller.removeScriptMessageHandler(forName: handler.name, contentWorld: handler.world) }
         handlers.removeAll(); scripts.removeAll()
         controller.removeAllUserScripts()
@@ -53,8 +65,18 @@ struct ScriptCommand: Identifiable {
         }
     }
     func teardown(_ controller: WKUserContentController) {
+        resetDocument()
         for handler in handlers { controller.removeScriptMessageHandler(forName: handler.name, contentWorld: handler.world) }
         handlers.removeAll(); scripts.removeAll()
+    }
+    func resetDocument() { clients.removeAll() }
+    func deliverStorageChange(scriptID: UUID, event: [String: Any]) {
+        guard let webView = tab?.existingWebView else { return }
+        for (id, client) in clients where client.scriptID == scriptID {
+            webView.callAsyncJavaScript("return globalThis.__rikuganStorageChange?.(clientID, event)", arguments: ["clientID": id, "event": event], in: client.frame, contentWorld: client.world) { [weak self] result in
+                if case .failure = result { self?.clients.removeValue(forKey: id) }
+            }
+        }
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage,
                                replyHandler: @escaping (Any?, String?) -> Void) {
@@ -65,11 +87,17 @@ struct ScriptCommand: Identifiable {
               let body = message.body as? [String: Any], let operation = body["operation"] as? String else {
             replyHandler(nil, "脚本或页面未授权。"); return
         }
-        guard script.permits(operation) else { replyHandler(nil, "缺少 @grant GM.\(operation)"); return }
+        let storageAccess = ["getValue", "setValue", "deleteValue", "listValues", "addValueChangeListener"].contains { script.permits($0) }
+        guard script.permits(operation) || (operation == "observeStorage" && storageAccess) else { replyHandler(nil, "缺少 @grant GM.\(operation)"); return }
         let args = body["args"] as? [String: Any] ?? [:]
+        let clientID = body["client"] as? String ?? ""
         switch operation {
+        case "observeStorage":
+            guard !clientID.isEmpty, clientID.count <= 128, clients[clientID] != nil || clients.count < 128 else { replyHandler(nil, "脚本页面订阅超过限制。"); return }
+            clients[clientID] = Client(scriptID: script.id, frame: message.frameInfo, world: .world(name: "rikugan.script." + script.id.uuidString))
+            replyHandler(session.scriptStorage.snapshot(script, in: session, isPrivate: tab.isPrivate), nil)
         case "getValue", "listValues":
-            let storage = values(script, session: session, isPrivate: tab.isPrivate)
+            let storage = session.scriptStorage.values(script, in: session, isPrivate: tab.isPrivate)
             if operation == "listValues" { replyHandler(Array(storage.keys), nil) }
             else {
                 let key = args["key"] as? String ?? ""
@@ -77,18 +105,11 @@ struct ScriptCommand: Identifiable {
             }
         case "setValue", "deleteValue":
             guard let key = args["key"] as? String, key.utf8.count < 4096 else { replyHandler(nil, "无效的存储键。"); return }
-            var values = self.values(script, session: session, isPrivate: tab.isPrivate)
-            if operation == "deleteValue" { values.removeValue(forKey: key) } else { values[key] = args["value"] ?? NSNull() }
-            guard JSONSerialization.isValidJSONObject(values), let data = try? JSONSerialization.data(withJSONObject: values), data.count <= 2_000_000,
-                  let json = String(data: data, encoding: .utf8) else { replyHandler(nil, "脚本存储必须为 JSON，且不能超过 2 MB。"); return }
-            if tab.isPrivate { session.privateScriptStorage[script.id] = json }
-            else {
-                session.model?.updateProfile(session.profileID) { profile in
-                    if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].storageJSON = json }
-                }
-            }
-            session.scheduleScriptRefresh()
-            replyHandler(true, nil)
+            do {
+                let event = try session.scriptStorage.mutate(script, in: session, isPrivate: tab.isPrivate, key: key,
+                    value: args["value"], deleting: operation == "deleteValue", writer: clientID)
+                replyHandler(event, nil)
+            } catch { replyHandler(nil, error.localizedDescription) }
         case "setClipboard":
             UIPasteboard.general.string = String((args["text"] as? String ?? "").prefix(1_000_000))
             replyHandler(true, nil)
@@ -127,12 +148,6 @@ struct ScriptCommand: Identifiable {
     }
     static func values(_ script: UserScript) -> [String: Any] {
         guard let data = script.storageJSON.data(using: .utf8), let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
-        return values
-    }
-    private func values(_ script: UserScript, session: BrowserSession, isPrivate: Bool) -> [String: Any] {
-        guard isPrivate else { return Self.values(script) }
-        let json = session.privateScriptStorage[script.id] ?? "{}"
-        guard let data = json.data(using: .utf8), let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
         return values
     }
 }

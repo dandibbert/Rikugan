@@ -18,7 +18,7 @@ manifest = {
 }
 with zipfile.ZipFile(dist / "tests.zip", "w", zipfile.ZIP_DEFLATED) as archive:
     archive.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
-    for name in ["TestResults.xcresult", "Tests", "UITests", "TestDiagnostics", "Examples"]:
+    for name in ["TestResults.xcresult", "Tests", "UITests", "TestDiagnostics", "Examples", "Shared"]:
         for path in sorted((root / name).rglob("*")):
             if path.is_file():
                 archive.write(path, path.relative_to(root))

@@ -29,12 +29,67 @@
     && (config.matches.some(p => match(p, href)) || config.includes.some(p => glob(p, href)))
     && !config.excludes.some(p => glob(p, href)) && !config.excludeMatches.some(p => match(p, href));
   const allowed = name => config.grants.includes('GM.' + name) || config.grants.includes('GM_' + (name === 'xmlHttpRequest' ? 'xmlhttpRequest' : name));
-  const call = (operation, args = {}) => window.webkit.messageHandlers[config.handler].postMessage({operation, args});
+  const clientID = config.id + '-' + (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now());
+  const call = (operation, args = {}) => window.webkit.messageHandlers[config.handler].postMessage({operation, args, client: clientID});
   const values = Object.assign(Object.create(null), config.storage || {});
   const resources = config.resources || {};
   const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+  const listeners = new Map(), pendingWrites = new Map();
+  let listenerSequence = 0, writeSequence = 0, storageRevision = -1;
+  const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+  const visibleValues = () => {
+    const result = Object.assign(Object.create(null), values);
+    for (const write of pendingWrites.values()) {
+      if (write.deleting) delete result[write.key]; else result[write.key] = write.value;
+    }
+    return result;
+  };
+  const acceptSnapshot = snapshot => {
+    if (!snapshot || typeof snapshot.revision !== 'number' || !snapshot.values || snapshot.revision < storageRevision) return;
+    storageRevision = snapshot.revision;
+    for (const key of Object.keys(values)) delete values[key];
+    Object.assign(values, snapshot.values);
+  };
+  const acceptChange = event => {
+    if (!event || !event.changed) { acceptSnapshot(event); return; }
+    if (event.revision <= storageRevision) return;
+    storageRevision = event.revision;
+    if (event.newExists) values[event.key] = clone(event.newValue); else delete values[event.key];
+    for (const [id, listener] of Array.from(listeners)) {
+      if (listeners.has(id) && listener.key === event.key) {
+        try { listener.callback(event.key, event.oldExists ? clone(event.oldValue) : undefined,
+          event.newExists ? clone(event.newValue) : undefined, event.writer !== clientID); }
+        catch (error) { console.error('[Rikugan GM listener]', error); }
+      }
+    }
+  };
+  // This function only exists in this script's isolated WKContentWorld. Native
+  // delivery checks the script, profile, privacy bucket, frame and document id.
+  globalThis.__rikuganStorageChange = (id, event) => {
+    if (id === clientID && matched(location.href)) acceptChange(event);
+  };
+  const writeValue = (key, value, deleting = false) => {
+    key = String(key);
+    const copied = deleting ? undefined : clone(value);
+    if (!deleting && copied === undefined) return Promise.reject(new TypeError('GM storage accepts JSON values, not undefined'));
+    const sequence = ++writeSequence;
+    pendingWrites.set(sequence, {key, value: copied, deleting});
+    let request;
+    try { request = call(deleting ? 'deleteValue' : 'setValue', {key, value: deleting ? null : copied}); }
+    catch (error) { pendingWrites.delete(sequence); return Promise.reject(error); }
+    return Promise.resolve(request).then(result => {
+      // Older bridges returned true; keep the shim testable without events.
+      if (result === true) { if (deleting) delete values[key]; else values[key] = copied; }
+      else acceptChange(result);
+    }).finally(() => pendingWrites.delete(sequence));
+  };
+  const GM_addValueChangeListener = allowed('addValueChangeListener') ? (key, callback) => {
+    if (typeof callback !== 'function') throw new TypeError('GM value-change callback must be a function');
+    const id = ++listenerSequence; listeners.set(id, {key: String(key), callback}); return id;
+  } : undefined;
+  const GM_removeValueChangeListener = allowed('removeValueChangeListener') ? id => { listeners.delete(id); } : undefined;
   const GM_info = {
-    scriptHandler: 'Rikugan', version: '0.3.0',
+    scriptHandler: 'Rikugan', version: '0.4.0',
     script: { name: config.name, namespace: config.namespace || '', version: config.version, author: config.author || '', grants: config.grants, resources: Object.keys(resources) },
     scriptWillUpdate: false,
     capabilities: { unsafeWindow: config.isolated ? 'partial' : 'supported', GM_getResourceText: 'supported', GM_xmlhttpRequest: 'partial' }
@@ -45,14 +100,10 @@
   };
   const GM_addStyle = addStyle;
   const GM_log = (...args) => console.log('[Rikugan]', ...args);
-  const GM_getValue = allowed('getValue') ? (key, fallback) => Object.prototype.hasOwnProperty.call(values, key) ? clone(values[key]) : fallback : undefined;
-  const GM_setValue = allowed('setValue') ? (key, value) => {
-    values[String(key)] = clone(value); void call('setValue', {key: String(key), value}).catch(console.error);
-  } : undefined;
-  const GM_deleteValue = allowed('deleteValue') ? key => {
-    delete values[String(key)]; void call('deleteValue', {key: String(key)}).catch(console.error);
-  } : undefined;
-  const GM_listValues = allowed('listValues') ? () => Object.keys(values) : undefined;
+  const GM_getValue = allowed('getValue') ? (key, fallback) => { const cache = visibleValues(); return own(cache, key) ? clone(cache[key]) : fallback; } : undefined;
+  const GM_setValue = allowed('setValue') ? (key, value) => { void writeValue(key, value).catch(console.error); } : undefined;
+  const GM_deleteValue = allowed('deleteValue') ? key => { void writeValue(key, null, true).catch(console.error); } : undefined;
+  const GM_listValues = allowed('listValues') ? () => Object.keys(visibleValues()) : undefined;
   const GM_setClipboard = allowed('setClipboard') ? text => call('setClipboard', {text: String(text)}) : undefined;
   const GM_openInTab = allowed('openInTab') ? (url, options = {}) => call('openInTab', {url: String(url), background: options === true || options.active === false}) : undefined;
   const GM_getResourceText = allowed('getResourceText') ? name => resources[name] ? resources[name].text : undefined : undefined;
@@ -86,9 +137,11 @@
   } : undefined;
   const GM = {info: GM_info, addStyle, log: GM_log};
   if (allowed('getValue')) GM.getValue = async (key, fallback) => { const result = await call('getValue', {key: String(key)}); return result.exists ? result.value : fallback; };
-  if (allowed('setValue')) GM.setValue = async (key, value) => { values[String(key)] = clone(value); return call('setValue', {key: String(key), value}); };
-  if (allowed('deleteValue')) GM.deleteValue = async key => { delete values[String(key)]; return call('deleteValue', {key: String(key)}); };
+  if (allowed('setValue')) GM.setValue = (key, value) => writeValue(key, value);
+  if (allowed('deleteValue')) GM.deleteValue = key => writeValue(key, null, true);
   if (allowed('listValues')) GM.listValues = () => call('listValues');
+  if (allowed('addValueChangeListener')) GM.addValueChangeListener = async (key, callback) => GM_addValueChangeListener(key, callback);
+  if (allowed('removeValueChangeListener')) GM.removeValueChangeListener = async id => GM_removeValueChangeListener(id);
   if (allowed('setClipboard')) GM.setClipboard = GM_setClipboard;
   if (allowed('openInTab')) GM.openInTab = GM_openInTab;
   if (allowed('registerMenuCommand')) GM.registerMenuCommand = GM_registerMenuCommand;
@@ -154,5 +207,12 @@
   const hooks = globalThis.__rikuganURLChangeHooks || (globalThis.__rikuganURLChangeHooks = Object.create(null));
   hooks[config.id] = () => { try { boot(location.href); } catch (error) { console.error(error); } };
   globalThis.__rikuganOnURLChange = () => Object.values(hooks).forEach(hook => hook());
+  const observeStorage = () => {
+    if (config.isolated && matched(location.href) && ['getValue', 'setValue', 'deleteValue', 'listValues', 'addValueChangeListener'].some(allowed)) {
+      void call('observeStorage').then(acceptSnapshot).catch(console.error);
+    }
+  };
+  observeStorage();
+  if (typeof addEventListener === 'function') addEventListener('pageshow', event => { if (event.persisted) observeStorage(); });
   try { boot(location.href); } catch (_) {}
 })();
