@@ -13,7 +13,7 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
     private var completion: ((Result<[String: Any], Error>) -> Void)?
     private var failure: Error?
     private var aborted = false
-    var onProgress: ((Int, Int) -> Void)?
+    var onEvent: (([String: Any]) -> Void)?
 
     private init(limit: Int, sameOriginHost: String?, permits: @escaping (URL) -> Bool, completion: @escaping (Result<[String: Any], Error>) -> Void) {
         self.limit = limit
@@ -22,8 +22,25 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
         self.completion = completion
     }
 
+    /// readyState 1 is opened, 2 is headers, 3 is a received chunk. State 4 is the completion result.
+    static func transferEvent(readyState: Int, loaded: Int, total: Int, status: Int, statusText: String, headers: String, finalUrl: String, responseText: String, chunk: Data) -> [String: Any] {
+        [
+            "readyState": readyState,
+            "loaded": loaded,
+            "total": max(total, 0),
+            "status": status,
+            "statusText": statusText,
+            "responseHeaders": headers,
+            "finalUrl": finalUrl,
+            "responseText": responseText,
+            "chunkText": String(data: chunk, encoding: .utf8) ?? "",
+            "chunkBase64": chunk.isEmpty ? "" : chunk.base64EncodedString()
+        ]
+    }
+
     @discardableResult
     static func start(_ request: URLRequest, limit: Int = 8 * 1024 * 1024, sameOriginHost: String? = nil,
+                      onEvent: (([String: Any]) -> Void)? = nil,
                       permits: @escaping (URL) -> Bool,
                       completion: @escaping (Result<[String: Any], Error>) -> Void) -> ScriptExchange? {
         guard let url = request.url, permits(url) else {
@@ -31,6 +48,7 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
             return nil
         }
         let worker = ScriptExchange(limit: limit, sameOriginHost: sameOriginHost, permits: permits, completion: completion)
+        worker.onEvent = onEvent
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
@@ -41,6 +59,7 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
         worker.session = session
         let task = session.dataTask(with: request)
         worker.task = task
+        worker.emit(readyState: 1, chunk: Data())
         task.resume()
         return worker
     }
@@ -112,6 +131,7 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
             return
         }
         self.response = http
+        emit(readyState: 2, chunk: Data())
         completionHandler(.allow)
     }
 
@@ -122,12 +142,26 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
             return
         }
         bytes.append(data)
-        let loaded = bytes.count
-        let total = Int(max(0, response?.expectedContentLength ?? -1))
-        let report = onProgress
-        if report != nil {
-            DispatchQueue.main.async { report?(loaded, total) }
-        }
+        emit(readyState: 3, chunk: data)
+    }
+
+    private func emit(readyState: Int, chunk: Data) {
+        let http = response
+        let total = Int(http?.expectedContentLength ?? -1)
+        let payload = Self.transferEvent(
+            readyState: readyState,
+            loaded: bytes.count,
+            total: total,
+            status: http?.statusCode ?? 0,
+            statusText: http.map { HTTPURLResponse.localizedString(forStatusCode: $0.statusCode) } ?? "",
+            headers: http.map { $0.allHeaderFields.map { "\($0.key): \($0.value)" }.joined(separator: "\r\n") } ?? "",
+            finalUrl: http?.url?.absoluteString ?? "",
+            responseText: String(data: bytes, encoding: .utf8) ?? String(data: bytes, encoding: .isoLatin1) ?? "",
+            chunk: chunk
+        )
+        let report = onEvent
+        guard report != nil else { return }
+        DispatchQueue.main.async { report?(payload) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

@@ -96,7 +96,10 @@ struct UserScript: Codable, Identifiable, Equatable {
     var updateURL = ""
     var resources: [ScriptResource] = []
     var updatedAt = Date()
-    var isolated: Bool { !grants.isEmpty && !grants.contains("none") }
+    var isolated: Bool {
+        if Self.injectsIntoPage(source) { return false }
+        return !grants.isEmpty && !grants.contains("none")
+    }
 
     static let supportedGrants: Set<String> = [
         "none", "GM_info", "GM.info", "GM_addStyle", "GM.addStyle", "GM_log", "GM.log",
@@ -110,7 +113,7 @@ struct UserScript: Codable, Identifiable, Equatable {
 
     static let capabilityNotes: [String: String] = [
         "GM_getValue": "Supported。同步读取本页缓存，写入后其他标签用 GM.getValue 或刷新。",
-        "GM_xmlhttpRequest": "Partial。同源请求会带上当前身份 WKWebsiteDataStore 的 Cookie；跨源不带。按 @connect 检查重定向，onprogress 报告已下载字节，abort() 会取消 URLSession 任务。字符串、URLSearchParams、FormData（含文件）和 Blob 会作为请求体。不支持流式响应和完整同步 readyState。单次请求体和响应 8 MB。菜单命令只在顶层页面注册。",
+        "GM_xmlhttpRequest": "Partial。同源请求会带上当前身份 WKWebsiteDataStore 的 Cookie；跨源不带。按 @connect 检查重定向。请求发出后 readyState 为 1，响应头为 2，每个数据块为 3 并调用 onprogress，完成时为 4。response 和 responseText 在状态 3 是已收到的文本。responseType 为 stream 时，onloadstart 拿到 ReadableStream，每个块再送进这个流。这些回调随网络到达，不是阻塞式同步 XHR。abort() 会取消 URLSession 任务。字符串、URLSearchParams、FormData（含文件）和 Blob 会作为请求体。单次请求体和响应 8 MB。菜单命令只在顶层页面注册。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
         "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",
         "unsafeWindow": "Partial。@grant none 就是页面 window。没有外部绑定的函数，以及只闭合 JSON 可序列化局部变量（含脚本 try 里的 const/let）的函数，会把那些值内联后在页面里执行并同步返回，包括 JSON 对象。不能序列化的闭包仍走 iso-call，JSON 对象返回值会写回页面。不使用同步自定义协议请求。",
@@ -140,10 +143,6 @@ struct UserScript: Codable, Identifiable, Equatable {
         if grants.contains("unsafeWindow") {
             throw RikuganError.message("unsafeWindow 是全局对象，不是 @grant。隔离模式下它是 Partial：请直接使用 unsafeWindow，不要把它写进 @grant。")
         }
-        if grants.contains("none") == false && !grants.isEmpty,
-           metadata["inject-into"]?.contains("page") == true {
-            throw RikuganError.message("带原生权限的脚本只能运行在隔离环境，暂不支持 @inject-into page。")
-        }
         let matches = metadata["match"] ?? [], includes = metadata["include"] ?? []
         guard !matches.isEmpty || !includes.isEmpty else { throw RikuganError.message("脚本必须声明 @match 或 @include，不会默认在所有网站运行。") }
         for pattern in matches + (metadata["exclude-match"] ?? []) {
@@ -168,6 +167,19 @@ struct UserScript: Codable, Identifiable, Equatable {
         script.updateURL = httpsOnly(metadata["updateURL"]?.first)
         script.resources = resources
         return script
+    }
+    static func injectsIntoPage(_ source: String) -> Bool {
+        guard let start = source.range(of: "// ==UserScript=="),
+              let end = source.range(of: "// ==/UserScript==", range: start.upperBound..<source.endIndex) else { return false }
+        for line in source[start.upperBound..<end.lowerBound].split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("//") else { continue }
+            let field = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            guard field.lowercased().hasPrefix("@inject-into") else { continue }
+            let value = field.dropFirst("@inject-into".count).trimmingCharacters(in: .whitespaces).lowercased()
+            return value == "page"
+        }
+        return false
     }
 
     private static func httpsOnly(_ value: String?) -> String {

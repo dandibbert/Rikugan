@@ -3,12 +3,16 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const template = fs.readFileSync('Rikugan/Resources/UserscriptRuntime.js', 'utf8');
 function run(url, override = {}, source = 'globalThis.didRun = true;', extras = {}) {
-  const config = {id: 'test', name: 'Test', version: '1', handler: 'test', matches: ['https://*.example.com/*'], includes: [], excludes: [], excludeMatches: [], grants: [], runAt: 'document-end', storage: {}, ...override};
+  const manualXHR = !!override.manualXHR;
+  const configOverride = {...override};
+  delete configOverride.manualXHR;
+  const config = {id: 'test', name: 'Test', version: '1', handler: 'test', matches: ['https://*.example.com/*'], includes: [], excludes: [], excludeMatches: [], grants: [], runAt: 'document-end', storage: {}, ...configOverride};
   const calls = [];
-  const sandbox = {location: new URL(url), URL, URLSearchParams, console, setTimeout, JSON, FormData, Blob, File, TextEncoder, Uint8Array, ArrayBuffer, btoa, atob, window: {webkit: {messageHandlers: {test: {postMessage: body => { calls.push(body); return Promise.resolve(true); }}}}}, ...extras};
+  const resolvers = [];
+  const sandbox = {location: new URL(url), URL, URLSearchParams, console, setTimeout, JSON, FormData, Blob, File, TextEncoder, Uint8Array, ArrayBuffer, ReadableStream, btoa, atob, window: {webkit: {messageHandlers: {test: {postMessage: body => { calls.push(body); return manualXHR ? new Promise(resolve => resolvers.push(resolve)) : Promise.resolve(true); }}}}}, ...extras};
   const script = template.replace('/*__CONFIG__*/', JSON.stringify(config)).replace('/*__SOURCE__*/', source);
   new vm.Script(script).runInNewContext(sandbox);
-  return {sandbox, calls};
+  return {sandbox, calls, resolvers};
 }
 assert.equal(run('https://example.com/a').sandbox.didRun, true);
 assert.equal(run('https://a.example.com/a?x=1#hash').sandbox.didRun, true);
@@ -176,6 +180,20 @@ assert.match(query.calls[0].args.headers['Content-Type'], /application\/x-www-fo
   const kept = custom.calls.find(call => call.operation === 'xmlHttpRequest');
   assert.equal(kept.args.headers['Content-Type'], 'text/plain');
   assert.equal(kept.args.contentType, undefined);
+  const streamed = run('https://example.com/', { grants: ['GM_xmlhttpRequest'], manualXHR: true }, "globalThis.states = []; globalThis.texts = []; globalThis.progress = []; GM_xmlhttpRequest({url:'https://example.com/a', responseType:'stream', onreadystatechange(res){ globalThis.states.push(res.readyState); globalThis.texts.push(res.responseText); }, onprogress(res){ globalThis.progress.push(res.loaded); }});");
+  const streamID = streamed.calls.find(call => call.operation === 'xmlHttpRequest').args.id;
+  streamed.sandbox.__rikuganXHREvent({ id: streamID, readyState: 1, responseText: '', loaded: 0, total: 0 });
+  streamed.sandbox.__rikuganXHREvent({ id: streamID, readyState: 2, status: 200, statusText: 'OK', responseHeaders: 'Content-Type: text/plain', responseText: '', loaded: 0, total: 4, finalUrl: 'https://example.com/a' });
+  streamed.sandbox.__rikuganXHREvent({ id: streamID, readyState: 3, status: 200, responseText: 'ab', chunkBase64: Buffer.from('ab').toString('base64'), loaded: 2, total: 4 });
+  streamed.sandbox.__rikuganXHREvent({ id: streamID, readyState: 3, status: 200, responseText: 'abcd', chunkBase64: Buffer.from('cd').toString('base64'), loaded: 4, total: 4 });
+  assert.equal(JSON.stringify(streamed.sandbox.states), JSON.stringify([1, 2, 3, 3]));
+  assert.equal(JSON.stringify(streamed.sandbox.texts), JSON.stringify(['', '', 'ab', 'abcd']));
+  assert.equal(JSON.stringify(streamed.sandbox.progress), JSON.stringify([2, 4]));
+  streamed.resolvers[0]({ readyState: 4, status: 200, statusText: 'OK', responseText: 'abcd', responseHeaders: 'Content-Type: text/plain', finalUrl: 'https://example.com/a', responseBase64: Buffer.from('abcd').toString('base64') });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(streamed.sandbox.states.at(-1), 4);
+  assert.equal(streamed.sandbox.texts.at(-1), 'abcd');
+  assert.equal(streamed.sandbox.progress.length, 2);
   console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow get/set/call, page-world window, menu, xhr and listeners');
 })().catch(error => { console.error(error); process.exit(1); });
 

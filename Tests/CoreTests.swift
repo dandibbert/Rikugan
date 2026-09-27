@@ -55,7 +55,24 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try ScriptRequestBody.bytes(text: nil, base64: "%%%%").get())
         let note = UserScript.capabilityNotes["GM_xmlhttpRequest"] ?? ""
         XCTAssertTrue(note.contains("FormData"))
+        XCTAssertTrue(note.contains("readyState"))
         XCTAssertFalse(note.contains("不支持流式、FormData"))
+        XCTAssertFalse(note.contains("完整同步 readyState"))
+        let chunk = ScriptExchange.transferEvent(readyState: 3, loaded: 2, total: 4, status: 200, statusText: "OK", headers: "Content-Type: text/plain", finalUrl: "https://example.com/a", responseText: "ab", chunk: Data("ab".utf8))
+        XCTAssertEqual(chunk["readyState"] as? Int, 3)
+        XCTAssertEqual(chunk["responseText"] as? String, "ab")
+        XCTAssertEqual(chunk["chunkText"] as? String, "ab")
+        XCTAssertEqual(chunk["loaded"] as? Int, 2)
+        let headers = ScriptExchange.transferEvent(readyState: 2, loaded: 0, total: 4, status: 200, statusText: "OK", headers: "Content-Type: text/plain", finalUrl: "https://example.com/a", responseText: "", chunk: Data())
+        XCTAssertEqual(headers["readyState"] as? Int, 2)
+        XCTAssertEqual(headers["chunkBase64"] as? String, "")
+    }
+    func testInjectIntoPageRunsWithGrants() throws {
+        let page = source.replacingOccurrences(of: "// @grant GM_getValue", with: "// @grant GM_getValue\n    // @inject-into page")
+        let script = try UserScript.parse(page)
+        XCTAssertFalse(script.isolated)
+        XCTAssertTrue(script.permits("getValue"))
+        XCTAssertTrue(UserScript.injectsIntoPage(page))
     }
     func testSearchEscapesQuery() {
         let url = URLRules.inputURL("a+b & c", searchEngine: "https://example.com/?q=")!

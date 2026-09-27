@@ -89,10 +89,58 @@
   } : undefined;
   const GM_unregisterMenuCommand = (menuAllowed || allowed('unregisterMenuCommand')) ? id => { delete callbacks[id]; return call('unregisterMenuCommand', {id}); } : undefined;
   const pendingXHR = Object.create(null);
+  const decode64 = text => {
+    if (!text) return new Uint8Array();
+    const binary = atob(text);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  };
+  const openStream = details => {
+    if (details.__stream) return details.__stream.readable;
+    if (typeof ReadableStream !== 'function') return null;
+    let control = null;
+    const readable = new ReadableStream({ start(controller) { control = controller; } });
+    details.__stream = {
+      readable,
+      enqueue(bytes) { if (control && bytes && bytes.length) control.enqueue(bytes); },
+      close() { if (control) { control.close(); control = null; } }
+    };
+    return readable;
+  };
+  const packetFrom = (details, event) => {
+    const responseText = event.responseText || '';
+    const packet = {
+      readyState: Number(event.readyState) || 0,
+      status: Number(event.status) || 0,
+      statusText: event.statusText || '',
+      responseHeaders: event.responseHeaders || '',
+      finalUrl: event.finalUrl || String(details.url || ''),
+      responseText,
+      response: responseText,
+      lengthComputable: Number(event.total) > 0,
+      loaded: Number(event.loaded) || 0,
+      total: Number(event.total) || 0
+    };
+    if (event.chunkBase64) packet.chunk = decode64(event.chunkBase64);
+    if (details.responseType === 'stream') {
+      const readable = openStream(details);
+      if (readable) packet.response = readable;
+      if (packet.chunk && details.__stream) details.__stream.enqueue(packet.chunk);
+    }
+    return packet;
+  };
   globalThis.__rikuganXHREvent = event => {
     const details = pendingXHR[event && event.id];
-    if (!details || typeof details.onprogress !== 'function') return;
-    details.onprogress({ lengthComputable: Number(event.total) > 0, loaded: Number(event.loaded) || 0, total: Number(event.total) || 0 });
+    if (!details || !event) return;
+    if (!event.readyState) {
+      if (typeof details.onprogress === 'function') details.onprogress({ lengthComputable: Number(event.total) > 0, loaded: Number(event.loaded) || 0, total: Number(event.total) || 0 });
+      return;
+    }
+    const packet = packetFrom(details, event);
+    if (packet.readyState === 2 && typeof details.onloadstart === 'function') details.onloadstart(packet);
+    if (packet.readyState === 3 && typeof details.onprogress === 'function') details.onprogress(packet);
+    if (typeof details.onreadystatechange === 'function') details.onreadystatechange(packet);
   };
   const headerMap = value => {
     const headers = {};
@@ -168,15 +216,21 @@
     const outgoing = sync ? Promise.resolve(call('xmlHttpRequest', requestArgs(details, id, sync))) : encodeAsync(details && details.data).then(encoded => aborted ? null : call('xmlHttpRequest', requestArgs(details, id, encoded)));
     const promise = outgoing.then(response => {
       delete pendingXHR[id];
-      if (aborted || !response) return;
-      response.response = response.responseText;
+      if (aborted || !response || typeof response !== 'object') return;
+      response.readyState = 4;
+      response.responseText = response.responseText || '';
       if (details.responseType === 'json') { try { response.response = JSON.parse(response.responseText); } catch (_) { response.response = null; } }
-      if (details.responseType === 'arraybuffer' || details.responseType === 'blob') {
-        const bytes = Uint8Array.from(atob(response.responseBase64), c => c.charCodeAt(0));
+      else if (details.responseType === 'arraybuffer' || details.responseType === 'blob') {
+        const bytes = decode64(response.responseBase64 || '');
         response.response = details.responseType === 'blob' ? new Blob([bytes]) : bytes.buffer;
-      }
+      } else if (details.responseType === 'stream' && details.__stream) {
+        response.response = details.__stream.readable;
+        details.__stream.close();
+      } else response.response = response.responseText;
       delete response.responseBase64;
-      details.onload?.(response); return response;
+      if (typeof details.onreadystatechange === 'function') details.onreadystatechange(response);
+      details.onload?.(response);
+      return response;
     }).catch(error => { delete pendingXHR[id]; if (!aborted) details.onerror?.({error: String(error)}); throw error; });
     const abort = () => {
       if (aborted) return;

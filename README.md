@@ -31,7 +31,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 常用 API（同时提供适用的同步 `GM_*` 与异步 `GM.*` 接口）：
 
 - getValue / setValue / deleteValue / listValues、info、addStyle、log
-- xmlHttpRequest / `GM_xmlhttpRequest`，文本/JSON/arraybuffer/blob 响应
+- xmlHttpRequest / `GM_xmlhttpRequest`，文本/JSON/arraybuffer/blob/stream 响应，readyState 2/3/4 随数据到达
 - setClipboard、openInTab、registerMenuCommand / unregisterMenuCommand
 
 明确的兼容限制：
@@ -39,7 +39,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 - 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。两种环境都会安装消息通道，所以 `@grant none` 的 `GM_registerMenuCommand` 能回到宿主。`unsafeWindow` 不是 `@grant`：页面环境下就是 `window`。隔离环境下往页面注入脚本，用对象句柄读写 `window` 和 DOM，并调用页面函数。没有外部绑定的函数，以及只闭合 JSON 可序列化局部变量（含脚本 `try` 里的 `const` / `let`）的函数，会把那些值内联后在页面里执行，并同步返回字符串、数字、布尔和 JSON 对象。其余闭包在页面放一个桩，通过 `rikuganPage` 的 `iso-call` 回到隔离世界执行；JSON 对象返回值写回页面，带方法的对象仍是句柄。不发同步 `rikugan-bridge://` 请求。这不是 Tampermonkey 完整实现。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。规格点名的 grant 可以安装。
 - `GM_getValue` / `GM_setValue` / `GM_deleteValue` / `GM_listValues` 使用脚本自己的 JSON 存储，不写网页 localStorage。`GM_addValueChangeListener` 在本页立刻回调，并通知同一身份里其他同样私密性的标签。存储不支持函数或循环引用。无痕标签的 GM 值只留在 `BrowserSession.privateScriptValues`，不写入普通身份的脚本存储；最后一个无痕标签关闭后清空。
 - GM 网络使用不保存 Cookie 的 ephemeral URLSession。同源且 `@connect` 允许时，会从当前身份（无痕则用无痕存储）的 `WKWebsiteDataStore` 抄一份 Cookie 放进请求头；跨源不带。重定向离开该主机时去掉 Cookie。按 `@connect` 检查首个请求和每次重定向；同源默认允许。系统 ATS 对普通 HTTP 原生请求仍可能限制；建议 HTTPS。
-- `GM_xmlhttpRequest` 有 `onprogress`，`abort()` 会 `task.cancel()`。字符串、`URLSearchParams` 和 `FormData`（含文件字段）以及 `Blob` / `ArrayBuffer` 会作为请求体发出；`FormData` 使用 `multipart/form-data`。不支持流式响应和完整同步 readyState。单次请求体和响应各限制 8 MB。
+- `GM_xmlhttpRequest` 有 `onprogress`，`abort()` 会 `task.cancel()`。字符串、`URLSearchParams` 和 `FormData`（含文件字段）以及 `Blob` / `ArrayBuffer` 会作为请求体发出；`FormData` 使用 `multipart/form-data`。响应头到达时 `readyState` 为 2，之后每个数据块为 3，`onprogress` 带上已下载字节，`response` / `responseText` 是截至目前的文本；完成时为 4。`responseType: "stream"` 时 `onloadstart` 得到 `ReadableStream`，每个块写入这个流。`readyState` 随网络回调送达，不是阻塞式同步 XHR。单次请求体和响应各限制 8 MB。`@inject-into page` 把带 GM 权限的脚本放进页面世界，GM 调用仍走同一条消息通道。
 - 脚本列表显示 HTTPS `@icon` 和 `updatedAt`。脚本菜单仅支持顶层页面。DOM 注入不是对所有油猴脚本的完整兼容承诺。
 
 只导入自己信任的脚本与扩展。页面数据可能包括登录后内容，授予 `<all_urls>` 或 `@connect *` 前应审阅源码。

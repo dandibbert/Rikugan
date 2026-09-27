@@ -149,11 +149,12 @@ struct ScriptCommand: Identifiable {
                         cookieHost = url.host?.lowercased()
                     }
                 }
-                let exchange = ScriptExchange.start(request, sameOriginHost: cookieHost, permits: { URLRules.connectionAllowed($0, origin: origin, rules: rules) }) { [weak self] result in
+                let exchange = ScriptExchange.start(request, sameOriginHost: cookieHost, onEvent: { [weak self] event in
+                    self?.reportTransfer(id: requestID, event: event, world: world)
+                }, permits: { URLRules.connectionAllowed($0, origin: origin, rules: rules) }) { [weak self] result in
                     self?.exchanges[requestID] = nil
                     switch result { case .success(let value): replyHandler(value, nil); case .failure(let error): replyHandler(nil, error.localizedDescription) }
                 }
-                exchange?.onProgress = { [weak self] loaded, total in self?.reportProgress(id: requestID, loaded: loaded, total: total, world: world) }
                 if let exchange { self.exchanges[requestID] = exchange }
             }
         case "abortRequest":
@@ -180,10 +181,13 @@ struct ScriptCommand: Identifiable {
             other.webView.evaluateJavaScript(source, in: nil, in: world) { _, _ in }
         }
     }
-    private func reportProgress(id: String, loaded: Int, total: Int, world: WKContentWorld) {
+    private func reportTransfer(id: String, event: [String: Any], world: WKContentWorld) {
         guard let tab else { return }
-        let payload: [String: Any] = ["id": id, "loaded": loaded, "total": total]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
+        var payload = event
+        payload["id"] = id
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
         tab.webView.evaluateJavaScript("globalThis.__rikuganXHREvent && globalThis.__rikuganXHREvent(\(json))", in: nil, in: world) { _, _ in }
     }
     static func values(_ script: UserScript) -> [String: Any] {
