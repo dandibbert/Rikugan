@@ -42,7 +42,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(b"R" * length)
                 self.wfile.flush()
                 start += length
-                time.sleep(0.03)
+                # Only the initial transfer needs a pause/cancel opportunity.
+                # Pacing every resumed chunk turns this functional test into a
+                # shared-runner scheduling benchmark (4 MiB took 19 seconds just
+                # to leave the fixture server). Preserve the same bytes, Range
+                # response and client timeout; send resumed bytes without sleeps.
+                if not value:
+                    time.sleep(0.03)
             self.log_message("DOWNLOAD sent through byte=%d", start - 1)
         except (BrokenPipeError, ConnectionResetError):
             self.log_message("DOWNLOAD client closed after byte=%d", start - 1)

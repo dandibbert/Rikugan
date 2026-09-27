@@ -24,6 +24,8 @@ with zipfile.ZipFile(dist / "tests.zip", "w", zipfile.ZIP_DEFLATED) as archive:
                 archive.write(path, path.relative_to(root))
     for path in sorted((root / "scripts").glob("test_*.cjs")):
         archive.write(path, path.relative_to(root))
+    for path in sorted((root / "scripts").glob("test_*.py")):
+        archive.write(path, path.relative_to(root))
     for name in ["build-device.log", "test.log", "webkit-runtime.log", "scripts/fixture_server.py", "project.yml",
                  "Rikugan/Resources/UserscriptRuntime.js", "Rikugan/Resources/PageTools.js", "Rikugan/Resources/WebFontEngine.js"]:
         path = root / name
