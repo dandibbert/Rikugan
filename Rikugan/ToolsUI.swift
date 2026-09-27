@@ -239,6 +239,7 @@ struct ImageSheet: View {
                             .onTapGesture { if selected.contains(url) { selected.remove(url) } else { selected.insert(url) } }
                             .contextMenu {
                                 Button("复制链接") { UIPasteboard.general.string = url }
+                                Button("打开原图") { if let link = URL(string: url) { tab.navigate(link) } }
                                 Button("保存") { Task { await save([url]) } }
                                 if let link = URL(string: url) { ShareLink(item: link) { Text("分享") } }
                             }
@@ -498,14 +499,14 @@ struct SiteSettingsSheet: View {
             Form {
                 if host.isEmpty { Text("打开网页后才能保存站点设置。") }
                 else {
-                    override("桌面版", key: \.desktopMode, bool: true)
+                    override("桌面版", key: \.desktopMode)
                     Picker("暗黑模式", selection: optional(\.darkMode)) {
                         Text("跟随全局").tag(String?.none); Text("关闭").tag(String?("off")); Text("自动").tag(String?("auto")); Text("始终").tag(String?("on"))
                     }
                     toggle("内容拦截", key: \.contentBlocking)
                     Picker("外部 App", selection: optional(\.externalNavigation)) { Text("跟随全局").tag(Optional<String>.none); Text("询问").tag(Optional("ask")); Text("允许").tag(Optional("allow")); Text("禁止").tag(Optional("block")) }
                     toggle("用户脚本", key: \.userScriptsEnabled)
-                    toggle("JavaScript", key: \.javascriptEnabled)
+                    toggle("JavaScript", key: \.javascriptEnabled, reload: true)
                     Picker("弹窗", selection: optional(\.popups)) { Text("允许").tag(Optional("allow")); Text("询问").tag(Optional("ask")); Text("禁止").tag(Optional("block")) }
                     Picker("网页字体", selection: optional(\.fontFamily)) {
                         Text("跟随身份").tag(String?.none)
@@ -522,22 +523,23 @@ struct SiteSettingsSheet: View {
         }
     }
     private func snapshot() -> SiteSettings { model.profile.site(for: host) ?? SiteSettings(host: host) }
-    private func save(_ site: SiteSettings) {
+    private func save(_ site: SiteSettings, reload: Bool = false) {
         model.updateProfile(model.profile.id) { profile in
             if let index = profile.siteSettings.firstIndex(where: { $0.host == host }) { profile.siteSettings[index] = site }
             else { profile.siteSettings.append(site) }
         }
         tab.applyDecorations(); tab.syncContentRules(); tab.session?.refreshScripts()
+        if reload, !tab.isHome { tab.webView.reload() }
     }
     private func optional(_ key: WritableKeyPath<SiteSettings, String?>) -> Binding<String?> {
         Binding(get: { snapshot()[keyPath: key] }, set: { value in var site = snapshot(); site[keyPath: key] = value; save(site) })
     }
-    private func toggle(_ title: String, key: WritableKeyPath<SiteSettings, Bool?>) -> some View {
-        Picker(title, selection: Binding(get: { snapshot()[keyPath: key] }, set: { value in var site = snapshot(); site[keyPath: key] = value; save(site) })) {
+    private func toggle(_ title: String, key: WritableKeyPath<SiteSettings, Bool?>, reload: Bool = false) -> some View {
+        Picker(title, selection: Binding(get: { snapshot()[keyPath: key] }, set: { value in var site = snapshot(); site[keyPath: key] = value; save(site, reload: reload) })) {
             Text("跟随").tag(Optional<Bool>.none); Text("开").tag(Optional(true)); Text("关").tag(Optional(false))
         }
     }
-    private func override(_ title: String, key: WritableKeyPath<SiteSettings, Bool?>, bool: Bool) -> some View { toggle(title, key: key) }
+    private func override(_ title: String, key: WritableKeyPath<SiteSettings, Bool?>) -> some View { toggle(title, key: key, reload: true) }
     private func permission(_ kind: String) -> Binding<String> {
         Binding(get: { model.profile.permission(host: host, kind: kind) }, set: { value in
             model.updateProfile(model.profile.id) { profile in
@@ -584,6 +586,9 @@ struct AutofillSheet: View {
             List {
                 Section {
                     Text("密码、身份和支付备注只放在钥匙串（WhenUnlockedThisDeviceOnly），不写 UserDefaults。填充必须由你点按，不会自动提交。").font(.footnote).foregroundStyle(.secondary)
+                    Button("同步到 iCloud 私有数据库") {
+                        Task { model.message = await AutofillVault.pushToCloud(profile: model.profile.id, items: items) }
+                    }
                 }
                 ForEach(items) { item in
                     VStack(alignment: .leading, spacing: 4) {
@@ -671,7 +676,7 @@ struct ContentBlockingView: View {
                     Task { await addSubscription() }
                 }
             }
-            Text("内置规则、自定义规则和第三方列表都会编译并安装到网页。订阅按原文件下载，单次上限 8 MB，不把 EasyList 打进安装包。网络规则和元素隐藏进 WKContentRuleList。#%# 和 ##+js 里的 abort-on-property-read、abort-on-property-write、json-prune、set-constant、prevent-fetch、prevent-xhr 会在页面开始时执行。$redirect 和 $redirect-rule（含 noopjs、empty、1x1）是拦截，不是重定向，也不会返回空的 2xx。$removeparam 会在主框架跳转前去掉对应查询参数。$csp 会插入 meta 策略。$replace 会改主框架 HTML，以及之后 fetch/XHR 读到的文本；图片、音视频和二进制响应跳过。").font(.footnote).foregroundStyle(.secondary)
+            Text("内置规则、自定义规则和第三方列表都会编译并安装到网页。订阅按原文件下载，单次上限 8 MB，不把 EasyList 打进安装包。网络规则和元素隐藏进 WKContentRuleList。#%# 和 ##+js 里的 abort-on-property-read、abort-on-property-write、json-prune、set-constant、prevent-fetch、prevent-xhr 会在页面开始时执行。带 noopjs、empty、1x1 的规则网络动作是拦截，不是重定向，也不会返回空的 2xx。页面会另外定义空值：__rgRedirect.noopjs 是空函数，__rgRedirect.empty 是空字符串，__rgRedirect.pixel 是 1×1 透明图的 data URL，并对该域名 prevent-fetch。removeparam 会在主框架跳转前去掉对应查询参数。csp 会插入 meta 策略。replace 会改主框架 HTML，以及之后 fetch/XHR 读到的文本；图片、音视频和二进制响应跳过。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("内容拦截")
     }
     private func setting(_ key: WritableKeyPath<BrowserSettings, Bool>) -> Binding<Bool> {

@@ -169,20 +169,71 @@
         });
       }
     };
-    const pureSource = fn => {
-      let source = '';
-      try { source = Function.prototype.toString.call(fn); } catch (_) { return null; }
-      if (!source || source.indexOf('[native code]') >= 0) return null;
+    const addParams = (declared, list) => String(list || '').split(',').forEach(part => {
+      const name = part.replace(/=[\s\S]*$/, '').replace(/^\.\.\./, '').trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+    });
+    const freeNames = source => {
       let scan = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1 ');
       scan = scan.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, ' ');
       const declared = new Set();
+      const named = scan.match(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/);
+      if (named) declared.add(named[1]);
       const header = scan.match(/^(?:async\s+)?function\s*[^(]*\(([^)]*)\)/) || scan.match(/^(?:async\s*)?\(([^)]*)\)\s*=>/) || scan.match(/^(?:async\s+)?([A-Za-z_$][\w$]*)\s*=>/);
-      if (header) String(header[1] || '').split(',').forEach(part => { const name = part.replace(/=[\s\S]*$/, '').replace(/^\.\.\./, '').trim(); if (name) declared.add(name); });
+      if (header) addParams(declared, header[1]);
+      scan.replace(/\bfunction\s*[^(]*\(([^)]*)\)/g, (_, params) => { addParams(declared, params); return ' '; });
       scan.replace(/\b(?:var|let|const|function|class)\s+([A-Za-z_$][\w$]*)/g, (_, name) => { declared.add(name); return ' '; });
       scan = scan.replace(/\.[A-Za-z_$][\w$]*/g, '');
       const ids = scan.match(/\b[A-Za-z_$][\w$]*/g) || [];
-      for (const name of ids) if (!declared.has(name) && !reserved.has(name) && !globals.has(name)) return null;
-      return source;
+      const free = [];
+      for (const name of ids) {
+        if (declared.has(name) || reserved.has(name) || globals.has(name) || free.indexOf(name) >= 0) continue;
+        free.push(name);
+      }
+      return free;
+    };
+    const jsonData = value => {
+      if (value === null) return true;
+      const kind = typeof value;
+      if (kind === 'string' || kind === 'boolean') return true;
+      if (kind === 'number') return Number.isFinite(value);
+      if (kind !== 'object') return false;
+      if (Array.isArray(value)) return value.every(item => item !== undefined && jsonData(item));
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) return false;
+      return Object.keys(value).every(key => value[key] !== undefined && jsonData(value[key]));
+    };
+    const jsonLiteral = (value, seen) => {
+      if (value === undefined) return 'undefined';
+      if (typeof value === 'function') return serializableSource(value, seen);
+      if (value === null) return 'null';
+      const kind = typeof value;
+      if (kind === 'string' || kind === 'boolean') return JSON.stringify(value);
+      if (kind === 'number') return Number.isFinite(value) ? String(value) : null;
+      if (kind !== 'object' || !jsonData(value)) return null;
+      try { return JSON.stringify(value); } catch (_) { return null; }
+    };
+    const serializableSource = (fn, seen) => {
+      if (!fn || seen.has(fn)) return null;
+      let source = '';
+      try { source = Function.prototype.toString.call(fn); } catch (_) { return null; }
+      if (!source || source.indexOf('[native code]') >= 0 || source.length > 8000) return null;
+      const free = freeNames(source);
+      if (!free.length) return source;
+      if (free.length > 24) return null;
+      const next = new Set(seen);
+      next.add(fn);
+      const read = globalThis.__rikuganReadLocal;
+      if (typeof read !== 'function') return null;
+      const lines = [];
+      for (const name of free) {
+        const value = read(name);
+        if (value === read.missing) return null;
+        const literal = jsonLiteral(value, next);
+        if (literal == null) return null;
+        lines.push('var ' + name + '=' + literal + ';');
+      }
+      return '(function(){' + lines.join('') + 'return (' + source + ');})()';
     };
     const pageEval = code => {
       const doc = typeof document === 'undefined' ? null : document;
@@ -195,7 +246,7 @@
       if (typeof el.remove === 'function') el.remove();
     };
     const bridge = op => {
-      pageEval('if(!window.__rgBridge){window.__rgHandles={0:window};window.__rgNext=1;window.__rgPack=function(v){if(v===undefined)return{t:"val",u:1};if(v===null||typeof v==="string"||typeof v==="number"||typeof v==="boolean")return{t:"val",v:v};if(typeof v==="function"||(v&&typeof v==="object")){var id=window.__rgNext++;window.__rgHandles[id]=v;return{t:typeof v==="function"?"fn":"obj",id:id};}return{t:"err",e:"not transferable"};};window.__rgUnpack=function(a){if(!a)return a;if(a.t==="ref")return window.__rgHandles[a.id];if(a.t==="src"){try{return (0,eval)("("+a.v+")");}catch(e){return function(){throw e;};}}if(a.t==="iso")return window.__rgMakeStub(a.id);if(a.t==="val")return a.u?undefined:a.v;return a.v;};window.__rgInvoke=function(id,args){var node=document.documentElement;if(node&&typeof node.__rgInvoke==="function")return node.__rgInvoke(id,args);try{var xhr=new XMLHttpRequest();xhr.open("POST","rikugan-bridge://invoke?handler="+encodeURIComponent(window.__rgScript||"")+"&id="+encodeURIComponent(id),false);xhr.setRequestHeader("Content-Type","application/json");xhr.send(JSON.stringify(args||[]));if(xhr.status===200&&xhr.responseText){var parsed=JSON.parse(xhr.responseText);if(!(parsed&&parsed.e==="sync bridge unavailable"))return parsed;}}catch(e){}try{if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.rikuganPage)window.webkit.messageHandlers.rikuganPage.postMessage({action:"iso-call",handler:window.__rgScript||"",id:id,args:args||[]});}catch(e){}if(node&&node.dispatchEvent){node.setAttribute("data-rg-iso",JSON.stringify({id:id,args:args||[]}));node.dispatchEvent(new Event("rg-iso-call"));try{return JSON.parse(node.getAttribute("data-rg-iso-result")||"{}");}catch(e){return {t:"err",e:"callback failed"};}}return {t:"val",u:1};};window.__rgMakeStub=function(id){return function(){var args=Array.prototype.slice.call(arguments).map(window.__rgPack);var result=window.__rgInvoke(id,args);if(result&&result.t==="err")throw new Error(result.e||"isolated call failed");return window.__rgUnpack(result);};};window.__rgScript=window.__rgScript||' + JSON.stringify(config.handler) + ';window.__rgBridge=function(op){var result;try{if(op.op==="get")result=window.__rgPack(window.__rgHandles[op.id][op.prop]);else if(op.op==="set"){window.__rgHandles[op.id][op.prop]=window.__rgUnpack(op.value);result={t:"ok"};}else if(op.op==="call"){var args=(op.args||[]).map(window.__rgUnpack);result=window.__rgPack(window.__rgHandles[op.id].apply(window.__rgHandles[op.recv]||window.__rgHandles[op.id],args));}else result={t:"err",e:"unknown"};}catch(e){result={t:"err",e:String(e&&e.message||e)};}document.documentElement.setAttribute("data-rg-uw",JSON.stringify(result));};}window.__rgBridge(' + JSON.stringify(op) + ');');
+      pageEval('if(!window.__rgBridge){window.__rgHandles={0:window};window.__rgNext=1;window.__rgPack=function(v){if(v===undefined)return{t:"val",u:1};if(v===null||typeof v==="string"||typeof v==="number"||typeof v==="boolean")return{t:"val",v:v};if(typeof v==="function"||(v&&typeof v==="object")){var id=window.__rgNext++;window.__rgHandles[id]=v;return{t:typeof v==="function"?"fn":"obj",id:id};}return{t:"err",e:"not transferable"};};window.__rgUnpack=function(a){if(!a)return a;if(a.t==="ref")return window.__rgHandles[a.id];if(a.t==="src"){try{return (0,eval)("("+a.v+")");}catch(e){return function(){throw e;};}}if(a.t==="iso")return window.__rgMakeStub(a.id);if(a.t==="val")return a.u?undefined:a.v;return a.v;};window.__rgResults=window.__rgResults||{};window.__rgInvoke=function(id,args){var node=document.documentElement;if(node&&typeof node.__rgInvoke==="function")return node.__rgInvoke(id,args);try{if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.rikuganPage)window.webkit.messageHandlers.rikuganPage.postMessage({action:"iso-call",handler:window.__rgScript||"",id:id,args:args||[]});}catch(e){}if(node&&node.dispatchEvent){if(node.removeAttribute)node.removeAttribute("data-rg-iso-result");node.setAttribute("data-rg-iso",JSON.stringify({id:id,args:args||[]}));node.dispatchEvent(new Event("rg-iso-call"));try{var raw=node.getAttribute("data-rg-iso-result");if(raw){var parsed=JSON.parse(raw);window.__rgResults[String(id)]=parsed;return parsed;}}catch(e){return {t:"err",e:"callback failed"};}}return {t:"pending"};};window.__rgMakeStub=function(id){return function(){var args=Array.prototype.slice.call(arguments).map(window.__rgPack);var result=window.__rgInvoke(id,args);if(result&&result.t==="err")throw new Error(result.e||"isolated call failed");if(result&&result.t==="pending")return undefined;return window.__rgUnpack(result);};};window.__rgScript=window.__rgScript||' + JSON.stringify(config.handler) + ';window.__rgBridge=function(op){var result;try{if(op.op==="get")result=window.__rgPack(window.__rgHandles[op.id][op.prop]);else if(op.op==="set"){window.__rgHandles[op.id][op.prop]=window.__rgUnpack(op.value);result={t:"ok"};}else if(op.op==="call"){var args=(op.args||[]).map(window.__rgUnpack);result=window.__rgPack(window.__rgHandles[op.id].apply(window.__rgHandles[op.recv]||window.__rgHandles[op.id],args));}else result={t:"err",e:"unknown"};}catch(e){result={t:"err",e:String(e&&e.message||e)};}document.documentElement.setAttribute("data-rg-uw",JSON.stringify(result));};}window.__rgBridge(' + JSON.stringify(op) + ');');
       const raw = document.documentElement.getAttribute('data-rg-uw');
       if (document.documentElement.removeAttribute) document.documentElement.removeAttribute('data-rg-uw');
       let payload = {};
@@ -207,9 +258,9 @@
       if (refs && value && (typeof value === 'object' || typeof value === 'function') && refs.has(value)) return { t: 'ref', id: refs.get(value) };
       if (typeof value === 'undefined') return { t: 'val', u: 1 };
       if (typeof value === 'function') {
-        installInvoke();
-        const source = pureSource(value);
+        const source = serializableSource(value, new Set());
         if (source) return { t: 'src', v: source };
+        installInvoke();
         const id = isolatedSeq++;
         isolatedFns.set(id, value);
         return { t: 'iso', id: id };
@@ -243,10 +294,26 @@
     return wrap(0);
   })();
   const run = () => {
+    const __rgMissing = { __rgMissing: true };
+    const __rgRead = name => {
+      try {
+        if (!__rgDeclared.has(name) || !/^[A-Za-z_$][\w$]*$/.test(name)) return __rgMissing;
+        return eval(name);
+      } catch (_) { return __rgMissing; }
+    };
+    __rgRead.missing = __rgMissing;
+    globalThis.__rikuganReadLocal = __rgRead;
     try {
       /*__SOURCE__*/
     } catch (error) { console.error('[Rikugan userscript: ' + config.name + ']', error); }
   };
+  const __rgDeclared = new Set();
+  try {
+    Function.prototype.toString.call(run).replace(/\b(?:var|let|const|function|class)\s+([A-Za-z_$][\w$]*)/g, (_, name) => {
+      if (!String(name).startsWith('__rg')) __rgDeclared.add(name);
+      return '';
+    });
+  } catch (_) {}
   let ranFor = '';
   const schedule = () => {
     if (config.runAt === 'document-body') {

@@ -463,9 +463,11 @@
     }
     (root.__rikuganNet || []).forEach(url => { const kind = kindFor(url); if (kind) push(url, kind); });
     if (root.performance && performance.getEntriesByType) {
-      performance.getEntriesByType('resource').forEach(entry => {
-        const kind = kindFor(entry.name);
-        if (kind) push(entry.name, kind, { size: entry.transferSize || entry.decodedBodySize || 0 });
+      ['resource', 'navigation'].forEach(type => {
+        performance.getEntriesByType(type).forEach(entry => {
+          const kind = kindFor(entry.name);
+          if (kind) push(entry.name, kind, { size: entry.transferSize || entry.decodedBodySize || 0 });
+        });
       });
     }
     return found;

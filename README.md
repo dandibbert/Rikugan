@@ -36,7 +36,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 明确的兼容限制：
 
-- 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。两种环境都会安装消息通道，所以 `@grant none` 的 `GM_registerMenuCommand` 能回到宿主。`unsafeWindow` 不是 `@grant`：页面环境下就是 `window`。隔离环境下往页面注入脚本，用对象句柄读写 `window` 和 DOM，并调用页面函数。没有外部绑定的函数会把源码注入页面；闭包在页面里是一个桩，调用时回到隔离世界执行。这不是 Tampermonkey 完整实现。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。规格点名的 grant 可以安装。
+- 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。两种环境都会安装消息通道，所以 `@grant none` 的 `GM_registerMenuCommand` 能回到宿主。`unsafeWindow` 不是 `@grant`：页面环境下就是 `window`。隔离环境下往页面注入脚本，用对象句柄读写 `window` 和 DOM，并调用页面函数。没有外部绑定的函数，以及只闭合 JSON 可序列化局部变量的函数，会把那些局部变量内联后把源码注入页面，调用和返回都在页面里同步完成。其余闭包在页面放一个桩，通过 `rikuganPage` 的 `iso-call` 回到隔离世界执行，结果写入 `window.__rgResults` 和 `data-rg-iso-result`。不发同步 `rikugan-bridge://` 请求。这不是 Tampermonkey 完整实现。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。规格点名的 grant 可以安装。
 - `GM_getValue` / `GM_setValue` / `GM_deleteValue` / `GM_listValues` 使用脚本自己的 JSON 存储，不写网页 localStorage。`GM_addValueChangeListener` 在本页立刻回调，并通知同一身份里其他同样私密性的标签。存储不支持函数或循环引用。无痕标签的 GM 值只留在 `BrowserSession.privateScriptValues`，不写入普通身份的脚本存储；最后一个无痕标签关闭后清空。
 - GM 网络使用无 Cookie 的 ephemeral URLSession，不自动附带浏览器登录 Cookie。按 `@connect` 检查首个请求和每次重定向；同源默认允许。系统 ATS 对普通 HTTP 原生请求仍可能限制；建议 HTTPS。
 - `GM_xmlhttpRequest` 有 `onprogress`，`abort()` 会 `task.cancel()`。不支持流式、FormData 和完整同步 readyState。单次响应限制 8 MB。
@@ -46,22 +46,22 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 ## 浏览器功能
 
-多标签、标签组（缩略图写入身份目录，网格里可以重命名和删除分组）、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照）、地址栏关键词与可改名/删除的自定义 `{query}` 引擎、Google / Bing / DuckDuckGo 搜索建议（设置里可关）、前进/后退/标签按钮长按快捷动作、自动刷新（恢复会话后继续当前标签的计时）、系统分享、页内查找（`WKWebView.find`，匹配次数用只读文本统计，不往页面插 `<mark>`）、桌面版模式、按 `parentID` 嵌套的书签文件夹（删除文件夹时子项回到上一层）、按天历史、下载暂停/继续。`URLSession` 路径有速度和剩余时间，并带上 `WKWebsiteDataStore` 的 Cookie。网页触发的 `WKDownload` 走 WebKit 会话（因此带页面 Cookie），可以取消并拿 resume data 再 `resumeDownload`。公开的 `WKDownloadDelegate` 没有字节回调，进度、速度和剩余时间来自目标文件在磁盘上的增长。下载列表的「保存到文件」用 `UIDocumentPickerViewController` 导出已完成的文件。站点权限含摄像头、麦克风、位置、剪贴板、通知、弹窗和外部跳转。允许通知后，页面 `Notification` 进入 App 内通知列表和顶部提示；iOS 不会因此弹出系统横幅。iPhone 保持单栏界面；较宽的 iPad 使用侧栏和标签条。「新窗口」在同一个 `BrowserSession` 里再开一组 `BrowserTab`，所以脚本、内容规则、下载、页内查找、阅读模式和页面菜单都会跑。这些标签不写入主窗口保存的标签列表。切换标签不会新建 `WKWebView`。
+多标签、标签组（缩略图写入身份目录，网格里可以重命名和删除分组）、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照，也不记搜索历史）、地址栏关键词与可改名/删除的自定义 `{query}` 引擎、只输入关键词就打开网址的快捷方式、Google / Bing / DuckDuckGo 搜索建议（设置里可关）、前进/后退/标签按钮长按快捷动作、自动刷新（恢复会话后继续当前标签的计时）、系统分享、页内查找（`WKWebView.find`，匹配次数用只读文本统计，不往页面插 `<mark>`）、桌面版模式、按 `parentID` 嵌套的书签文件夹（删除文件夹时子项回到上一层）、按天历史、下载暂停/继续。`URLSession` 路径有速度和剩余时间，并带上 `WKWebsiteDataStore` 的 Cookie。网页触发的 `WKDownload` 走 WebKit 会话（因此带页面 Cookie），可以取消并拿 resume data 再 `resumeDownload`。公开的 `WKDownloadDelegate` 没有字节回调，进度、速度和剩余时间来自目标文件在磁盘上的增长。下载列表的「保存到文件」用 `UIDocumentPickerViewController` 导出已完成的文件。站点权限含摄像头、麦克风、位置、剪贴板、通知、弹窗和外部跳转。允许通知后，页面 `Notification` 进入 App 内通知列表和顶部提示；iOS 不会因此弹出系统横幅。iPhone 保持单栏界面；较宽的 iPad 使用侧栏和标签条。「新窗口」在同一个 `BrowserSession` 里再开一组 `BrowserTab`，所以脚本、内容规则、下载、页内查找、阅读模式和页面菜单都会跑。这些标签不写入主窗口保存的标签列表。切换标签不会新建 `WKWebView`。
 
 另外有：
 
-- 广告规则是 AdGuard 子集，不是内置的完整 EasyList。内置列表只覆盖常见广告域和少量元素隐藏。订阅 URL 会整份下载（单次上限 8 MB）并编译，列表里可以重新下载。网络规则和元素隐藏编译成 `WKContentRuleList`，默认按 5 万条一块（Safari 内容拦截扩展的实际上限；WebKit 没有公开硬顶，编译失败的段会退回纯网络规则）。`@@`、`$script`、`$image`、`$stylesheet`、`$xmlhttprequest`、`$third-party`、`$domain=`、`##`、`#@#` 会进规则。`#$#` 作为 CSS 注入。`#?#` 的 `:has()` 当元素隐藏；`:has-text`、`:contains`、`:xpath`、`:matches-css`、`:upward`、`:remove`、`:style` 由页面脚本执行。`#%#` 和 `##+js` 会跑 abort-on-property-read、abort-on-property-write、json-prune、set-constant、prevent-fetch、prevent-xhr。`$removeparam` 在主框架导航前删掉对应查询参数。`$csp` 插入 meta 策略。WKContentRuleList 没有重定向动作，`$redirect` 和 `$redirect-rule`（包括 noopjs、empty、1x1）因此是拦截，不是重定向。`$replace` 在页面载入后改主框架 HTML，并改写之后 fetch/XHR 读到的文本；二进制响应跳过。隔离闭包在页面里先走同步对象回调；设备上还会发同步 `rikugan-bridge://` 请求，但网页停在这个请求里时 WebKit 跑不了隔离世界的 JavaScript，所以闭包返回值在超时后可能是空的。没有外部绑定的函数仍在页面里同步返回。元素选择器确认后写入自定义规则并立刻隐藏。内容拦截页可以一键订阅 `https://easylist.to/easylist/easylist.txt`，下载后的列表会编译并安装，不内置整份 EasyList。
+- 广告规则是 AdGuard 子集，不是内置的完整 EasyList。内置列表只覆盖常见广告域和少量元素隐藏。订阅 URL 会整份下载（单次上限 8 MB）并编译，列表里可以重新下载。网络规则和元素隐藏编译成 `WKContentRuleList`，默认按 5 万条一块（Safari 内容拦截扩展的实际上限；WebKit 没有公开硬顶，编译失败的段会退回纯网络规则）。`@@`、`$script`、`$image`、`$stylesheet`、`$xmlhttprequest`、`$third-party`、`$domain=`、`##`、`#@#` 会进规则。`#$#` 作为 CSS 注入。`#?#` 的 `:has()` 当元素隐藏；`:has-text`、`:contains`、`:xpath`、`:matches-css`、`:upward`、`:remove`、`:style` 由页面脚本执行。`#%#` 和 `##+js` 会跑 abort-on-property-read、abort-on-property-write、json-prune、set-constant、prevent-fetch、prevent-xhr。`$removeparam` 在主框架导航前删掉对应查询参数。`$csp` 插入 meta 策略。WKContentRuleList 没有重定向动作，所以 `$redirect` 和 `$redirect-rule` 的网络动作是拦截，不是重定向，也不会换成空的 2xx。noopjs、empty、1x1 会额外在页面定义空值：`__rgRedirect.noopjs` 是空函数，`__rgRedirect.empty` 是空字符串，`__rgRedirect.pixel` 是 1×1 透明图的 data URL，并对该主机 `prevent-fetch`。`$replace` 在页面载入后改主框架 HTML，并改写之后 fetch/XHR 读到的文本；二进制响应跳过。只闭合 JSON 局部变量的隔离函数在页面里同步返回；不能序列化的闭包由 `iso-call` 在隔离世界执行，结果写回页面，不再使用会卡住网页进程的同步请求。元素选择器确认后写入自定义规则并立刻隐藏。内容拦截页可以一键订阅 `https://easylist.to/easylist/easylist.txt`，下载后的列表会编译并安装，不内置整份 EasyList。
 - 暗黑模式是样式表（Off / Auto / On，站点可覆盖），给文字节点上色，`img` / `video` / `picture` / `canvas` / `svg` 保持 `filter:none`，不用整页 `invert`。
 - 阅读模式抽出标题、作者和带标签的块（标题、段落、图片、链接），字号、字体、行高和主题写进 `ReaderSettings` 并作用到阅读页。
 - 翻译只有 `PageTranslation` 里的 Apple `TranslationSession`。正文会分批译完，翻译页开着时会继续补译新出现的文字。没有第二个网络翻译服务。设备没下载的语言包由系统报错。
 - 媒体嗅探会列出 m3u8 / mpd 变体。有 `Content-Length` 或 `Content-Range` 时显示大小。下载带上页面 Cookie。不处理 FairPlay / Widevine。
 - 视频菜单的全屏和 AirPlay 调用页面上的 `webkitEnterFullscreen` / `webkitShowPlaybackTargetPicker`（以及标准全屏）。
 - 二维码扫描后可以打开、搜索或复制；打开会导航。
-- 钥匙串自动填充仍是点按后填入，字段含邮箱、电话、地址和卡号后四位，不写 UserDefaults。
+- 钥匙串自动填充仍是点按后填入，字段含邮箱、电话、地址和卡号后四位，不写 UserDefaults。自动填充页可以尝试写入 iCloud 私有数据库 `iCloud.com.dandibbert.Rikugan`。未签名 IPA 没有可用的 iCloud 容器，这次调用会把系统错误显示出来，数据仍留在钥匙串。
 - 实验控制台收集页面 `console.log` / `info` / `warn` / `error` 和未捕获错误。完整检查器仍是 Safari 的 Develop（`isInspectable`），本 App 不是 Web Inspector。
 - 字体按身份应用到网页，站点设置可以覆盖。ttf / otf / ttc 交给 Core Text。woff / woff2 无法由 Core Text 注册，导入会被拒绝。
 
-没有 iCloud 同步。分享扩展在未签名 IPA 里编进包，但 App Group 要等带该 entitlement 的描述文件重签后才真正共享文件；短链接仍可通过 `rikugan://` 唤起主 App。
+浏览数据（标签、历史、书签、Cookie）没有 iCloud 同步。自动填充可以尝试写入上面的私有数据库；未签名包会失败并留在钥匙串。分享扩展在未签名 IPA 里编进包，但 App Group 要等带该 entitlement 的描述文件重签后才真正共享文件；短链接仍可通过 `rikugan://` 唤起主 App。
 
 ## 构建与验证
 

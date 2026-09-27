@@ -227,7 +227,6 @@ import WebKit
     weak var session: BrowserSession?
     let webView: WKWebView
     let scriptEngine = UserScriptEngine()
-    private var scriptBridge: ScriptBridge?
     @Published var pageTitle: String
     @Published var address: String
     @Published var progress: Double = 0
@@ -264,8 +263,6 @@ import WebKit
         id = saved.id; self.session = session; pageTitle = saved.title; address = saved.url; isHome = saved.url.isEmpty; desktop = saved.desktop
         isPrivate = saved.isPrivate; groupID = saved.groupID; autoRefreshSeconds = saved.autoRefreshSeconds
         let configuration = supplied ?? WKWebViewConfiguration()
-        let bridge = supplied == nil ? ScriptBridge() : nil
-        if let bridge { configuration.setURLSchemeHandler(bridge, forURLScheme: "rikugan-bridge") }
         configuration.websiteDataStore = saved.isPrivate ? session.privateStore : session.dataStore
         configuration.webExtensionController = session.extensionController
         configuration.userContentController = WKUserContentController()
@@ -275,9 +272,7 @@ import WebKit
         configuration.mediaTypesRequiringUserActionForPlayback = .audio
         configuration.defaultWebpagePreferences.preferredContentMode = saved.desktop ? .desktop : .mobile
         webView = WKWebView(frame: .zero, configuration: configuration)
-        scriptBridge = bridge
         super.init()
-        bridge?.tab = self
         scriptEngine.tab = self
         scriptEngine.configure(configuration.userContentController, scripts: session.profile.scripts)
         webView.navigationDelegate = self; webView.uiDelegate = self
@@ -315,15 +310,17 @@ import WebKit
     func loadInput(_ input: String) {
         let engine = session?.profile.searchEngine ?? "https://www.google.com/search?q="
         let custom = session?.profile.settings.customEngines ?? []
-        if !isPrivate, URLRules.isSearch(input), let session {
-            let term = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shortcuts = session?.profile.settings.urlShortcuts ?? []
+        let term = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shortcutHit = shortcuts.contains { $0.keyword.compare(term, options: .caseInsensitive) == .orderedSame }
+        if !isPrivate, URLRules.isSearch(input), !shortcutHit, let session {
             session.model?.updateProfile(session.profileID) { profile in
                 profile.searchHistory.removeAll { $0 == term }
                 profile.searchHistory.insert(term, at: 0)
                 profile.searchHistory = Array(profile.searchHistory.prefix(40))
             }
         }
-        if let url = URLRules.inputURL(input, searchEngine: engine, customEngines: custom) { navigate(url) }
+        if let url = URLRules.inputURL(input, searchEngine: engine, customEngines: custom, shortcuts: shortcuts) { navigate(url) }
     }
     func toggleDesktop() {
         desktop.toggle()
@@ -362,7 +359,10 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
                  decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
         let host = navigationAction.request.url?.host
         let site = session?.profile.site(for: host)
-        if let forced = site?.desktopMode { desktop = forced }
+        if let forced = site?.desktopMode {
+            desktop = forced
+            webView.customUserAgent = forced ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15" : nil
+        }
         preferences.preferredContentMode = desktop ? .desktop : .mobile
         preferences.allowsContentJavaScript = site?.javascriptEnabled ?? true
         guard let url = navigationAction.request.url else { decisionHandler(.cancel, preferences); return }

@@ -38,6 +38,7 @@ targets:
         codeSign: false
         link: false
       - sdk: WebKit.framework
+      - sdk: CloudKit.framework
   RikuganShare:
     type: app-extension
     platform: iOS

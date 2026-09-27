@@ -50,4 +50,28 @@ function options(raw) {
   return out;
 }
 
-module.exports = { classify, options };
+function redirectScriptlets(raw) {
+  const line = String(raw || '');
+  const dollar = line.lastIndexOf('$');
+  if (dollar < 0) return [];
+  let resource = '';
+  for (const token of line.slice(dollar + 1).split(',')) {
+    if (token === 'redirect' || token === 'redirect-rule') resource = resource || 'empty';
+    else if (token.startsWith('redirect=') || token.startsWith('redirect-rule=')) resource = token.slice(token.indexOf('=') + 1);
+  }
+  if (!resource) return [];
+  const host = ((line.match(/\|\|([^/^$]+)/) || [])[1] || '').replace(/^\*\./, '');
+  const domains = host ? [host] : [];
+  const key = resource.toLowerCase();
+  const pixel = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  let constant = null;
+  if (key === 'noopjs' || key === 'noop.js') constant = ['__rgRedirect.noopjs', 'noopFunc'];
+  else if (key === 'empty') constant = ['__rgRedirect.empty', "''"];
+  else if (key === '1x1' || key === '1x1.gif') constant = ['__rgRedirect.pixel', pixel];
+  if (!constant) return [];
+  const rows = [{ domains, name: 'set-constant', args: constant }];
+  if (host) rows.push({ domains, name: 'prevent-fetch', args: [host] });
+  return rows;
+}
+
+module.exports = { classify, options, redirectScriptlets };

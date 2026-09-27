@@ -768,6 +768,7 @@ struct SettingsView: View {
                     }
                     Toggle("搜索建议", isOn: Binding(get: { model.profile.settings.searchSuggestions }, set: { value in model.updateProfile(session.profileID) { $0.settings.searchSuggestions = value } }))
                     NavigationLink("自定义搜索引擎") { CustomEngineView() }
+                    NavigationLink("地址栏快捷方式") { URLShortcutView() }
                     Toggle("首页沉浸壁纸", isOn: Binding(get: { model.profile.settings.immersiveWallpaper }, set: { value in model.updateProfile(session.profileID) { $0.settings.immersiveWallpaper = value } }))
                     Button(model.profile.settings.wallpaperFile.isEmpty ? "选择首页壁纸" : "更换首页壁纸") { wallpaper = true }
                     if !model.profile.settings.wallpaperFile.isEmpty { Button("清除首页壁纸", role: .destructive) { model.clearWallpaper() } }
@@ -854,5 +855,39 @@ struct CustomEngineView: View {
                 profile.settings.customEngines[index][keyPath: key] = String(value.prefix(40))
             }
         })
+    }
+}
+
+struct URLShortcutView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var keyword = ""
+    @State private var address = ""
+    var body: some View {
+        Form {
+            if model.profile.settings.urlShortcuts.isEmpty { ContentUnavailableView("还没有快捷方式", systemImage: "link", description: Text("输入关键词就打开一个网址，例如 gh → GitHub。")) }
+            ForEach(model.profile.settings.urlShortcuts) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.keyword).font(.headline)
+                    Text(item.url).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }.onDelete { index in
+                model.updateProfile(model.profile.id) { $0.settings.urlShortcuts.remove(atOffsets: index) }
+            }
+            TextField("关键词", text: $keyword).textInputAutocapitalization(.never).autocorrectionDisabled()
+            TextField("https://example.com", text: $address).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+            Button("添加") { add() }.disabled(keyword.trimmingCharacters(in: .whitespaces).isEmpty || URL(string: address) == nil)
+            Text("地址栏只输入这个关键词时会打开对应网址，不记入搜索历史。").font(.footnote).foregroundStyle(.secondary)
+        }.navigationTitle("地址栏快捷方式")
+    }
+    private func add() {
+        let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, !key.contains(where: { $0.isWhitespace || $0 == "." }),
+              let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+        model.updateProfile(model.profile.id) { profile in
+            profile.settings.urlShortcuts.removeAll { $0.keyword.lowercased() == key }
+            profile.settings.urlShortcuts.append(URLShortcut(keyword: String(key.prefix(40)), url: url.absoluteString))
+        }
+        keyword = ""; address = ""
     }
 }

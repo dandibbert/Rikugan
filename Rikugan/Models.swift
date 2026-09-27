@@ -113,7 +113,7 @@ struct UserScript: Codable, Identifiable, Equatable {
         "GM_xmlhttpRequest": "Partial。无 Cookie，按 @connect 检查重定向，onprogress 报告已下载字节，abort() 会取消 URLSession 任务。单次响应 8 MB。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
         "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",
-        "unsafeWindow": "Partial。@grant none 就是页面 window。隔离脚本把没有外部绑定的函数源码注入页面，调用和返回都在页面里。闭包会在页面放一个桩：测试里同步回调隔离世界；在 WKContentWorld 里由 rikuganPage 把调用送回该脚本的隔离世界执行。",
+        "unsafeWindow": "Partial。@grant none 就是页面 window。没有外部绑定的函数，以及只闭合 JSON 可序列化局部变量的函数，会把局部变量内联后把源码注入页面，调用和返回都在页面里同步完成。其余闭包在页面放桩，通过 rikuganPage 的 iso-call 在隔离世界执行，结果写入 window.__rgResults 和 data-rg-iso-result。不使用同步自定义协议请求。",
         "document-body": "Supported。document-start 注入后等到 body 存在再执行。"
     ]
 
@@ -234,10 +234,15 @@ enum URLRules {
               ["https", "http", "rikugan", "chrome", "edge"].contains(scheme) else { return nil }
         return url
     }
-    static func inputURL(_ input: String, searchEngine: String, customEngines: [SearchEngine] = []) -> URL? {
+    static func inputURL(_ input: String, searchEngine: String, customEngines: [SearchEngine] = [], shortcuts: [URLShortcut] = []) -> URL? {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
         if let direct = directURL(value) { return direct }
+        if !value.contains(where: { $0.isWhitespace }),
+           let shortcut = shortcuts.first(where: { $0.keyword.compare(value, options: .caseInsensitive) == .orderedSame }),
+           let url = URL(string: shortcut.url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            return url
+        }
         if let space = value.firstIndex(where: { $0.isWhitespace }) {
             let key = String(value[..<space])
             let rest = value[value.index(after: space)...].trimmingCharacters(in: .whitespaces)

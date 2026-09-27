@@ -120,6 +120,8 @@ final class CoreTests: XCTestCase {
         let engine = SearchEngine(name: "C", template: "https://example.com/search?q={query}", keyword: "zz")
         let custom = try XCTUnwrap(URLRules.inputURL("zz a+b", searchEngine: "", customEngines: [engine]))
         XCTAssertEqual(URLComponents(url: custom, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "a+b")
+        let jump = URLRules.inputURL("gh", searchEngine: "https://example.com/?q=", shortcuts: [URLShortcut(keyword: "gh", url: "https://github.com/")])
+        XCTAssertEqual(jump?.absoluteString, "https://github.com/")
         XCTAssertEqual(URLRules.inputURL("chrome://extensions", searchEngine: "")?.scheme, "chrome")
         XCTAssertEqual(InternalPages.kind(URL(string: "edge://extensions")!), "extensions")
         XCTAssertEqual(InternalPages.kind(URL(string: "rikugan://settings")!), "settings")
@@ -180,6 +182,8 @@ final class CoreTests: XCTestCase {
             "example.com#%#//scriptlet('abort-on-property-read', 'alert')",
             "example.com##+js(set-constant, canRunAds, false)",
             "||ads.test^$redirect=noopjs",
+            "||pixel.test^$redirect=1x1",
+            "||blank.test^$redirect=empty",
             "||news.example^$removeparam=utm_source",
             "||news.example^$csp=script-src 'none'",
             "||news.example^$replace=/a/b/",
@@ -208,6 +212,12 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(compiled.scriptletJSON.contains("\"scriptlet\""))
         XCTAssertTrue(compiled.scriptletJSON.contains("abort-on-property-read"))
         XCTAssertTrue(compiled.scriptletJSON.contains("set-constant"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("__rgRedirect.noopjs"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("noopFunc"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("prevent-fetch"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("ads.test"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("__rgRedirect.empty"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("__rgRedirect.pixel"))
         XCTAssertTrue(compiled.networkJSON.contains("block"))
         XCTAssertFalse(compiled.networkJSON.contains("redirect"))
         XCTAssertEqual(compiled.removeParams.first?.key, "utm_source")

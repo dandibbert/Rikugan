@@ -55,6 +55,12 @@ struct SearchEngine: Codable, Identifiable, Equatable {
     var keyword = ""
 }
 
+struct URLShortcut: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var keyword: String
+    var url: String
+}
+
 struct ImportedFont: Codable, Identifiable, Equatable {
     var id = UUID()
     var family: String
@@ -82,6 +88,7 @@ struct BrowserSettings: Equatable {
     var customRules: [CustomBlockRule] = []
     var subscriptions: [FilterSubscription] = []
     var customEngines: [SearchEngine] = []
+    var urlShortcuts: [URLShortcut] = []
     var webFontFamily = ""
     var importedFonts: [ImportedFont] = []
     var inspectable = true
@@ -96,7 +103,7 @@ extension BrowserSettings: Codable {
     enum CodingKeys: String, CodingKey {
         case addressBar, darkMode, homepage, homepageURL, immersiveWallpaper, wallpaperFile
         case preventAppStoreRedirect, preventExternalAppRedirect, contentBlocking, builtInRules
-        case customRules, subscriptions, customEngines, webFontFamily, importedFonts, inspectable
+        case customRules, subscriptions, customEngines, urlShortcuts, webFontFamily, importedFonts, inspectable
         case shortcuts, translateTarget, reader, translationBackend, searchSuggestions
     }
     init(from decoder: Decoder) throws {
@@ -115,6 +122,7 @@ extension BrowserSettings: Codable {
         customRules = try container.decodeIfPresent([CustomBlockRule].self, forKey: .customRules) ?? customRules
         subscriptions = try container.decodeIfPresent([FilterSubscription].self, forKey: .subscriptions) ?? subscriptions
         customEngines = try container.decodeIfPresent([SearchEngine].self, forKey: .customEngines) ?? customEngines
+        urlShortcuts = try container.decodeIfPresent([URLShortcut].self, forKey: .urlShortcuts) ?? urlShortcuts
         webFontFamily = try container.decodeIfPresent(String.self, forKey: .webFontFamily) ?? webFontFamily
         importedFonts = try container.decodeIfPresent([ImportedFont].self, forKey: .importedFonts) ?? importedFonts
         inspectable = try container.decodeIfPresent(Bool.self, forKey: .inspectable) ?? inspectable
@@ -139,6 +147,7 @@ extension BrowserSettings: Codable {
         try container.encode(customRules, forKey: .customRules)
         try container.encode(subscriptions, forKey: .subscriptions)
         try container.encode(customEngines, forKey: .customEngines)
+        try container.encode(urlShortcuts, forKey: .urlShortcuts)
         try container.encode(webFontFamily, forKey: .webFontFamily)
         try container.encode(importedFonts, forKey: .importedFonts)
         try container.encode(inspectable, forKey: .inspectable)

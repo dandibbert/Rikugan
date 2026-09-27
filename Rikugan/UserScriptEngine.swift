@@ -1,48 +1,10 @@
 import UIKit
 import WebKit
 
-/// Sync page → isolated calls use `rikugan-bridge://`. The handler answers the custom-scheme
-/// request from the app process. WebKit will not run `evaluateJavaScript` in the same web view
-/// while that view is blocked on the synchronous XHR, so the reply waits at most 300ms and then
-/// returns. Pure functions still return immediately because they run in the page.
-final class ScriptBridge: NSObject, WKURLSchemeHandler {
-    weak var tab: BrowserTab?
-    private var stopped = Set<ObjectIdentifier>()
-
-    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        let url = urlSchemeTask.request.url
-        let body = urlSchemeTask.request.httpBody ?? Data("[]".utf8)
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let url else { return }
-            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-            let handler = items.first { $0.name == "handler" }?.value ?? ""
-            let id = Int(items.first { $0.name == "id" }?.value ?? "") ?? 0
-            let args = (try? JSONSerialization.jsonObject(with: body)) ?? []
-            var finished = false
-            let complete: (String) -> Void = { text in
-                if finished || self.stopped.contains(ObjectIdentifier(urlSchemeTask)) { return }
-                finished = true
-                self.finish(urlSchemeTask, url: url, body: text)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { complete("{\"t\":\"val\",\"u\":1}") }
-            guard let tab = self.tab else { complete("{\"t\":\"err\",\"e\":\"sync bridge unavailable\"}"); return }
-            tab.scriptEngine.invokeIsolated(handler: handler, id: id, args: args, webView: webView, completion: complete)
-        }
-    }
-
-    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        stopped.insert(ObjectIdentifier(urlSchemeTask))
-    }
-
-    private func finish(_ task: WKURLSchemeTask, url: URL, body: String) {
-        guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
-            "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"
-        ]) else { return }
-        task.didReceive(response)
-        task.didReceive(Data(body.utf8))
-        task.didFinish()
-    }
-}
+/// Isolated closures that cannot be serialized post `iso-call` on `rikuganPage`.
+/// Swift evaluates the function in that script's content world and writes the JSON
+/// result onto `window.__rgResults` in the page. There is no synchronous custom-scheme
+/// request, because that request deadlocks `evaluateJavaScript` in the same web view.
 
 struct ScriptCommand: Identifiable {
     var id: String

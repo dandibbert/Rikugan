@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('Rikugan/Resources/PageTools.js', 'utf8');
+const { classify, options, redirectScriptlets } = require('./adblock_subset.cjs');
 
 function element(tag, props = {}) {
   return {
@@ -85,7 +86,6 @@ assert.equal(sandbox.RikuganPageTools.countMatches('cats'), 2);
 assert.equal(marked, false);
 assert.equal(sandbox.RikuganPageTools.countMatches(''), 0);
 
-const { classify, options } = require('./adblock_subset.cjs');
 assert.equal(classify('||ads.example^'), 'block');
 assert.equal(classify('@@||ads.example^'), 'allow');
 assert.equal(classify('||ads.example^$script,third-party'), 'block');
@@ -105,6 +105,14 @@ assert.equal(classify('#%#scriptlet'), 'drop');
 assert.equal(classify("example.com#%#//scriptlet('abort-on-property-read', 'alert')"), 'scriptlet');
 assert.equal(classify('example.com##+js(set-constant, canRunAds, false)'), 'scriptlet');
 assert.equal(classify('||ads.example^$redirect=noopjs'), 'block');
+const noopStubs = redirectScriptlets('||ads.example^$redirect=noopjs');
+assert.equal(noopStubs[0].name, 'set-constant');
+assert.deepEqual(noopStubs[0].args, ['__rgRedirect.noopjs', 'noopFunc']);
+assert.equal(noopStubs[1].name, 'prevent-fetch');
+assert.deepEqual(noopStubs[1].args, ['ads.example']);
+assert.equal(redirectScriptlets('||blank.test^$redirect=empty')[0].args[0], '__rgRedirect.empty');
+assert.equal(redirectScriptlets('||pixel.test^$redirect=1x1')[0].args[0], '__rgRedirect.pixel');
+assert.deepEqual(redirectScriptlets('||ads.example^$redirect=googletag'), []);
 assert.equal(classify('||news.example^$removeparam=utm_source'), 'removeparam');
 assert.equal(classify("||news.example^$csp=script-src 'none'"), 'csp');
 assert.equal(classify('||news.example^$replace=/a/b/'), 'replace');
@@ -163,6 +171,20 @@ const pruned = sandbox.JSON.parse('{"ad":1,"title":"x","nested":{"ad":2}}');
 assert.equal(pruned.ad, undefined);
 assert.equal(pruned.title, 'x');
 assert.equal(pruned.nested.ad, undefined);
+sandbox.RikuganPageTools.applyScriptlets([
+  { domains: ['news.example'], name: 'set-constant', args: ['__rgRedirect.noopjs', 'noopFunc'] },
+  { domains: ['news.example'], name: 'set-constant', args: ['__rgRedirect.empty', "''"] },
+  { domains: ['news.example'], name: 'set-constant', args: ['__rgRedirect.pixel', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'] }
+]);
+assert.equal(typeof sandbox.__rgRedirect.noopjs, 'function');
+assert.equal(sandbox.__rgRedirect.noopjs(), undefined);
+assert.equal(sandbox.__rgRedirect.empty, '');
+assert.match(sandbox.__rgRedirect.pixel, /^data:image\/gif/);
 assert.equal(classify('example.com#@#.ad'), 'unhide');
+
+sandbox.performance = { getEntriesByType(type) { return type === 'navigation' ? [{ name: 'https://cdn.example/clip.mp4', transferSize: 9 }] : []; } };
+sandbox.document = { querySelectorAll() { return []; } };
+const navigated = sandbox.RikuganPageTools.collectMedia();
+assert.equal(navigated.some(item => item.url === 'https://cdn.example/clip.mp4' && item.kind === 'video' && item.size === 9), true);
 
 console.log('PASS: page tools selector, dark CSS, playlists, find count, adblock subset');

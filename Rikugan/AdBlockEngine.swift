@@ -4,6 +4,8 @@ import Foundation
 /// Network and cosmetic rules become WKContentRuleList chunks installed by `BrowserTab.syncContentRules`.
 /// `#%#` / `##+js` scriptlets in the built-in set run from `PageTools.applyScriptlets`.
 /// `$redirect` and `$redirect-rule` compile as `block` because content rules cannot redirect.
+/// noopjs, empty, and 1x1 also install a page scriptlet that defines the empty value
+/// (`__rgRedirect.noopjs` / `.empty` / `.pixel`) and prevent-fetch for that host.
 /// `$removeparam` is applied to main-frame navigations. `$replace` rewrites text in the page
 /// after load and in fetch/XHR bodies; binary responses are left alone.
 /// This is not a bundled EasyList.
@@ -125,6 +127,9 @@ enum AdBlockEngine {
                     for item in options.replaces {
                         replacements.append(["needle": needle, "regex": item.regex, "replacement": item.replacement, "flags": item.flags])
                     }
+                }
+                if let resource = options.redirectResource {
+                    scriptlets.append(contentsOf: redirectStubs(resource: resource, filter: filter))
                 }
                 let network = options.redirect || (options.removeParams.isEmpty && options.csp == nil && options.replaces.isEmpty)
                 if network, var trigger = trigger(filter) {
@@ -254,6 +259,7 @@ enum AdBlockEngine {
         var ifDomains: [String] = []
         var unlessDomains: [String] = []
         var redirect = false
+        var redirectResource: String?
         var removeParams: [ParamRule] = []
         var csp: String?
         var replaces: [(regex: String, replacement: String, flags: String)] = []
@@ -349,6 +355,23 @@ enum AdBlockEngine {
         return (parts[0], parts[1], flags)
     }
 
+    private static func redirectStubs(resource: String, filter: String) -> [[String: Any]] {
+        let domains = hosts(of: filter)
+        let pattern = domains.first ?? ""
+        let key = resource.lowercased()
+        let pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+        let constant: [String]
+        switch key {
+        case "noopjs", "noop.js": constant = ["__rgRedirect.noopjs", "noopFunc"]
+        case "empty": constant = ["__rgRedirect.empty", "''"]
+        case "1x1", "1x1.gif": constant = ["__rgRedirect.pixel", pixel]
+        default: return []
+        }
+        var rows: [[String: Any]] = [["domains": domains, "name": "set-constant", "args": constant]]
+        if !pattern.isEmpty { rows.append(["domains": domains, "name": "prevent-fetch", "args": [pattern]]) }
+        return rows
+    }
+
     private static func hosts(of filter: String) -> [String] {
         var pattern = filter
         guard pattern.hasPrefix("||") else { return [] }
@@ -390,10 +413,17 @@ enum AdBlockEngine {
             case "document", "subdocument": types.append("document")
             case "popup": types.append("popup")
             case "all", "important", "match-case": break
-            case "redirect", "redirect-rule": options.redirect = true
+            case "redirect", "redirect-rule":
+                options.redirect = true
+                if options.redirectResource == nil { options.redirectResource = "empty" }
             case "jsonprune": return false
             default:
-                if token.hasPrefix("redirect=") || token.hasPrefix("redirect-rule=") { options.redirect = true; continue }
+                if token.hasPrefix("redirect=") || token.hasPrefix("redirect-rule=") {
+                    options.redirect = true
+                    let raw = token.split(separator: "=", maxSplits: 1).last.map(String.init) ?? ""
+                    if !raw.isEmpty { options.redirectResource = raw }
+                    continue
+                }
                 if token == "removeparam" || token.hasPrefix("removeparam=") {
                     let raw = token.hasPrefix("removeparam=") ? String(token.dropFirst("removeparam=".count)) : ""
                     if raw.hasPrefix("/"), raw.hasSuffix("/"), raw.count > 2 {

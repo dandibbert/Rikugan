@@ -204,6 +204,11 @@ extension BrowserTab: WKScriptMessageHandler {
             return nil
         }
     }
+    func publishIsolatedResult(id: Int, json: String) {
+        let literal = PageTools.jsString(json) ?? "\"\""
+        let source = "window.__rgResults=window.__rgResults||{};try{window.__rgResults[\(id)]=JSON.parse(\(literal));}catch(e){window.__rgResults[\(id)]={t:'err',e:'bad result'};}var node=document.documentElement;if(node&&node.setAttribute)node.setAttribute('data-rg-iso-result',\(literal));"
+        webView.evaluateJavaScript(source, in: nil, in: .page) { _, _ in }
+    }
     func printPage() {
         let controller = UIPrintInteractionController.shared
         let info = UIPrintInfo.printInfo()
@@ -217,7 +222,9 @@ extension BrowserTab: WKScriptMessageHandler {
         guard message.name == "rikuganPage", let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         if action == "iso-call", let handler = body["handler"] as? String, let id = (body["id"] as? Int) ?? (body["id"] as? NSNumber)?.intValue {
             let args: Any = body["args"] ?? ([] as [Any])
-            scriptEngine.invokeIsolated(handler: handler, id: id, args: args, webView: webView)
+            scriptEngine.invokeIsolated(handler: handler, id: id, args: args, webView: webView) { [weak self] json in
+                self?.publishIsolatedResult(id: id, json: json)
+            }
             return
         }
         if action == "console" {

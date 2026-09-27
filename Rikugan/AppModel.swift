@@ -128,7 +128,7 @@ struct PageNotice: Identifiable, Equatable {
         guard let pending = pendingShare, let session else { return }
         pendingShare = nil
         if pending.action == "search" { session.activeTab?.loadInput(pending.value) }
-        else if let url = URL(string: pending.value) ?? URLRules.inputURL(pending.value, searchEngine: profile.searchEngine) {
+        else if let url = URL(string: pending.value) ?? URLRules.inputURL(pending.value, searchEngine: profile.searchEngine, customEngines: profile.settings.customEngines, shortcuts: profile.settings.urlShortcuts) {
             if session.activeTab?.isHome == true { session.activeTab?.navigate(url) } else { session.addTab(url: url) }
         }
     }
