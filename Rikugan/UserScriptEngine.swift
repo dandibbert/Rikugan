@@ -18,6 +18,7 @@ struct ScriptCommand: Identifiable {
         let world: WKContentWorld
     }
     private var clients: [String: Client] = [:]
+    private var requests: [String: (scriptID: UUID, worker: ScriptNetwork)] = [:]
     private static let template: String = {
         guard let url = Bundle.main.url(forResource: "UserscriptRuntime", withExtension: "js"), let source = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return source
@@ -25,6 +26,11 @@ struct ScriptCommand: Identifiable {
 
     func configure(_ controller: WKUserContentController, scripts enabledScripts: [UserScript]) {
         let previous = scripts
+        for (id, request) in requests {
+            let old = previous.values.first { $0.id == request.scriptID }
+            let next = enabledScripts.first { $0.id == request.scriptID && $0.enabled }
+            if next == nil || next?.source != old?.source { request.worker.cancel(); requests.removeValue(forKey: id) }
+        }
         clients = clients.filter { _, client in
             guard let next = enabledScripts.first(where: { $0.id == client.scriptID && $0.enabled }),
                   let old = previous.values.first(where: { $0.id == client.scriptID }) else { return false }
@@ -69,11 +75,15 @@ struct ScriptCommand: Identifiable {
         for handler in handlers { controller.removeScriptMessageHandler(forName: handler.name, contentWorld: handler.world) }
         handlers.removeAll(); scripts.removeAll()
     }
-    func resetDocument() { clients.removeAll() }
+    func resetDocument() {
+        clients.removeAll()
+        for request in requests.values { request.worker.cancel() }
+        requests.removeAll()
+    }
     func deliverStorageChange(scriptID: UUID, event: [String: Any]) {
         guard let webView = tab?.existingWebView else { return }
         for (id, client) in clients where client.scriptID == scriptID {
-            webView.callAsyncJavaScript("return globalThis.__rikuganStorageChange?.(clientID, event)", arguments: ["clientID": id, "event": event], in: client.frame, contentWorld: client.world) { [weak self] result in
+            webView.callAsyncJavaScript("globalThis.__rikuganStorageChange?.(clientID, event); return true", arguments: ["clientID": id, "event": event], in: client.frame, in: client.world) { [weak self] result in
                 if case .failure = result { self?.clients.removeValue(forKey: id) }
             }
         }
@@ -88,7 +98,7 @@ struct ScriptCommand: Identifiable {
             replyHandler(nil, "脚本或页面未授权。"); return
         }
         let storageAccess = ["getValue", "setValue", "deleteValue", "listValues", "addValueChangeListener"].contains { script.permits($0) }
-        guard script.permits(operation) || (operation == "observeStorage" && storageAccess) else { replyHandler(nil, "缺少 @grant GM.\(operation)"); return }
+        guard script.permits(operation) || (operation == "observeStorage" && storageAccess) || (operation == "abortRequest" && script.permits("xmlHttpRequest")) else { replyHandler(nil, "缺少 @grant GM.\(operation)"); return }
         let args = body["args"] as? [String: Any] ?? [:]
         let clientID = body["client"] as? String ?? ""
         switch operation {
@@ -131,18 +141,36 @@ struct ScriptCommand: Identifiable {
                 replyHandler(nil, "找不到 @resource \(args["name"] as? String ?? "")。"); return
             }
             replyHandler(operation == "getResourceURL" ? resource.dataURL : resource.text, nil)
+        case "abortRequest":
+            let id = script.id.uuidString + "/" + clientID + "/" + (args["id"] as? String ?? "")
+            requests.removeValue(forKey: id)?.worker.cancel()
+            replyHandler(true, nil)
         case "xmlHttpRequest":
-            guard let raw = args["url"] as? String, let url = URL(string: raw, relativeTo: origin)?.absoluteURL else { replyHandler(nil, "无效的请求 URL。"); return }
-            var request = URLRequest(url: url)
-            request.httpMethod = args["method"] as? String ?? "GET"
-            request.httpBody = (args["data"] as? String)?.data(using: .utf8)
-            if let headers = args["headers"] as? [String: String] {
-                for (key, value) in headers where !["host", "content-length", "connection"].contains(key.lowercased()) { request.setValue(value, forHTTPHeaderField: key) }
-            }
-            let rules = script.connects + ["self"]
-            ScriptNetwork.fetch(request, permits: { URLRules.connectionAllowed($0, origin: origin, rules: rules) }) { result in
-                switch result { case .success(let value): replyHandler(value, nil); case .failure(let error): replyHandler(nil, error.localizedDescription) }
-            }
+            do {
+                guard let requestID = args["id"] as? String, !requestID.isEmpty, requestID.count < 128,
+                      !clientID.isEmpty, clientID.count < 128, requests.count < 16 else { throw RikuganError.message("请求标识无效或并发请求超过 16 个。") }
+                let id = script.id.uuidString + "/" + clientID + "/" + requestID
+                guard requests[id] == nil else { throw RikuganError.message("重复的请求标识。") }
+                let built = try ScriptRequest.build(args, origin: origin)
+                let rules = script.connects + ["self"]
+                let frame = message.frameInfo, world = WKContentWorld.world(name: "rikugan.script." + script.id.uuidString)
+                let worker = ScriptNetwork.fetch(built.request, permits: { URLRules.connectionAllowed($0, origin: origin, rules: rules) }, timeout: built.timeout,
+                    progress: { [weak self] value in
+                        self?.tab?.existingWebView?.callAsyncJavaScript("globalThis.__rikuganXHRProgress?.(clientID, requestID, value); return true",
+                            arguments: ["clientID": clientID, "requestID": requestID, "value": value], in: frame, in: world) { [weak self] result in
+                                if case .failure = result { self?.requests.removeValue(forKey: id)?.worker.cancel() }
+                            }
+                    }) { [weak self] result in
+                        self?.requests.removeValue(forKey: id)
+                        switch result {
+                        case .success(let value): replyHandler(value, nil)
+                        case .failure(let error):
+                            let code = (error as NSError).code
+                            replyHandler(["error": error.localizedDescription, "kind": code == NSURLErrorCancelled ? "abort" : code == NSURLErrorTimedOut ? "timeout" : "error"], nil)
+                        }
+                    }
+                if let worker { requests[id] = (script.id, worker) }
+            } catch { replyHandler(["error": error.localizedDescription, "kind": "error"], nil) }
         default: replyHandler(nil, "尚未支持此 API。")
         }
     }

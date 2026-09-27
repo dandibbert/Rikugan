@@ -4,13 +4,55 @@ from pathlib import Path
 from functools import partial
 import re
 import time
+import json
+import base64
 
 ROOT = Path(__file__).resolve().parents[1] / "Tests" / "Fixtures"
 SIZE = 4 * 1024 * 1024
 
 
 class Handler(SimpleHTTPRequestHandler):
+    def do_POST(self):
+        if self.path.split("?")[0] != "/__echo":
+            return self.send_error(404)
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > 2_000_000:
+            return self.send_error(413)
+        self.echo(self.rfile.read(length))
+
+    def echo(self, body=b""):
+        data = json.dumps({"method": self.command, "body": base64.b64encode(body).decode(),
+                           "contentType": self.headers.get("Content-Type", ""),
+                           "cookie": self.headers.get("Cookie", "")}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/__echo":
+            return self.echo()
+        if path == "/__redirect":
+            self.send_response(302)
+            self.send_header("Location", "http://localhost:8765/__echo")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/__slow":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(64 * 1024))
+            self.end_headers()
+            try:
+                for _ in range(64):
+                    self.wfile.write(b"x" * 1024)
+                    self.wfile.flush()
+                    time.sleep(0.05)
+            except (BrokenPipeError, ConnectionResetError):
+                self.log_message("SLOW client cancelled")
+            return
         if self.path.split("?")[0] != "/__download.bin":
             return super().do_GET()
         if "download-auth=yes" not in self.headers.get("Cookie", ""):

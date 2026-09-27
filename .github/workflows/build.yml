@@ -28,6 +28,7 @@ jobs:
           python3 scripts/prepare_resources.py
           node scripts/test_runtime.cjs
           node scripts/test_storage_events.cjs
+          node scripts/test_xhr.cjs
           node scripts/test_page_tools.cjs
           node scripts/test_web_fonts.cjs
           python3 scripts/test_fixture_server.py

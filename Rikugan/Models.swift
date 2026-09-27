@@ -113,7 +113,7 @@ struct UserScript: Codable, Identifiable, Equatable {
     static let capabilityNotes: [String: String] = [
         "GM_getValue": "Supported。同步镜像通过原生通知跨标签/iframe 更新；GM.getValue 从原生存储读取。",
         "GM_addValueChangeListener": "Supported。提供旧值、新值和 remote；按脚本、身份、无痕会话隔离，删除使用 undefined。",
-        "GM_xmlhttpRequest": "Partial。无 Cookie、无流式进度，单次 8 MB，按 @connect 检查重定向。",
+        "GM_xmlhttpRequest": "Partial。支持真实取消、超时、下载进度、FormData/二进制正文和常见响应类型；不自动附带登录 Cookie，不支持 stream/同步请求。响应最多 8 MB，正文 2 MB。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
         "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",
         "unsafeWindow": "Partial。@grant none 就是页面 window；隔离脚本只能用 unsafeWindow.eval，或给 JSON 可序列化属性赋值。",
@@ -266,7 +266,9 @@ enum URLRules {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host?.lowercased(), url.user == nil, url.password == nil else { return false }
         return rules.contains { rule in
             let r = rule.lowercased()
-            return r == "*" || (r == "self" && host == origin.host?.lowercased()) || host == r || host.hasSuffix("." + r)
+            let sameOrigin = host == origin.host?.lowercased() && url.scheme?.lowercased() == origin.scheme?.lowercased()
+                && (url.port ?? (url.scheme == "https" ? 443 : 80)) == (origin.port ?? (origin.scheme == "https" ? 443 : 80))
+            return r == "*" || (r == "self" && sameOrigin) || (r != "self" && (host == r || host.hasSuffix("." + r)))
         }
     }
 }

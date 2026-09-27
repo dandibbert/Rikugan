@@ -199,6 +199,7 @@ struct BrowserPage: View {
                         .accessibilityLabel(tab.isLoading ? "停止" : "刷新")
                 }
             }.padding(.horizontal, 14).frame(height: 46).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+            ExtensionActionStrip(session: session, tab: tab)
             HStack {
                 Button { tab.webView.goBack() } label: { Image(systemName: "chevron.left").frame(width: 32, height: 30) }.disabled(!tab.canGoBack).accessibilityLabel("后退")
                 Button { tab.webView.goForward() } label: { Image(systemName: "chevron.right").frame(width: 32, height: 30) }.disabled(!tab.canGoForward).accessibilityLabel("前进")

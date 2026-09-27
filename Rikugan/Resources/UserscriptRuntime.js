@@ -115,21 +115,113 @@
     callbacks[id] = callback; void call('registerMenuCommand', {id, title: String(title)}).catch(console.error); return id;
   } : undefined;
   const GM_unregisterMenuCommand = allowed('unregisterMenuCommand') ? id => { delete callbacks[id]; return call('unregisterMenuCommand', {id}); } : undefined;
-  const xhr = details => {
-    const args = {url: String(details.url), method: details.method || 'GET', headers: details.headers || {}, data: typeof details.data === 'string' ? details.data : null};
-    let aborted = false;
-    const promise = call('xmlHttpRequest', args).then(response => {
-      if (aborted) return;
-      response.response = response.responseText;
-      if (details.responseType === 'json') { try { response.response = JSON.parse(response.responseText); } catch (_) { response.response = null; } }
-      if (details.responseType === 'arraybuffer' || details.responseType === 'blob') {
-        const bytes = Uint8Array.from(atob(response.responseBase64), c => c.charCodeAt(0));
-        response.response = details.responseType === 'blob' ? new Blob([bytes]) : bytes.buffer;
+  const activeXHR = new Map();
+  globalThis.__rikuganXHRProgress = (id, requestID, value) => {
+    if (id === clientID && matched(location.href)) activeXHR.get(requestID)?.(value);
+  };
+  const encodeBody = async (details, headers) => {
+    const body = details.data;
+    if (body === undefined || body === null) return {};
+    const hasType = () => Object.keys(headers).some(key => key.toLowerCase() === 'content-type');
+    let blob;
+    if (typeof body === 'string' && !details.binary) {
+      if (new TextEncoder().encode(body).byteLength > 2000000) throw new Error('Request body exceeds 2 MB');
+      return {data: body};
+    }
+    if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+      if (!hasType()) headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+      const text = body.toString();
+      if (text.length > 2000000) throw new Error('Request body exceeds 2 MB');
+      return {data: text};
+    }
+    if (typeof FormData !== 'undefined' && body instanceof FormData) {
+      const boundary = 'Rikugan-' + Math.random().toString(36).slice(2) + Date.now();
+      const parts = [], quote = text => String(text).replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/"/g, '%22');
+      let count = 0, size = 0;
+      for (const [key, value] of body.entries()) {
+        if (++count > 64) throw new Error('FormData exceeds 64 fields');
+        const file = value instanceof Blob;
+        const header = '--' + boundary + '\r\nContent-Disposition: form-data; name="' + quote(key) + '"' +
+          (file ? '; filename="' + quote(value.name || 'blob') + '"\r\nContent-Type: ' + (value.type || 'application/octet-stream') : '') + '\r\n\r\n';
+        size += header.length + (file ? value.size : new TextEncoder().encode(String(value)).byteLength) + 2;
+        if (size > 2000000) throw new Error('Request body exceeds 2 MB');
+        parts.push(header, value, '\r\n');
+      }
+      parts.push('--' + boundary + '--\r\n');
+      blob = new Blob(parts);
+      if (!hasType()) headers['Content-Type'] = 'multipart/form-data; boundary=' + boundary;
+    } else if (typeof body === 'string' && details.binary) {
+      blob = new Blob([Uint8Array.from(body, character => character.charCodeAt(0) & 255)]);
+    } else if (body instanceof Blob) {
+      blob = body;
+      if (!hasType() && body.type) headers['Content-Type'] = body.type;
+    } else if (ArrayBuffer.isView(body) || Object.prototype.toString.call(body) === '[object ArrayBuffer]') {
+      blob = new Blob([body]);
+    } else throw new Error('Unsupported API: GM XHR body type; use text, Blob, ArrayBuffer, URLSearchParams or FormData');
+    if (blob.size > 2000000) throw new Error('Request body exceeds 2 MB');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 32768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+    return {dataBase64: btoa(binary)};
+  };
+  const xhr = input => {
+    const details = input || {}, id = Math.random().toString(36).slice(2) + '-' + Date.now();
+    let finished = false, dispatched = false, timer, resolve, reject, previousState = 0;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const callback = (name, value) => {
+      try { if (typeof details[name] === 'function') details[name]({...value, context: details.context}); }
+      catch (error) { console.error('[Rikugan GM XHR callback]', error); }
+    };
+    const state = value => {
+      if (value.readyState !== previousState) { previousState = value.readyState; callback('onreadystatechange', value); }
+    };
+    const clean = () => { clearTimeout(timer); activeXHR.delete(id); };
+    const fail = (kind, message) => {
+      if (finished) return;
+      finished = true; clean();
+      const value = {readyState: 4, status: 0, error: String(message)};
+      state(value); callback('on' + kind, value); callback('onloadend', value);
+      const error = new Error(String(message)); error.name = kind === 'abort' ? 'AbortError' : kind === 'timeout' ? 'TimeoutError' : 'Error';
+      reject(error);
+    };
+    const abortNative = () => { if (dispatched) void call('abortRequest', {id}).catch(console.error); };
+    promise.abort = () => { if (!finished) { abortNative(); fail('abort', 'Request aborted'); } };
+    activeXHR.set(id, value => { if (!finished) { state(value); if (value.readyState === 3) callback('onprogress', value); } });
+    Promise.resolve().then(async () => {
+      const type = details.responseType || 'text';
+      if (!['text', 'json', 'arraybuffer', 'blob', 'document'].includes(type)) throw new Error('Unsupported API: GM XHR responseType ' + type);
+      for (const option of ['synchronous', 'fetch', 'cookiePartition', 'proxy', 'user', 'password', 'overrideMimeType']) {
+        if (details[option]) throw new Error('Unsupported API: GM XHR option ' + option);
+      }
+      if (details.redirect && details.redirect !== 'follow') throw new Error('Unsupported API: GM XHR redirect ' + details.redirect);
+      if (details.cookie) throw new Error('Unsupported API: automatic cookie merging; GM XHR uses an ephemeral cookie-free session');
+      const timeout = details.timeout === undefined ? 0 : Number(details.timeout);
+      if (!Number.isFinite(timeout) || timeout < 0 || timeout > 120000) throw new Error('timeout must be 0–120000 milliseconds');
+      if (finished) return;
+      if (timeout > 0) timer = setTimeout(() => { abortNative(); fail('timeout', 'Request timed out'); }, timeout);
+      const headers = {...details.headers};
+      const body = await encodeBody(details, headers);
+      if (finished) return;
+      state({readyState: 1, status: 0}); callback('onloadstart', {readyState: 1, status: 0});
+      dispatched = true;
+      const response = await call('xmlHttpRequest', {id, url: String(details.url), method: details.method || 'GET', headers, timeout, ...body});
+      if (finished) return;
+      if (response.error) { fail(response.kind || 'error', response.error); return; }
+      response.readyState = 4; response.response = response.responseText;
+      if (type === 'json') { try { response.response = JSON.parse(response.responseText); } catch (_) { response.response = null; } }
+      if (type === 'arraybuffer' || type === 'blob') {
+        const bytes = Uint8Array.from(atob(response.responseBase64), character => character.charCodeAt(0));
+        const mime = (response.responseHeaders || '').match(/^content-type:\s*([^\r\n]+)/im)?.[1] || '';
+        response.response = type === 'blob' ? new Blob([bytes], {type: mime}) : bytes.buffer;
+      }
+      if (type === 'document') {
+        response.responseXML = new DOMParser().parseFromString(response.responseText, /content-type:\s*text\/html/i.test(response.responseHeaders || '') ? 'text/html' : 'application/xml');
+        response.response = response.responseXML;
       }
       delete response.responseBase64;
-      details.onload?.(response); return response;
-    }).catch(error => { if (!aborted) details.onerror?.({error: String(error)}); throw error; });
-    promise.abort = () => { aborted = true; details.onabort?.({}); };
+      response.context = details.context;
+      finished = true; clean(); state(response); callback('onload', response); callback('onloadend', response); resolve(response);
+    }).catch(error => fail('error', error));
     return promise;
   };
   const GM_xmlhttpRequest = allowed('xmlHttpRequest') ? details => {

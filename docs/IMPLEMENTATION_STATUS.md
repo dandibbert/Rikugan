@@ -9,6 +9,10 @@
 
 新增 GM_addValueChangeListener / GM_removeValueChangeListener 及 GM.* 对应接口；本地和远端事件含旧值、新值、remote，删除与 null 区分；同步镜像随原生事件更新。按脚本、身份、无痕隔离；Swift 写盘成功才发送事件。ScriptEventTests 验证真实页面、第二标签、iframe 和无痕，Node 覆盖重叠写入、重复值、取消监听及隔离。以对应 CI 结果为验收，不以测试源码存在代替运行通过。
 
+GM XHR 新增原生 URLSessionDataTask 取消、总超时、下载进度与 readyState、text/URLSearchParams/FormData/Blob/ArrayBuffer 正文、JSON/blob/arraybuffer/document 响应。请求正文最多 2 MB、响应最多 8 MB、每页最多 16 个在途请求；导航/关闭/禁用脚本清理请求；@connect self 精确比较 scheme/host/port，逐跳验证重定向。仍不自动附带浏览器登录 Cookie；stream、同步请求、cookiePartition/proxy 等不支持选项明确报错。ScriptNetworkTests 和 ScriptEventTests 验证真实服务器、桥接与页面，Node 验证序列化和回调。
+
+扩展增加独立可横向滚动的工具栏动作条（图标/标题/徽标/启用状态），点击直接打开原生 popup；无痕不展示。固定测试扩展增加 document_start/end + CSS、background messaging/Port、storage、popup 当前标签、scripting.executeScript、host permissions、DNR 实际阻断；UI 验证实际效果。后台沿用普通证书非持久页面，不宣称完整 Worker 生命周期。
+
 ## 0.3.0 已交付
 
 | 规格/缺口 | 实现 | 验证入口 |
@@ -39,6 +43,6 @@
 - 第三方扩展逐个兼容验收、完整 Worker 语义、更多 Chrome API/规则语法不能承诺；不是所有桌面扩展都能运行。
 - 长期真实内存压力、跨窗口交互、无痕页所有外部打开入口、图片保存/视频/PiP/AirPlay、权限和证书 App Group 行为需要真机验证。
 - 页面 JS 堆不会在挂起后恢复；App 被系统杀死后仅恢复持久化普通标签资料；媒体/下载没有无限后台运行保证。
-- GM 完整同步 XHR/FormData/流式事件尚未实现。
+- GM 流式响应（stream）、完整 Cookie/代理/分区语义、特殊对象/undefined 存储序列化尚未实现；不支持项保持明确错误/Partial。
 
 PlayCover 仅可作部分启动/UI 冒烟测试，不能代替以上真实 iOS 验收。

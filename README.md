@@ -2,7 +2,7 @@
 
 ## 0.4.0 · 分享安装与跨页面脚本通信
 
-新增 `.user.js` 文件/源码分享，多条消息不再共用单个覆盖槽；主 App 逐个展示脚本源码与权限并等待确认。设置中的「待处理分享」可继续或移除。新增 GM_addValueChangeListener / GM_removeValueChangeListener、GM.* 异步对应接口和跨标签/iframe 存储镜像，按脚本、身份及无痕会话隔离。下载文件名为 `Rikugan-0.4.0-unsigned.ipa`；设备签名和第三方扩展兼容仍以实际设备验证为准。
+新增 `.user.js` 文件/源码分享，多条消息不再共用单个覆盖槽；主 App 逐个展示脚本源码与权限并等待确认。设置中的「待处理分享」可继续或移除。新增 GM_addValueChangeListener / GM_removeValueChangeListener、GM.* 异步对应接口和跨标签/iframe 存储镜像。GM XHR 支持实际取消、超时、进度和 FormData/二进制正文；扩展可从工具栏直接打开 popup。下载文件名为 `Rikugan-0.4.0-unsigned.ipa`；设备签名和第三方扩展兼容仍以实际设备验证为准。
 
 ## 0.3.0 · 最新规格续做
 
@@ -55,9 +55,9 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 明确的兼容限制：
 
 - 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。接受 `@grant unsafeWindow`，但其兼容性是 Partial：隔离环境下只提供注入 `eval` 或 JSON 可序列化属性赋值，读取页面对象会抛错；页面 CSP 也可能拒绝注入。页面环境下它就是 `window`。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。
-- 同步 `GM_getValue` 读取当前页面缓存；其他标签修改的值使用异步 `GM.getValue` 读取，或刷新页面。跨标签 value-change listener 尚未实现。存储是 JSON，不支持函数/循环引用/特殊对象序列化。
+- 同步 `GM_getValue` 读取由原生事件更新的镜像；`GM.getValue` 直接读原生存储；支持跨标签/iframe value-change listener 及 remote 标记。存储为 JSON，不支持函数/循环引用/undefined/特殊对象序列化。
 - GM 网络使用无 Cookie 的 ephemeral URLSession，不自动附带浏览器登录 Cookie。按 `@connect` 检查首个请求和每次重定向；同源默认允许。系统 ATS 对普通 HTTP 原生请求仍可能限制；建议 HTTPS。
-- XHR 不支持流式、进度事件、FormData 和完整同步/中间 readyState 语义；`abort()` 当前只中止回调交付，不保证终止底层传输。单次响应限制 8 MB。
+- XHR 支持原生取消、总超时、下载进度、readyState 1/2/3/4、FormData/Blob/ArrayBuffer/URLSearchParams。单次响应 8 MB、正文 2 MB，每页最多 16 个在途请求；页面关闭/导航/脚本禁用时取消。stream、同步请求、完整 Cookie/代理语义不支持并明确报错。
 - 脚本菜单仅支持顶层页面。DOM 注入不是对所有油猴脚本的完整兼容承诺。
 
 只导入自己信任的脚本与扩展。页面数据可能包括登录后内容，授予 `<all_urls>` 或 `@connect *` 前应审阅源码。

@@ -170,9 +170,10 @@ extension BrowserSession {
             contexts[record.id]?.setPermissionStatus(allowed ? .grantedExplicitly : .deniedExplicitly, for: match)
         }
     }
-    func performExtension(_ id: UUID) {
-        guard activeTab?.isPrivate != true else { model?.message = "本版本不向扩展开放无痕标签。"; return }
-        guard let context = contexts[id], let tab = activeTab else { model?.message = "扩展没有载入，请检查扩展详情里的错误。"; return }
+    func performExtension(_ id: UUID, targetTab: BrowserTab? = nil) {
+        guard let tab = targetTab ?? activeTab, tabs.contains(where: { $0.id == tab.id }) else { return }
+        guard !tab.isPrivate else { model?.message = "本版本不向扩展开放无痕标签。"; return }
+        guard let context = contexts[id] else { model?.message = "扩展没有载入，请检查扩展详情里的错误。"; return }
         context.userGesturePerformed(in: tab)
         context.performAction(for: tab)
     }

@@ -11,6 +11,45 @@ import WebKit
         }
         throw RikuganError.message("Timed out: \(expression)")
     }
+    func testRealGMXHRFormDataAbortAndTimeout() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let model = AppModel(storageRoot: root)
+        let script = try UserScript.parse("""
+        // ==UserScript==
+        // @name XHR integration
+        // @match http://127.0.0.1/*
+        // @grant GM.xmlHttpRequest
+        // ==/UserScript==
+        (async () => {
+          try {
+            const form = new FormData(); form.append('field', 'hello');
+            form.append('file', new Blob([new Uint8Array([0,1,255])]), 'probe.bin');
+            const response = await GM.xmlHttpRequest({url: '/__echo', method: 'POST', data: form, responseType: 'json'});
+            const body = atob(response.response.body);
+            if (!response.response.contentType.startsWith('multipart/form-data;') || !body.includes('hello') || !body.includes('probe.bin')) throw new Error('multipart body missing');
+            let progress = false;
+            const request = GM.xmlHttpRequest({url: '/__slow', onprogress: () => { progress = true; request.abort(); }});
+            let abort = '';
+            try { await request; } catch (error) { abort = error.name; }
+            if (!progress || abort !== 'AbortError') throw new Error('abort or progress failed: ' + abort);
+            let timeout = '';
+            try { await GM.xmlHttpRequest({url: '/__slow', timeout: 100}); } catch (error) { timeout = error.name; }
+            if (timeout !== 'TimeoutError') throw new Error('timeout failed: ' + timeout);
+            document.documentElement.dataset.xhrProbe = 'ok';
+          } catch (error) { document.documentElement.dataset.xhrProbe = 'failed:' + String(error); }
+        })();
+        """)
+        model.updateProfile(model.profile.id) { $0.scripts = [script] }
+        let session = BrowserSession(model: model, profileID: model.profile.id); model.session = session
+        defer {
+            session.shutdown(); model.session = nil; try? FileManager.default.removeItem(at: root)
+            WKWebsiteDataStore.remove(forIdentifier: session.profileID) { _ in }
+        }
+        let tab = session.addTab(url: URL(string: "http://127.0.0.1:8765/")!)
+        try await eventually(tab, "!!document.documentElement.dataset.xhrProbe")
+        let result = await PageTools.call("document.documentElement.dataset.xhrProbe", in: tab.webView)
+        XCTAssertEqual(result as? String, "ok")
+    }
     func testCrossTabAndIframeValueEventsWithPrivateIsolation() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let model = AppModel(storageRoot: root)

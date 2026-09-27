@@ -172,7 +172,7 @@ struct ScriptDraft: Identifiable {
     func refreshShareCount() { pendingShareCount = (try? shareInbox.items().count) ?? 0 }
     func handleFile(_ url: URL) {
         Task {
-            working = true; defer { working = false }
+            working = true; defer { working = false; applyPendingShare() }
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             do {
@@ -186,7 +186,8 @@ struct ScriptDraft: Identifiable {
                     guard (values.fileSize ?? 0) <= 2_000_000 else { throw RikuganError.message("脚本不得超过 2 MB。") }
                     let text = try String(contentsOf: url, encoding: .utf8)
                     _ = try UserScript.parse(text)
-                    scriptDraft = ScriptDraft(source: text)
+                    try shareInbox.enqueue(SharedBatch(items: [SharedItem(kind: .script, value: text, name: String(url.lastPathComponent.prefix(120)))]))
+                    refreshShareCount()
                 }
             } catch { message = error.localizedDescription }
         }
@@ -195,11 +196,12 @@ struct ScriptDraft: Identifiable {
         guard let url = URL(string: value), url.scheme?.lowercased() == "https" || (isTesting && url.scheme == "http") else {
             message = "请输入 HTTPS 用户脚本直链。"; return
         }
-        working = true; defer { working = false }
+        working = true; defer { working = false; applyPendingShare() }
         do {
             let text = try await ScriptNetwork.downloadText(url)
             _ = try UserScript.parse(text)
-            scriptDraft = ScriptDraft(source: text)
+            try shareInbox.enqueue(SharedBatch(items: [SharedItem(kind: .script, value: text, name: String(url.lastPathComponent.prefix(120)))]))
+            refreshShareCount()
         } catch { message = error.localizedDescription }
     }
     func installScript(_ source: String, existingID: UUID? = nil, expectedProfileID: UUID? = nil) async throws {

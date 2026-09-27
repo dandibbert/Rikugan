@@ -119,7 +119,7 @@ struct AddonsView: View {
                 .alert("安装自检组件？", isPresented: $confirmDemo) {
                     Button("取消", role: .cancel) {}
                     Button("安装示例") { dismiss(); Task { try? await Task.sleep(nanoseconds: 350_000_000); await model.installDemos() } }
-                } message: { Text("将安装一个示例扩展和一个示例脚本。扩展申请 tabs、storage，以及 example.com 和 127.0.0.1 测试页访问权限。") }
+                } message: { Text("安装示例扩展和脚本。扩展申请 tabs、storage、scripting、declarativeNetRequest，以及 example.com 和 127.0.0.1 的访问权限；DNR 仅阻断名为 extension-blocked 的测试路径。") }
         }
     }
 }

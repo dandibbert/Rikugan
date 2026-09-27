@@ -1,11 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Rikugan Demo",
-  "version": "1.0.0",
-  "description": "Tests content scripts, background messaging, storage.local, tabs.query and action popups.",
-  "permissions": ["storage", "tabs"],
+  "version": "1.1.0",
+  "description": "Tests document_start/end and CSS, messaging and Port, storage, popup/tabs, scripting, permissions and DNR.",
+  "permissions": ["storage", "tabs", "scripting", "declarativeNetRequest"],
   "host_permissions": ["https://example.com/*", "http://127.0.0.1/*"],
   "background": {"service_worker": "background.js"},
   "action": {"default_title": "Rikugan Demo", "default_popup": "popup.html"},
-  "content_scripts": [{"matches": ["https://example.com/*", "http://127.0.0.1/*"], "js": ["content.js"], "run_at": "document_end"}]
+  "declarative_net_request": {"rule_resources": [{"id": "test_rules", "enabled": true, "path": "rules.json"}]},
+  "content_scripts": [
+    {"matches": ["https://example.com/*", "http://127.0.0.1/*"], "js": ["start.js"], "css": ["probe.css"], "run_at": "document_start"},
+    {"matches": ["https://example.com/*", "http://127.0.0.1/*"], "js": ["content.js"], "run_at": "document_end"}
+  ]
 }
