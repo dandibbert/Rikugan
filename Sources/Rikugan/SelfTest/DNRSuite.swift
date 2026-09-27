@@ -6,7 +6,7 @@ import WebKit
 /// request never arrived is reported as inconclusive (failed), not as blocked.
 @MainActor enum DNRSuite {
     static func run(_ ctx: SelfTestContext) async {
-        let runtime = ctx.profile.extensions
+        let runtime: ExtensionRuntime = ctx.profile.extensions
         let capabilities = await ExtensionRuntime.probeDNRCapabilities()
         ctx.extras["webkitCapabilities"] = ["redirect": capabilities.redirect, "modifyHeaders": capabilities.modifyHeaders]
         ctx.record("WebKit 能力探测完成", true, "redirect=\(capabilities.redirect) modifyHeaders=\(capabilities.modifyHeaders)")

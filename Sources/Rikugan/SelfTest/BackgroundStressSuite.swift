@@ -15,7 +15,7 @@ import WebKit
     }
 
     static func run(_ ctx: SelfTestContext) async {
-        let runtime = ctx.profile.extensions
+        let runtime: ExtensionRuntime = ctx.profile.extensions
         let savedIdle = ctx.services.prefs.backgroundIdleSeconds
         ctx.services.prefs.backgroundIdleSeconds = 2
         defer { ctx.services.prefs.backgroundIdleSeconds = savedIdle }

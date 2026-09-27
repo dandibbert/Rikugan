@@ -85,7 +85,7 @@ import WebKit
                 areas["install"] = area("fail", "installed but not loaded"); continue
             }
             areas["install"] = area("ok", ext.id)
-            let runtime = ctx.profile.extensions
+            let runtime: ExtensionRuntime = ctx.profile.extensions
 
             // Background.
             if let bg = ext.background {
