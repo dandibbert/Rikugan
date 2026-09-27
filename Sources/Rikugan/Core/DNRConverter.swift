@@ -88,10 +88,10 @@ public enum DNRConverter {
             case "allowAllRequests": mapped = .allowDocument
             case "upgradeScheme": mapped = .upgradeScheme
             case "redirect":
-                guard capabilities.redirect else { output.skipped.append((id, "当前 WebKit 版本不支持 redirect 内容规则")); continue }
+                guard capabilities.redirect else { output.skipped.append((id, "WebKit 不执行 App 内容规则中的 redirect（已实测），规则被跳过")); continue }
                 mapped = .redirect
             case "modifyHeaders":
-                guard capabilities.modifyHeaders else { output.skipped.append((id, "当前 WebKit 版本不支持 modify-headers 内容规则")); continue }
+                guard capabilities.modifyHeaders else { output.skipped.append((id, "WebKit 不支持 App 内容规则中的 modify-headers，规则被跳过")); continue }
                 mapped = .modifyHeaders
             default:
                 output.skipped.append((id, "未知动作 \(type)")); continue

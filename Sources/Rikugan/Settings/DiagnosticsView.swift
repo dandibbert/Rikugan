@@ -11,7 +11,7 @@ struct DiagnosticsReport: Codable {
     struct ExtensionInfo: Codable { var id: String; var name: String; var version: String; var enabled: Bool; var manifestVersion: Int
         var background: String?; var backgroundState: String?; var backgroundDetail: String?; var unsupportedCalls: [String: Int] }
     struct ScriptInfo: Codable { var name: String; var version: String; var enabled: Bool; var world: String; var grants: [String] }
-    struct DNR: Codable { var probed: Bool; var redirect: Bool; var modifyHeaders: Bool; var convertedRules: Int; var lists: Int; var skipped: [String: [String]] }
+    struct DNR: Codable { var probed: Bool; var redirect: Bool; var modifyHeaders: Bool; var redirectCompiles: Bool; var modifyHeadersCompiles: Bool; var convertedRules: Int; var lists: Int; var skipped: [String: [String]] }
     struct Environment: Codable { var appGroup: Bool; var shareExtensionEmbedded: Bool; var webInspector: Bool; var profile: String; var profileCount: Int }
     struct APISummary: Codable { var namespaces: Int; var supported: Int; var partial: Int; var unsupported: Int; var methodsImplemented: Int; var methodsMissing: Int }
 
@@ -72,6 +72,7 @@ struct DiagnosticsReport: Codable {
                              methodsMissing: entries.reduce(0) { $0 + $1.missing.count })
         let d = runtime.dnrStatus
         let dnr = DNR(probed: d.probed, redirect: d.capabilities.redirect, modifyHeaders: d.capabilities.modifyHeaders,
+                      redirectCompiles: d.compiles.redirect, modifyHeadersCompiles: d.compiles.modifyHeaders,
                       convertedRules: d.convertedRules, lists: d.lists, skipped: d.skipped)
         let plugins = Bundle.main.builtInPlugInsURL.flatMap { try? FileManager.default.contentsOfDirectory(atPath: $0.path) } ?? []
         let environment = Environment(
@@ -146,8 +147,8 @@ struct DiagnosticsView: View {
             Section("Chrome API / DNR") {
                 row("命名空间 ✅/🟡/⛔", "\(report.chromeAPI.supported) / \(report.chromeAPI.partial) / \(report.chromeAPI.unsupported)")
                 row("方法 已实现 / 缺失", "\(report.chromeAPI.methodsImplemented) / \(report.chromeAPI.methodsMissing)")
-                row("DNR redirect", report.dnr.probed ? (report.dnr.redirect ? "WebKit 支持" : "WebKit 不支持") : "未探测")
-                row("DNR modifyHeaders", report.dnr.probed ? (report.dnr.modifyHeaders ? "WebKit 支持" : "WebKit 不支持") : "未探测")
+                row("DNR redirect", report.dnr.probed ? (report.dnr.redirect ? "已启用" : (report.dnr.redirectCompiles ? "WebKit 可编译但不执行 → 跳过" : "WebKit 不支持 → 跳过")) : "未探测")
+                row("DNR modifyHeaders", report.dnr.probed ? (report.dnr.modifyHeaders ? "已启用" : (report.dnr.modifyHeadersCompiles ? "WebKit 可编译但不执行 → 跳过" : "WebKit 不支持 → 跳过")) : "未探测")
                 row("DNR 已转换规则 / 列表", "\(report.dnr.convertedRules) / \(report.dnr.lists)")
                 ForEach(report.dnr.skipped.sorted { $0.key < $1.key }, id: \.key) { ext, reasons in
                     Text("\(ext)：跳过 \(reasons.count) 条 — " + Array(Set(reasons)).sorted().prefix(3).joined(separator: "；")).font(.caption2).foregroundStyle(.secondary)

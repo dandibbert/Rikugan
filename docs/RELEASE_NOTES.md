@@ -1,15 +1,18 @@
-## Rikugan 1.0 · 未签名 IPA
+## Rikugan 1.0 · 未签名 IPA（claude 分支测试版）
 
-原生 SwiftUI + WKWebView 浏览器（iOS / iPadOS 17+），按 spec 实现：
+原生 SwiftUI + WKWebView 浏览器（iOS / iPadOS 17+）。
 
-- 多标签页（WKWebView 常驻，切换不重载）、类 Safari 标签页组、无痕浏览、恢复关闭的标签页、iPad 标签栏 / 侧边栏 / 多窗口
-- 地址栏搜索与 9 个内置搜索引擎 + 自定义引擎 + 关键词快捷方式 + 搜索建议
-- 用户脚本管理器：`.user.js` 安装页、文件 / 分享 / 网址 / 粘贴 / 新建，GM_* API（值存储、XHR、样式、菜单命令、资源、下载、通知…），带行号的编辑器，更新检查
-- Chrome MV3 兼容运行时：ZIP / CRX / 文件夹 / Chrome 应用商店 / Edge 加载项安装，权限确认，content scripts、后台 Service Worker、popup、storage、runtime 消息与 Port、scripting、tabs、permissions、action、DNR 等（见 App 内兼容性矩阵）
-- 内容拦截：内置规则、AdGuard / EasyList 订阅、自定义规则、元素选择隐藏
-- 网页深色模式、自定义网页字体（描述文件安装的字体 + 导入字体文件）、阅读模式、整页翻译
-- 媒体嗅探 / HLS 下载 / 画中画、图片模式批量保存、下载管理（暂停 / 继续）、PDF / 打印、二维码、定时刷新、页面跳转控制、网站设置与网页权限、自动填充（钥匙串）、身份（Profiles）、设置与标签页导入导出、分享扩展、应用内网页检查器
+本版本重点是**可测试、可长期使用**：
+
+- 标签页生命周期：active / 后台存活 / 挂起 / 恢复中 / 进程终止；超过上限（默认 5）的后台标签页按 LRU 释放 WebView，保存网址、历史、滚动位置与快照，切回时恢复；内存警告时挂起全部后台标签页
+- 完整的类 Safari 标签页组：创建、重命名、调整顺序、删除（关闭其标签页或移到默认组）、拖动排序、跨组移动、重启恢复当前组与当前标签页
+- 扩展后台运行时状态机：启动期间的消息 / 事件 / Port 排队，启动失败明确报错，空闲挂起（有 Port 时不挂起）、按需唤醒
+- 按方法的 Chrome API 矩阵（CI 与实现逐方法核对）；DNR redirect / modifyHeaders 在 WebKit 支持时启用（运行时探测）
+- 用户脚本：使用 `unsafeWindow` 的脚本运行在页面环境，`unsafeWindow` 就是真实页面窗口
+- 网页字体：正文 / 标题 / 等宽分别设置、每站点覆盖或禁用、TTC 导入、图标字体与 emoji 保护
+- 导入导出 `rikugan-archive` v2：明确的包含 / 排除内容、校验、v1 迁移、预览、合并 / 替换、导入前自动备份
+- 诊断页（设置 → 开发者）：构建信息、生命周期计数、扩展后台状态、API 调用统计、DNR 能力、最近错误，可导出不含敏感信息的 JSON
 
 **IPA 没有签名**：请用自己的证书 / 侧载工具（AltStore、Sideloadly、TrollStore 等）重签后安装。`SHA256SUMS.txt` 用于校验。
 
-本版本由 GitHub Actions 编译；同一次运行中包含 Swift 单元测试、JS 运行时测试和模拟器端到端自检（测试扩展 + 测试脚本在本地页面上真正运行）。详见 README。
+本版本由 GitHub Actions 编译，同一次运行中通过了：Swift 单元测试、JS 运行时测试、API 矩阵校验，以及**模拟器**中的 core / pageworld / fonts / dnr / lifecycle / stress / archive 套件（Job Summary 中有逐项结果）。这些是模拟器结果，不代表真机结果；真机请按 docs/DEVICE_CHECKLIST.md 验证。

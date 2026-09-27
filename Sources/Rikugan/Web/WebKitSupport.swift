@@ -186,18 +186,23 @@ enum MIME {
 /// Diagnostics and in the tab-lifecycle stress test.
 final class RikuganWebView: WKWebView {
     nonisolated(unsafe) private(set) static var liveCount = 0
+    nonisolated(unsafe) private static var byPurpose: [String: Int] = [:]
     private static let lock = NSLock()
     let purpose: String
+
+    /// Live instances per purpose (tab / background / popup / …).
+    static var liveByPurpose: [String: Int] { lock.lock(); defer { lock.unlock() }; return byPurpose.filter { $0.value != 0 } }
 
     init(frame: CGRect, configuration: WKWebViewConfiguration, purpose: String) {
         self.purpose = purpose
         super.init(frame: frame, configuration: configuration)
-        Self.lock.lock(); Self.liveCount += 1; Self.lock.unlock()
+        Self.lock.lock(); Self.liveCount += 1; Self.byPurpose[purpose, default: 0] += 1; Self.lock.unlock()
     }
 
     required init?(coder: NSCoder) { fatalError("not supported") }
 
     deinit {
-        Self.lock.lock(); Self.liveCount -= 1; Self.lock.unlock()
+        let purpose = self.purpose
+        Self.lock.lock(); Self.liveCount -= 1; Self.byPurpose[purpose, default: 0] -= 1; Self.lock.unlock()
     }
 }

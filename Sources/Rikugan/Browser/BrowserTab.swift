@@ -151,8 +151,9 @@ enum TranslationState: Equatable {
 
     /// The tab lost focus but keeps its live web view.
     func deactivate() {
-        guard webView != nil, lifecycle == .active || lifecycle == .restoring else { return }
-        lifecycle = .liveBackground
+        guard lifecycle == .active || lifecycle == .restoring else { return }
+        // A start-page tab has no web view: it is not live in the background.
+        lifecycle = webView == nil ? .suspended : .liveBackground
     }
 
     var isLive: Bool { webView != nil }
@@ -161,9 +162,11 @@ enum TranslationState: Equatable {
     /// history (interactionState) and scroll position. JS state, WebSockets and unsaved form
     /// content are lost and the page reloads on restore — this is accepted, not hidden.
     func suspend() async {
-        guard let webView, lifecycle != .active else { return }
+        guard let webView, lifecycle == .liveBackground, manager?.activeTabID != id else { return }
         if let y = (try? await webView.rkCall("return window.scrollY || 0;", world: Worlds.tools)) as? Double { lastScrollY = y }
-        guard self.webView === webView, lifecycle != .active else { return }
+        // Re-check after the await: the tab may have been selected meanwhile (it is then
+        // `.restoring` or `.active` and the current tab) — never release the visible web view.
+        guard self.webView === webView, lifecycle == .liveBackground, manager?.activeTabID != id else { return }
         captureThumbnail()
         restoreState = (webView.interactionState as? Data) ?? restoreState
         restoreURL = webView.url ?? url

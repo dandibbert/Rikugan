@@ -432,6 +432,19 @@
     chrome.menus = contextMenus;
 
     chrome.commands = guarded('commands', { getAll: call('commands.getAll'), onCommand: ev('commands.onCommand') });
+    // Font list only (system + profile-installed + imported families); per-page font settings are
+    // Rikugan's own web-font feature, so the setters are explicit Unsupported stubs.
+    chrome.fontSettings = guarded('fontSettings', {
+      getFontList: call('fontSettings.getFontList'),
+      getFont: unsupportedFn('fontSettings.getFont'), setFont: unsupportedFn('fontSettings.setFont'), clearFont: unsupportedFn('fontSettings.clearFont'),
+      getDefaultFontSize: unsupportedFn('fontSettings.getDefaultFontSize'), setDefaultFontSize: unsupportedFn('fontSettings.setDefaultFontSize'),
+      clearDefaultFontSize: unsupportedFn('fontSettings.clearDefaultFontSize'), getDefaultFixedFontSize: unsupportedFn('fontSettings.getDefaultFixedFontSize'),
+      setDefaultFixedFontSize: unsupportedFn('fontSettings.setDefaultFixedFontSize'), clearDefaultFixedFontSize: unsupportedFn('fontSettings.clearDefaultFixedFontSize'),
+      getMinimumFontSize: unsupportedFn('fontSettings.getMinimumFontSize'), setMinimumFontSize: unsupportedFn('fontSettings.setMinimumFontSize'),
+      clearMinimumFontSize: unsupportedFn('fontSettings.clearMinimumFontSize'),
+      onFontChanged: unsupportedEvent('fontSettings.onFontChanged'), onDefaultFontSizeChanged: unsupportedEvent('fontSettings.onDefaultFontSizeChanged'),
+      onDefaultFixedFontSizeChanged: unsupportedEvent('fontSettings.onDefaultFixedFontSizeChanged'), onMinimumFontSizeChanged: unsupportedEvent('fontSettings.onMinimumFontSizeChanged'),
+    });
     chrome.cookies = guarded('cookies', {
       get: call('cookies.get'), getAll: call('cookies.getAll'), set: call('cookies.set'), remove: call('cookies.remove'),
       getAllCookieStores: call('cookies.getAllCookieStores'), onChanged: unsupportedEvent('cookies.onChanged'),

@@ -74,7 +74,7 @@ public enum ChromeAPIMatrix {
         case "storage", "unlimitedStorage", "scripting", "activeTab", "tabs", "i18n", "background": return .supported
         case "declarativeNetRequest", "declarativeNetRequestWithHostAccess", "declarativeNetRequestFeedback",
              "contextMenus", "cookies", "downloads", "notifications", "webNavigation", "alarms", "commands",
-             "clipboardWrite", "clipboardRead", "favicon": return .partial
+             "clipboardWrite", "clipboardRead", "favicon", "fontSettings": return .partial
         default:
             if permission.contains("://") || permission == "<all_urls>" { return .supported }
             return level(of: permission)

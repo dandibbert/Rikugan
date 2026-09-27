@@ -55,11 +55,27 @@ import Foundation
         do { exported = try ArchiveCodec.encode(ImportExport.buildArchive()) } catch { ctx.record("导出", false, error.localizedDescription); return }
         let archive: RikuganArchive
         do { archive = try ArchiveCodec.decode(exported) } catch { ctx.record("导出文件可重新解析", false, error.localizedDescription); return }
-        let text = String(decoding: exported, as: UTF8.self)
+        let text = String(decoding: exported, as: UTF8.self)   // used for the future-version mutation below
         ctx.record("导出：formatVersion / exportedAt / appVersion / excluded / contents", archive.formatVersion == RikuganArchive.currentFormatVersion &&
                    !archive.appVersion.isEmpty && archive.excluded == RikuganArchive.excludedAlways && archive.contents.userscriptSource,
                    "v\(archive.formatVersion) app=\(archive.appVersion) bytes=\(exported.count) excluded=\(archive.excluded.joined(separator: ","))")
-        ctx.record("导出不含 Cookie / 密码字段", !text.contains("\"cookies\"") && !text.contains("\"password\"") && !text.contains("\"credentials\""))
+        // Structural check: no field anywhere in the export is named like sensitive data
+        // (the `excluded` list itself legitimately *mentions* cookies / passwords as values).
+        var sensitiveKeys: [String] = []
+        func walk(_ value: Any, _ path: String) {
+            if let dict = value as? [String: Any] {
+                for (key, child) in dict {
+                    if key.range(of: "cookie|password|passwd|credential|card|secret|token|keychain", options: [.regularExpression, .caseInsensitive]) != nil {
+                        sensitiveKeys.append(path + "." + key)
+                    }
+                    walk(child, path + "." + key)
+                }
+            } else if let list = value as? [Any] {
+                for (i, child) in list.enumerated() { walk(child, path + "[\(i)]") }
+            }
+        }
+        if let root = try? JSONSerialization.jsonObject(with: exported) { walk(root, "$") }
+        ctx.record("导出中没有任何 Cookie / 密码 / 凭据 / 卡号 / 密钥字段", sensitiveKeys.isEmpty, sensitiveKeys.prefix(5).joined(separator: ", "))
         ctx.extras["exportSummary"] = ["profiles": archive.summary.profiles, "tabs": archive.summary.tabs, "groups": archive.summary.groups,
                                        "bookmarks": archive.summary.bookmarks, "userscripts": archive.summary.userscripts, "bytes": exported.count]
 

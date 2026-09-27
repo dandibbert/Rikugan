@@ -35,6 +35,17 @@ import Combine
         profiles = ProfileManager()
         profiles.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         adBlock.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .rikuganSiteSettingsChanged)
+            .sink { note in
+                let host = note.object as? String
+                Task { @MainActor in
+                    for tab in TabRegistry.shared.allTabs where host == nil || tab.host == host || tab.host?.hasSuffix("." + (host ?? "")) == true {
+                        tab.invalidateInjection()
+                        tab.applyLiveStyles()
+                    }
+                }
+            }
+            .store(in: &cancellables)
     }
 
     func start() {
@@ -53,7 +64,9 @@ import Combine
             old.webFontHeading != prefs.webFontHeading || old.webFontMono != prefs.webFontMono || old.webFontExcludedHosts != prefs.webFontExcludedHosts ||
             old.darkModeBrightness != prefs.darkModeBrightness || old.darkModeContrast != prefs.darkModeContrast
         if affectsPages {
-            for tab in TabRegistry.shared.allTabs { tab.applyLiveStyles() }
+            // Live-apply to loaded pages, and rebuild injected config on the next load / reload
+            // (the config is baked into the document-start scripts).
+            for tab in TabRegistry.shared.allTabs { tab.invalidateInjection(); tab.applyLiveStyles() }
         }
         if old.webInspectorEnabled != prefs.webInspectorEnabled {
             for tab in TabRegistry.shared.allTabs { tab.webView?.isInspectable = prefs.webInspectorEnabled }

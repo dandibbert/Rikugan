@@ -27,6 +27,8 @@ jobs:
         run: swift test 2>&1 | tee core-tests.log
       - name: JavaScript runtime tests (GM API, chrome.* shim, page tools)
         run: node scripts/test_js.cjs
+      - name: Chrome API matrix document is generated from the verified JSON
+        run: python3 scripts/gen_api_matrix.py --check
       - uses: actions/upload-artifact@v4
         if: always()
         with:

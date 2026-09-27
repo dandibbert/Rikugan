@@ -133,6 +133,8 @@ extension Notification.Name {
     static let rikuganProfileWillChange = Notification.Name("rikugan.profileWillChange")
     static let rikuganProfileDidChange = Notification.Name("rikugan.profileDidChange")
     static let rikuganContentChanged = Notification.Name("rikugan.contentChanged")
+    /// object: the host whose settings changed (nil = all).
+    static let rikuganSiteSettingsChanged = Notification.Name("rikugan.siteSettingsChanged")
 }
 
 /// Global registry of tabs / windows with stable integer IDs for the chrome.* API.

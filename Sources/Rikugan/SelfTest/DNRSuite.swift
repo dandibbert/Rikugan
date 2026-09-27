@@ -7,9 +7,11 @@ import WebKit
 @MainActor enum DNRSuite {
     static func run(_ ctx: SelfTestContext) async {
         let runtime: ExtensionRuntime = ctx.profile.extensions
-        let capabilities = await ExtensionRuntime.probeDNRCapabilities()
-        ctx.extras["webkitCapabilities"] = ["redirect": capabilities.redirect, "modifyHeaders": capabilities.modifyHeaders]
-        ctx.record("WebKit 能力探测完成", true, "redirect=\(capabilities.redirect) modifyHeaders=\(capabilities.modifyHeaders)")
+        let compiles = await ExtensionRuntime.probeDNRCapabilities()
+        let capabilities = ExtensionRuntime.executedDNRActions
+        ctx.extras["webkitCompiles"] = ["redirect": compiles.redirect, "modifyHeaders": compiles.modifyHeaders]
+        ctx.extras["rikuganEnables"] = ["redirect": capabilities.redirect, "modifyHeaders": capabilities.modifyHeaders]
+        ctx.record("WebKit 编译探测完成", true, "compiles redirect=\(compiles.redirect) modifyHeaders=\(compiles.modifyHeaders)")
 
         let started = Date()
         let ext: LoadedExtension
@@ -96,6 +98,10 @@ import WebKit
                        "outcome": mainBlocked ? "blocked" : "NOT blocked"])
         ctx.extras["matrix"] = matrix
 
+        // Behavioural probe: apply raw redirect / modify-headers content rules straight to a tab
+        // and observe what WebKit really does. Rikugan's enabled set must match this.
+        await behaviourProbe(ctx, compiles: compiles, enabled: capabilities)
+
         // Removing the extension removes its rules.
         let removedAt = Date()
         runtime.remove(ext.id)
@@ -105,6 +111,34 @@ import WebKit
         _ = await ctx.waitLoaded(tab, path: "/dnr/index.html")
         let unblocked = await ctx.waitUntil(10) { ctx.server.requested("/dnr/block-image.png") }
         ctx.record("卸载扩展后规则移除", unblocked, "block-image requested=\(unblocked)")
+        ctx.manager.close(tab)
+    }
+
+    static func behaviourProbe(_ ctx: SelfTestContext, compiles: DNRConverter.Capabilities, enabled: DNRConverter.Capabilities) async {
+        guard let store = WKContentRuleListStore.default() else { ctx.record("行为探测", false, "no rule list store"); return }
+        let redirectRule = #"[{"trigger":{"url-filter":"redirect-probe-src\\.js"},"action":{"type":"redirect","redirect":{"transform":{"path":"/dnr/redirect-probe-dst.js"}}}}]"#
+        let headerRule = #"[{"trigger":{"url-filter":"echo-headers\\?probe"},"action":{"type":"modify-headers","request-headers":[{"header":"X-Rikugan-Probe","operation":"set","value":"1"}]}}]"#
+        var lists: [WKContentRuleList] = []
+        if compiles.redirect, let list = await store.rkCompile("rikugan-behaviour-redirect", redirectRule) { lists.append(list) }
+        if compiles.modifyHeaders, let list = await store.rkCompile("rikugan-behaviour-headers", headerRule) { lists.append(list) }
+        let tab = ctx.manager.newTab(url: nil, isPrivate: false)
+        let webView = tab.ensureWebView()
+        for list in lists { webView.configuration.userContentController.add(list) }
+        ctx.server.clearLog()
+        tab.load(ctx.url("/dnr/probe.html"))
+        _ = await ctx.waitLoaded(tab, path: "/dnr/probe.html")
+        _ = await ctx.waitUntil(8) { await ctx.attr(tab, "data-probe-echo") != nil }
+        let redirectExecutes = compiles.redirect && ctx.server.requested("/dnr/redirect-probe-dst.js") && !ctx.server.requested("/dnr/redirect-probe-src.js")
+        let echo = (await ctx.attr(tab, "data-probe-echo")).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: String] } ?? [:]
+        let headersExecute = compiles.modifyHeaders && echo["x-rikugan-probe"] == "1"
+        ctx.extras["webkitExecutes"] = ["redirect": redirectExecutes, "modifyHeaders": headersExecute]
+        ctx.record("行为：WebKit 是否执行 redirect 与 Rikugan 声明一致", redirectExecutes == enabled.redirect,
+                   "compiles=\(compiles.redirect) executes=\(redirectExecutes) enabled=\(enabled.redirect) src requested=\(ctx.server.requested("/dnr/redirect-probe-src.js"))")
+        ctx.record("行为：WebKit 是否执行 modify-headers 与 Rikugan 声明一致", headersExecute == enabled.modifyHeaders,
+                   "compiles=\(compiles.modifyHeaders) executes=\(headersExecute) enabled=\(enabled.modifyHeaders)")
+        for list in lists { webView.configuration.userContentController.remove(list) }
+        await store.rkRemove("rikugan-behaviour-redirect")
+        await store.rkRemove("rikugan-behaviour-headers")
         ctx.manager.close(tab)
     }
 }

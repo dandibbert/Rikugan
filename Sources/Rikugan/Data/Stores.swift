@@ -206,13 +206,19 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
         change(&value)
         if value.isEmpty { sites.removeValue(forKey: key) } else { sites[key] = value }
         file.save(sites)
+        NotificationCenter.default.post(name: .rikuganSiteSettingsChanged, object: key)
     }
 
-    func remove(_ host: String) { sites.removeValue(forKey: host); file.save(sites) }
+    func remove(_ host: String) {
+        sites.removeValue(forKey: host)
+        file.save(sites)
+        NotificationCenter.default.post(name: .rikuganSiteSettingsChanged, object: host)
+    }
 
     func replaceAll(_ list: [SiteSettings]) {
         sites = Dictionary(list.map { ($0.host, $0) }, uniquingKeysWith: { a, _ in a })
         file.save(sites)
+        NotificationCenter.default.post(name: .rikuganSiteSettingsChanged, object: nil)
     }
 }
 

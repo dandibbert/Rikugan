@@ -159,7 +159,7 @@
     "declarativeNetRequest": {
       "level": "Partial",
       "reason": "Rules are compiled to WKContentRuleList. WebKit evaluates rules by list order, not DNR priority.",
-      "differences": ["allow / allowAllRequests use WebKit ignore-previous-rules (ordering, not priority)", "redirect and modifyHeaders depend on the WebKit version (probed at runtime, see Diagnostics)", "regexFilter must be expressible in WebKit's regex subset", "Rules do not apply to Rikugan's native downloads / GM_xmlhttpRequest"],
+      "differences": ["allow / allowAllRequests use WebKit ignore-previous-rules (ordering, not priority)", "redirect and modifyHeaders rules are skipped and listed in Diagnostics: WebKit does not execute them for app content rule lists (re-verified by the dnr CI suite on every run)", "regexFilter must be expressible in WebKit's regex subset", "Rules do not apply to Rikugan's native downloads / GM_xmlhttpRequest"],
       "methods": {
         "updateDynamicRules": ["Supported", ""], "getDynamicRules": ["Supported", ""],
         "updateSessionRules": ["Supported", ""], "getSessionRules": ["Supported", ""],
@@ -173,8 +173,8 @@
       },
       "actions": {
         "block": ["Supported", ""], "allow": ["Partial", "Ordering-based"], "allowAllRequests": ["Partial", "Domain-level only"],
-        "upgradeScheme": ["Supported", ""], "redirect": ["Partial", "url / extensionPath / transform; no regexSubstitution; requires WebKit support"],
-        "modifyHeaders": ["Partial", "set / append / remove; requires WebKit support"]
+        "upgradeScheme": ["Supported", ""], "redirect": ["Unsupported", "WebKit compiles redirect content rules but does not execute them for app WKContentRuleLists (measured in CI); rules are skipped"],
+        "modifyHeaders": ["Unsupported", "WebKit does not accept modify-headers content rules for apps; rules are skipped"]
       }
     },
     "webRequest": {
@@ -236,7 +236,14 @@
     "gcm": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "userScripts": { "level": "Unsupported", "reason": "Use Rikugan's built-in userscript manager", "differences": [], "methods": {} },
     "declarativeContent": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "fontSettings": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "fontSettings": {
+      "level": "Partial", "reason": "getFontList returns the system, profile-installed and imported font families; per-page font settings are Rikugan's web-font feature.", "differences": ["fontId equals the family name"],
+      "methods": { "getFontList": ["Supported", "System + profile + imported families"], "getFont": ["Unsupported", ""], "setFont": ["Unsupported", ""], "clearFont": ["Unsupported", ""],
+        "getDefaultFontSize": ["Unsupported", ""], "setDefaultFontSize": ["Unsupported", ""], "clearDefaultFontSize": ["Unsupported", ""],
+        "getDefaultFixedFontSize": ["Unsupported", ""], "setDefaultFixedFontSize": ["Unsupported", ""], "clearDefaultFixedFontSize": ["Unsupported", ""],
+        "getMinimumFontSize": ["Unsupported", ""], "setMinimumFontSize": ["Unsupported", ""], "clearMinimumFontSize": ["Unsupported", ""],
+        "onFontChanged": ["Unsupported", ""], "onDefaultFontSizeChanged": ["Unsupported", ""], "onDefaultFixedFontSizeChanged": ["Unsupported", ""], "onMinimumFontSizeChanged": ["Unsupported", ""] }
+    },
     "contentSettings": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "browsingData": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "system": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },

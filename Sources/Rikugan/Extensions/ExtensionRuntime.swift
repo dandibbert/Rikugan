@@ -548,18 +548,30 @@ import Combine
     // MARK: DNR (spec P1)
 
     struct DNRStatus {
+        /// Actions Rikugan converts. Only enabled when WebKit is known to *execute* them.
         var capabilities = DNRConverter.Capabilities()
+        /// Whether WebKit merely *compiles* the action (diagnostics only; compiling ≠ executing).
+        var compiles = DNRConverter.Capabilities()
         var probed = false
         var convertedRules = 0
         var skipped: [String: [String]] = [:]
         var lists = 0
         var compiling = false
         var lastCompiled: Date?
+        var lastDuration: TimeInterval = 0
+        var compileCount = 0
     }
     @Published private(set) var dnrStatus = DNRStatus()
-    private var dnrGeneration = 0
+    private var dnrDirty = false
+    private var dnrCompileRunning = false
 
-    /// Probes whether this WebKit build accepts `redirect` / `modify-headers` content-rule actions.
+    /// Actions WebKit executes for app-level WKContentRuleLists. Measured in CI by the dnr
+    /// self-test suite (which fails if this claim and WebKit's behaviour disagree): on the iOS 26
+    /// simulator `redirect` compiles but is not executed and `modify-headers` does not compile, so
+    /// both stay off and such rules are reported as skipped instead of silently doing nothing.
+    static let executedDNRActions = DNRConverter.Capabilities(redirect: false, modifyHeaders: false)
+
+    /// Probes whether this WebKit build *compiles* `redirect` / `modify-headers` content-rule actions.
     static func probeDNRCapabilities() async -> DNRConverter.Capabilities {
         guard let store = WKContentRuleListStore.default() else { return DNRConverter.Capabilities() }
         let redirect = #"[{"trigger":{"url-filter":"^rikugan-probe://"},"action":{"type":"redirect","redirect":{"url":"https://example.com/"}}}]"#
@@ -571,52 +583,79 @@ import Combine
         return DNRConverter.Capabilities(redirect: r, modifyHeaders: h)
     }
 
+    /// Requests a recompilation of all extensions' DNR rules. Calls that arrive while a compile is
+    /// running coalesce into one follow-up compile (extensions such as uBOL issue hundreds of rule
+    /// updates at start-up); every finished compile is applied, so rules are never starved.
     func compileDNR() {
-        dnrGeneration += 1
-        let generation = dnrGeneration
+        dnrDirty = true
         dnrStatus.compiling = true
-        Task {
-            if !dnrStatus.probed {
-                dnrStatus.capabilities = await Self.probeDNRCapabilities()
-                dnrStatus.probed = true
+        guard !dnrCompileRunning else { return }
+        dnrCompileRunning = true
+        Task { await runDNRCompiles() }
+    }
+
+    private struct DNRInput: @unchecked Sendable {
+        let extID: String
+        let baseURL: String
+        let rulesetFiles: [URL]
+        let extraRules: Data
+    }
+
+    private func runDNRCompiles() async {
+        if !dnrStatus.probed {
+            let compiles = await Self.probeDNRCapabilities()
+            dnrStatus.compiles = compiles
+            dnrStatus.capabilities = DNRConverter.Capabilities(redirect: compiles.redirect && Self.executedDNRActions.redirect,
+                                                               modifyHeaders: compiles.modifyHeaders && Self.executedDNRActions.modifyHeaders)
+            dnrStatus.probed = true
+        }
+        while dnrDirty {
+            dnrDirty = false
+            // Snapshot inputs on the main actor (cheap); parse / convert / build JSON off it.
+            let inputs = enabledExtensions.filter { $0.has("declarativeNetRequest") || $0.has("declarativeNetRequestWithHostAccess") }.map { ext in
+                DNRInput(extID: ext.id, baseURL: ext.baseURL,
+                         rulesetFiles: ext.manifest.ruleResources.filter { ext.enabledRulesetIDs.contains($0.id) }.compactMap { ext.fileURL($0.path) },
+                         extraRules: (try? JSONSerialization.data(withJSONObject: ext.dynamicRules + ext.sessionRules)) ?? Data("[]".utf8))
             }
-            var converted: [NetworkRule] = []
-            var skipped: [String: [String]] = [:]
-            for ext in enabledExtensions where ext.has("declarativeNetRequest") || ext.has("declarativeNetRequestWithHostAccess") {
-                var rules: [[String: Any]] = []
-                for resource in ext.manifest.ruleResources where ext.enabledRulesetIDs.contains(resource.id) {
-                    if let text = ext.text(resource.path), let list = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: Any]] {
-                        rules += list
+            let capabilities = dnrStatus.capabilities
+            let started = Date()
+            let (jsonLists, convertedCount, skipped) = await Task.detached(priority: .userInitiated) { () -> ([String], Int, [String: [String]]) in
+                var converted: [NetworkRule] = []
+                var skipped: [String: [String]] = [:]
+                for input in inputs {
+                    var rules: [[String: Any]] = []
+                    for file in input.rulesetFiles {
+                        if let data = try? Data(contentsOf: file), let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] { rules += list }
                     }
+                    rules += (try? JSONSerialization.jsonObject(with: input.extraRules) as? [[String: Any]]) ?? []
+                    let output = DNRConverter.convert(rules, capabilities: capabilities, baseURL: input.baseURL)
+                    converted += output.rules
+                    if !output.skipped.isEmpty { skipped[input.extID] = output.skipped.map { "DNR 规则 \($0.id)：\($0.reason)" } }
                 }
-                rules += ext.dynamicRules + ext.sessionRules
-                let output = DNRConverter.convert(rules, capabilities: dnrStatus.capabilities, baseURL: ext.baseURL)
-                converted += output.rules
-                if !output.skipped.isEmpty {
-                    skipped[ext.id] = output.skipped.map { "DNR 规则 \($0.id)：\($0.reason)" }
-                }
-            }
+                let json = converted.isEmpty ? [] : ContentBlockerCompiler.compile(converted, allowlistedHosts: [])
+                return (json, converted.count, skipped)
+            }.value
             var lists: [WKContentRuleList] = []
-            if !converted.isEmpty {
-                for (index, json) in ContentBlockerCompiler.compile(converted, allowlistedHosts: []).enumerated() {
-                    let identifier = "dnr-\(profile.id.uuidString)-\(index)"
-                    if let list = await WKContentRuleListStore.default().rkCompile(identifier, json) {
-                        lists.append(list)
-                    } else if let fallback = await ContentBlockerCompilerRuntime.compileBisecting(json: json, identifier: identifier) {
-                        lists.append(fallback)
-                        ErrorLog.shared.record("DNR list \(index) contained rules WebKit rejected; they were dropped", source: "DNR")
-                    }
+            for (index, json) in jsonLists.enumerated() {
+                let identifier = "dnr-\(profile.id.uuidString)-\(index)"
+                if let list = await WKContentRuleListStore.default().rkCompile(identifier, json) {
+                    lists.append(list)
+                } else if let fallback = await ContentBlockerCompilerRuntime.compileBisecting(json: json, identifier: identifier) {
+                    lists.append(fallback)
+                    ErrorLog.shared.record("DNR list \(index) contained rules WebKit rejected; they were dropped", source: "DNR")
                 }
             }
-            guard generation == dnrGeneration else { return }
             dnrLists = lists
-            dnrStatus.convertedRules = converted.count
+            dnrStatus.convertedRules = convertedCount
             dnrStatus.skipped = skipped
             dnrStatus.lists = lists.count
-            dnrStatus.compiling = false
             dnrStatus.lastCompiled = Date()
+            dnrStatus.lastDuration = Date().timeIntervalSince(started)
+            dnrStatus.compileCount += 1
             WebViewFactory.refreshAllContentRuleLists()
         }
+        dnrStatus.compiling = false
+        dnrCompileRunning = false
     }
 }
 
@@ -630,7 +669,7 @@ enum BackgroundState: String {
 ///
 ///     notStarted ─start→ starting ─ready signal→ ready ⇄ idle ─idle timeout→ suspended
 ///     suspended ─message/event/port→ waking ─ready signal→ ready
-///     starting/waking ─load failure / 15 s without ready→ failed ─next request→ starting (max 2 restarts)
+///     starting/waking ─load failure / no commit in 60 s / no ready 15 s after commit→ failed ─next request→ starting (max 2 restarts)
 ///
 /// Callers use `awaitReady()`: requests made while starting / waking are queued and delivered once
 /// ready, or fail with an explicit error — never silently dropped.
@@ -659,6 +698,7 @@ enum BackgroundState: String {
     /// Events the background registered listeners for (kept across suspension, like Chrome).
     private(set) var subscribedEvents: Set<String> = []
     static let startupTimeout: TimeInterval = 15
+    static let commitTimeout: TimeInterval = 60
 
     var isReady: Bool { state == .ready || state == .idle }
 
@@ -692,11 +732,18 @@ enum BackgroundState: String {
         BackgroundHostContainer.shared.attach(webView)
         guard let url = URL(string: ext.baseURL + ExtensionSchemeHandler.backgroundPagePath) else { fail("invalid background URL"); return }
         webView.load(URLRequest(url: url))
+        armDeadline(Self.commitTimeout, phase: "page did not commit (WebContent process launch / main thread busy)")
+    }
+
+    /// Two explicit phases: the background page must commit within `commitTimeout`, then its
+    /// scripts must signal ready within `startupTimeout` of the commit. Failing either is an
+    /// explicit failure with the phase named — nothing is retried silently.
+    private func armDeadline(_ seconds: TimeInterval, phase: String) {
         startupDeadline?.cancel()
         startupDeadline = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.startupTimeout * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard let self, !Task.isCancelled, self.state == .starting || self.state == .waking else { return }
-            self.fail("background did not signal ready within \(Int(Self.startupTimeout)) s (\(self.webView?.isLoading == true ? "page still loading" : "page loaded, chrome runtime not initialised"))")
+            self.fail("background not ready: \(phase) within \(Int(seconds)) s")
         }
     }
 
@@ -830,7 +877,11 @@ enum BackgroundState: String {
     // MARK: Navigation delegate
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { note("didStartProvisional") }
-    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { note("didCommit") }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        note("didCommit")
+        guard self.webView === webView, state == .starting || state == .waking else { return }
+        armDeadline(Self.startupTimeout, phase: "scripts did not signal ready after the page committed")
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         note("didFinish")

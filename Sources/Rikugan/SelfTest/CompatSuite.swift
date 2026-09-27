@@ -75,7 +75,9 @@ import WebKit
             let perms = manifest.apiPermissions
             let unsupportedPerms = perms.filter { ChromeAPIMatrix.permissionLevel($0) == .unsupported }
             let partialPerms = perms.filter { ChromeAPIMatrix.permissionLevel($0) == .partial }
-            areas["permissions"] = area(unsupportedPerms.isEmpty ? (partialPerms.isEmpty ? "ok" : "partial") : "fail",
+            // Requesting an unsupported permission is not itself a failure; what breaks shows up in the
+            // API / behaviour areas (from observed calls), so this area is at worst "partial".
+            areas["permissions"] = area(unsupportedPerms.isEmpty && partialPerms.isEmpty ? "ok" : "partial",
                                         "requested=\(perms.joined(separator: ",")) unsupported=\(unsupportedPerms.joined(separator: ",")) partial=\(partialPerms.joined(separator: ","))")
             let started = Date()
             do { try ctx.profile.extensions.install(pending) } catch {
@@ -94,7 +96,11 @@ import WebKit
             } else {
                 areas["background"] = area("n/a", "no background")
             }
-            _ = await ctx.waitForDNRCompile(after: started)
+            // Real rulesets (uBOL ships ~100k rules) take a while to convert and compile; wait for the
+            // compile to actually finish and record how long it took.
+            let dnrDone = await ctx.waitForDNRCompile(after: started, seconds: 120)
+            report["dnrCompile"] = ["finished": dnrDone, "seconds": runtime.dnrStatus.lastDuration, "compiles": runtime.dnrStatus.compileCount,
+                                    "converted": runtime.dnrStatus.convertedRules, "lists": runtime.dnrStatus.lists]
 
             // Page with content scripts.
             let tab = await ctx.open("/compat-page/index.html")
@@ -150,8 +156,11 @@ import WebKit
             } else {
                 judge("dnr") { $0.hasPrefix("declarativeNetRequest.") }
                 let base = areas["dnr"]?["detail"] ?? ""
-                areas["dnr"] = area(dnrSkipped.isEmpty ? (areas["dnr"]?["status"] == "fail" ? "fail" : "ok") : "partial",
-                                    "rulesets=\(manifest.ruleResources.count) totalConverted=\(runtime.dnrStatus.convertedRules) skipped=\(dnrSkipped.count) \(dnrSkipped.prefix(3).joined(separator: " | ")) \(base)")
+                let enabledSets = ext.enabledRulesetIDs.count
+                let converted = runtime.dnrStatus.convertedRules
+                let status = converted == 0 && enabledSets > 0 ? "fail" : (dnrSkipped.isEmpty ? (areas["dnr"]?["status"] == "fail" ? "fail" : "ok") : "partial")
+                areas["dnr"] = area(status,
+                                    "rulesets=\(manifest.ruleResources.count) enabled=\(enabledSets) converted=\(converted) lists=\(runtime.dnrStatus.lists) compile=\(String(format: "%.1f", runtime.dnrStatus.lastDuration))s skipped=\(dnrSkipped.count) \(dnrSkipped.prefix(3).joined(separator: " | ")) \(base)")
             }
             let unsupported = runtime.unsupportedCalls[ext.id] ?? [:]
             report["unsupportedCalls"] = unsupported

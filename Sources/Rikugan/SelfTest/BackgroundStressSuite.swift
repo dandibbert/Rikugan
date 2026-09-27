@@ -28,8 +28,15 @@ import WebKit
         let world = Worlds.extensionWorld(ext.id)
         let tab = await ctx.open("/stress/index.html")
         let csReady = await ctx.waitUntil(10) { await ctx.attr(tab, "data-stress-cs") == "ready" }
-        ctx.record("压力测试页面 + 内容脚本就绪", csReady)
-        guard csReady else { return }
+        if !csReady {
+            let url = tab.webView?.url
+            let planned = url.map { runtime.contentScripts(for: $0, tab: tab).filter { $0.world.name == world.name }.count } ?? -1
+            let state = await ctx.eval(tab, "return document.readyState + ' attrs=' + [...document.documentElement.attributes].map(a => a.name).join(',');") as? String ?? "nil"
+            ctx.record("压力测试页面 + 内容脚本就绪", false,
+                       "url=\(url?.absoluteString ?? "nil") loading=\(tab.webView?.isLoading ?? false) state=\(state) plannedScripts=\(planned) injectedFor=\(tab.lastInjectedURL?.absoluteString ?? "nil") extErrors=\(ext.record.lastErrors.suffix(3)) log=\(ErrorLog.shared.entries.suffix(3).map(\.message))")
+            return
+        }
+        ctx.record("压力测试页面 + 内容脚本就绪", true)
 
         func call(_ js: String, _ args: [String: Any] = [:], in target: BrowserTab? = nil) async -> (Any?, String?) {
             await ctx.evalResult(target ?? tab, js, world: world, arguments: args)

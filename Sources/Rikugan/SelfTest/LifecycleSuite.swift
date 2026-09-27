@@ -21,9 +21,17 @@ import WebKit
         let registered = TabRegistry.shared.liveWebViewCount
         let allWindowsLive = TabRegistry.shared.allWindows.reduce(0) { $0 + $1.tabs.filter(\.isLive).count }
         let ok = liveBackground.filter { !$0.isLoading }.count <= limit && webViewIDs.count == live.count && active.count <= 1 && registered == allWindowsLive
-        ctx.record("\(label)：不变量（后台存活 ≤ \(limit)、无重复 WebView、注册表一致）", ok,
-                   "live=\(live.count) liveBackground=\(liveBackground.count) uniqueWebViews=\(webViewIDs.count) active=\(active.count) registered=\(registered)/\(allWindowsLive) rikuganWebViews=\(RikuganWebView.liveCount)")
+        ctx.record("\(label)：不变量（后台存活 ≤ \(limit)、仅一个 active、无重复 WebView、注册表一致）", ok,
+                   "live=\(live.count) liveBackground=\(liveBackground.count) uniqueWebViews=\(webViewIDs.count) active=\(active.count) registered=\(registered)/\(allWindowsLive) webViews=\(RikuganWebView.liveByPurpose)" +
+                   (ok ? "" : " " + orphans(manager)))
         return ok
+    }
+
+    /// Describes tabs that are registered but not where they should be (for failure details).
+    static func orphans(_ manager: TabManager) -> String {
+        let inWindows = Set(TabRegistry.shared.allWindows.flatMap { $0.tabs.map(\.id) })
+        let odd = TabRegistry.shared.allTabs.filter { !inWindows.contains($0.id) || ($0.lifecycle == .active && $0.id != manager.activeTabID) }
+        return "odd=[" + odd.map { "\($0.url?.query ?? "home") inWindow=\(inWindows.contains($0.id)) lifecycle=\($0.lifecycle) live=\($0.isLive) manager=\($0.manager != nil)" }.joined(separator: "; ") + "]"
     }
 
     static func run(_ ctx: SelfTestContext) async {
@@ -43,7 +51,9 @@ import WebKit
         for i in 0..<36 {
             let tab = manager.newTab(url: ctx.url("/lifecycle/page.html?n=\(i)"), isPrivate: false)
             let group: UUID? = i % 3 == 0 ? nil : (i % 3 == 1 ? g1.id : g2.id)
-            if group != nil { manager.move(tab, toGroup: group) }
+            // Explicit for every tab: new tabs open in the *current* group, which follows the
+            // active tab when it is moved.
+            manager.move(tab, toGroup: group)
             _ = await ctx.waitLoaded(tab, path: "/lifecycle/page.html", seconds: 15)
             created.append(tab)
         }
@@ -169,7 +179,8 @@ import WebKit
         let tabsFreed = await ctx.waitUntil(10) { probes.allSatisfy { $0.value == nil } }
         let webViewsFreed = await ctx.waitUntil(15) { RikuganWebView.liveCount <= baselineWebViews }
         ctx.record("关闭后 BrowserTab 被释放（无循环引用）", tabsFreed, "alive=\(probes.filter { $0.value != nil }.count)/6")
-        ctx.record("关闭后 WKWebView 数量回到基线", webViewsFreed, "rikuganWebViews=\(RikuganWebView.liveCount) baseline=\(baselineWebViews)")
+        ctx.record("关闭后 WKWebView 数量回到基线", webViewsFreed,
+                   "rikuganWebViews=\(RikuganWebView.liveCount) baseline=\(baselineWebViews) byPurpose=\(RikuganWebView.liveByPurpose) " + orphans(manager))
         manager.deleteGroup(g3.id, mode: .moveTabsToDefault)
         _ = await invariants(ctx, "清理后")
     }

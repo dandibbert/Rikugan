@@ -374,6 +374,13 @@ import UserNotifications
             ext.menuItems.removeAll()
             return nil
 
+        // ---- fontSettings (font list only) ---------------------------------------------------------------
+        case "fontSettings.getFontList":
+            try requirePermission(ext, "fontSettings")
+            let fonts = AppServices.shared.fonts
+            if fonts.systemFamilies.isEmpty { fonts.reload() }
+            return fonts.allFamilies.map { ["fontId": $0, "displayName": $0] }
+
         // ---- commands ------------------------------------------------------------------------------------
         case "commands.getAll":
             return ext.manifest.commands.map { name, value -> [String: Any] in
