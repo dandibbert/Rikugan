@@ -41,13 +41,41 @@
   const GM_addStyle = addStyle;
   const GM_log = (...args) => console.log('[Rikugan]', ...args);
   const GM_getValue = allowed('getValue') ? (key, fallback) => Object.prototype.hasOwnProperty.call(values, key) ? clone(values[key]) : fallback : undefined;
+  const listeners = Object.create(null);
+  const emitValue = (key, oldValue, newValue, remote) => {
+    (listeners[String(key)] || []).forEach(item => { try { item.callback(String(key), oldValue, newValue, remote); } catch (error) { console.error(error); } });
+  };
+  globalThis.__rikuganValueChanged = (key, value, remote) => {
+    const oldValue = values[String(key)];
+    if (value === null) delete values[String(key)]; else values[String(key)] = value;
+    emitValue(key, oldValue, values[String(key)], remote !== false);
+  };
   const GM_setValue = allowed('setValue') ? (key, value) => {
-    values[String(key)] = clone(value); void call('setValue', {key: String(key), value}).catch(console.error);
+    const name = String(key);
+    const oldValue = values[name];
+    values[name] = clone(value);
+    emitValue(name, oldValue, values[name], false);
+    void call('setValue', {key: name, value}).catch(console.error);
   } : undefined;
   const GM_deleteValue = allowed('deleteValue') ? key => {
-    delete values[String(key)]; void call('deleteValue', {key: String(key)}).catch(console.error);
+    const name = String(key);
+    const oldValue = values[name];
+    delete values[name];
+    emitValue(name, oldValue, undefined, false);
+    void call('deleteValue', {key: name}).catch(console.error);
   } : undefined;
   const GM_listValues = allowed('listValues') ? () => Object.keys(values) : undefined;
+  let listenerSeq = 0;
+  const GM_addValueChangeListener = allowed('addValueChangeListener') ? (name, callback) => {
+    const id = String(++listenerSeq);
+    const key = String(name);
+    listeners[key] = listeners[key] || [];
+    listeners[key].push({ id, callback });
+    return id;
+  } : undefined;
+  const GM_removeValueChangeListener = allowed('removeValueChangeListener') ? id => {
+    Object.keys(listeners).forEach(key => { listeners[key] = (listeners[key] || []).filter(item => item.id !== String(id)); });
+  } : undefined;
   const GM_setClipboard = allowed('setClipboard') ? text => call('setClipboard', {text: String(text)}) : undefined;
   const GM_openInTab = allowed('openInTab') ? (url, options = {}) => call('openInTab', {url: String(url), background: options === true || options.active === false}) : undefined;
   const GM_getResourceText = allowed('getResourceText') ? name => resources[name] ? resources[name].text : undefined : undefined;
@@ -101,6 +129,8 @@
   if (allowed('setValue')) GM.setValue = async (key, value) => { values[String(key)] = clone(value); return call('setValue', {key: String(key), value}); };
   if (allowed('deleteValue')) GM.deleteValue = async key => { delete values[String(key)]; return call('deleteValue', {key: String(key)}); };
   if (allowed('listValues')) GM.listValues = () => call('listValues');
+  if (allowed('addValueChangeListener')) GM.addValueChangeListener = GM_addValueChangeListener;
+  if (allowed('removeValueChangeListener')) GM.removeValueChangeListener = GM_removeValueChangeListener;
   if (allowed('setClipboard')) GM.setClipboard = GM_setClipboard;
   if (allowed('openInTab')) GM.openInTab = GM_openInTab;
   if (menuAllowed) GM.registerMenuCommand = GM_registerMenuCommand;
@@ -110,6 +140,7 @@
   if (allowed('getResourceURL')) GM.getResourceURL = async name => resources[name] ? resources[name].url : null;
   const unsafeWindow = (() => {
     if (!config.isolated) return typeof window === 'undefined' ? globalThis : window;
+    const refs = typeof WeakMap === 'function' ? new WeakMap() : null;
     const pageEval = code => {
       const doc = typeof document === 'undefined' ? null : document;
       if (!doc || typeof doc.createElement !== 'function' || !doc.documentElement) {
@@ -120,38 +151,46 @@
       doc.documentElement.appendChild(el);
       if (typeof el.remove === 'function') el.remove();
     };
-    const readPage = prop => {
-      pageEval('try{var v=window[' + JSON.stringify(String(prop)) + '];var payload;' +
-        'if(typeof v==="function")payload={fn:1};else if(v===undefined)payload={u:1};else payload={v:v};' +
-        'document.documentElement.setAttribute("data-rg-uw",JSON.stringify(payload));}' +
-        'catch(e){document.documentElement.setAttribute("data-rg-uw",JSON.stringify({e:String(e)}));}');
+    const bridge = op => {
+      pageEval('if(!window.__rgBridge){window.__rgHandles={0:window};window.__rgNext=1;window.__rgPack=function(v){if(v===undefined)return{t:"val",u:1};if(v===null||typeof v==="string"||typeof v==="number"||typeof v==="boolean")return{t:"val",v:v};if(typeof v==="function"||(v&&typeof v==="object")){var id=window.__rgNext++;window.__rgHandles[id]=v;return{t:typeof v==="function"?"fn":"obj",id:id};}return{t:"err",e:"not transferable"};};window.__rgUnpack=function(a){if(a&&a.t==="ref")return window.__rgHandles[a.id];return a?a.v:a;};window.__rgBridge=function(op){var result;try{if(op.op==="get")result=window.__rgPack(window.__rgHandles[op.id][op.prop]);else if(op.op==="set"){window.__rgHandles[op.id][op.prop]=window.__rgUnpack(op.value);result={t:"ok"};}else if(op.op==="call"){var args=(op.args||[]).map(window.__rgUnpack);result=window.__rgPack(window.__rgHandles[op.id].apply(window.__rgHandles[op.recv]||window.__rgHandles[op.id],args));}else result={t:"err",e:"unknown"};}catch(e){result={t:"err",e:String(e&&e.message||e)};}document.documentElement.setAttribute("data-rg-uw",JSON.stringify(result));};}window.__rgBridge(' + JSON.stringify(op) + ');');
       const raw = document.documentElement.getAttribute('data-rg-uw');
       if (document.documentElement.removeAttribute) document.documentElement.removeAttribute('data-rg-uw');
       let payload = {};
-      try { payload = JSON.parse(raw || '{}'); } catch (_) { payload = { e: 'not JSON' }; }
-      if (payload.e) throw new Error('Unsupported API: isolated unsafeWindow.' + String(prop) + ' is Partial. ' + payload.e);
-      if (payload.fn) {
-        return (...args) => {
-          const json = JSON.stringify(args);
-          if (json === undefined) throw new Error('Unsupported API: unsafeWindow call arguments must be JSON. Compatibility: Partial.');
-          pageEval('window[' + JSON.stringify(String(prop)) + '].apply(window,' + json + ');');
-        };
-      }
-      return payload.u ? undefined : payload.v;
+      try { payload = JSON.parse(raw || '{}'); } catch (_) { payload = { t: 'err', e: 'not JSON' }; }
+      if (payload.t === 'err' || payload.e) throw new Error('Unsupported API: isolated unsafeWindow. ' + (payload.e || 'Partial') + ' Compatibility: Partial.');
+      return payload;
     };
-    return new Proxy(Object.create(null), {
-      get(_, prop) {
-        if (prop === 'eval') return pageEval;
-        if (typeof prop === 'symbol' || prop === 'then') return undefined;
-        return readPage(prop);
-      },
-      set(_, prop, value) {
-        const json = JSON.stringify(value);
-        if (json === undefined) throw new Error('Unsupported API: unsafeWindow assignment only accepts JSON values. Compatibility: Partial.');
-        pageEval('window[' + JSON.stringify(String(prop)) + '] = ' + json + ';');
-        return true;
-      }
-    });
+    const encode = value => {
+      if (refs && value && (typeof value === 'object' || typeof value === 'function') && refs.has(value)) return { t: 'ref', id: refs.get(value) };
+      if (typeof value === 'undefined') return { t: 'val', u: 1 };
+      try { JSON.stringify(value); } catch (_) { throw new Error('Unsupported API: unsafeWindow assignment only accepts JSON values or page object handles. Compatibility: Partial.'); }
+      if (typeof value === 'function') throw new Error('Unsupported API: unsafeWindow cannot send an isolated function into the page. Compatibility: Partial.');
+      return { t: 'val', v: value };
+    };
+    const wrap = (id, owner) => {
+      const proxy = new Proxy(function () {}, {
+        get(_, prop) {
+          if (prop === 'then' || typeof prop === 'symbol') return undefined;
+          const result = bridge({ op: 'get', id: id, prop: String(prop) });
+          if (result.t === 'fn') return wrap(result.id, id);
+          if (result.t === 'obj') return wrap(result.id);
+          return result.u ? undefined : result.v;
+        },
+        set(_, prop, value) {
+          bridge({ op: 'set', id: id, prop: String(prop), value: encode(value) });
+          return true;
+        },
+        apply(_, __, args) {
+          const result = bridge({ op: 'call', id: id, recv: owner == null ? id : owner, args: args.map(encode) });
+          if (result.t === 'fn') return wrap(result.id, owner);
+          if (result.t === 'obj') return wrap(result.id);
+          return result.u ? undefined : result.v;
+        }
+      });
+      if (refs) refs.set(proxy, id);
+      return proxy;
+    };
+    return wrap(0);
   })();
   const run = () => {
     try {
@@ -170,7 +209,11 @@
   };
   const boot = href => {
     let current = href;
-    try { current = href || location.href; if (!matched(current)) return; } catch (_) { return; }
+    try {
+      if (config.noFrames && typeof window !== 'undefined' && window.top && window.top !== window) return;
+      current = href || location.href;
+      if (!matched(current)) return;
+    } catch (_) { return; }
     if (ranFor === current) return;
     ranFor = current;
     schedule();

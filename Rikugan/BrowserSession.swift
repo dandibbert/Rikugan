@@ -357,7 +357,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
             let recordID = session?.model?.downloadCenter.noteWebKit(name: safe, fileName: url.lastPathComponent, state: "running", total: expected > 0 ? expected : 0)
             if let recordID {
                 webKitDownloadIDs[ObjectIdentifier(download)] = recordID
-                session?.model?.downloadCenter.attachWebKit(recordID, download: download, tab: id)
+                session?.model?.downloadCenter.attachWebKit(recordID, download: download, tab: id, file: url)
             }
             completionHandler(url)
         } catch { session?.model?.message = error.localizedDescription; completionHandler(nil) }

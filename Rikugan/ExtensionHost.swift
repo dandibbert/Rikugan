@@ -141,6 +141,12 @@ extension BrowserSession {
             contexts[record.id]?.setPermissionStatus(allowed ? .grantedExplicitly : .deniedExplicitly, for: match)
         }
     }
+    func actionPresentation(_ id: UUID) -> (icon: UIImage?, badge: String) {
+        guard let context = contexts[id] else { return (nil, "") }
+        let action = context.action(for: activeTab)
+        let icon = action.icon(for: CGSize(width: 22, height: 22)) ?? context.webExtension.actionIcon(for: CGSize(width: 22, height: 22))
+        return (icon, action.badgeText)
+    }
     func performExtension(_ id: UUID) {
         guard let context = contexts[id], let tab = activeTab else { model?.message = "扩展没有载入，请检查扩展详情里的错误。"; return }
         context.userGesturePerformed(in: tab)

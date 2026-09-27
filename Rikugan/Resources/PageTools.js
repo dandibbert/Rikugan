@@ -70,6 +70,56 @@
   function hostMatches(host, domain) {
     return host === domain || (!!domain && host.endsWith('.' + domain));
   }
+  function hideNode(node) {
+    if (node && node.style && node.style.setProperty) node.style.setProperty('display', 'none', 'important');
+  }
+  function queryAll(doc, selector) {
+    try { return Array.from(doc.querySelectorAll(selector || '*')); } catch (error) { return []; }
+  }
+  function applyProcedural(doc, rule) {
+    const kind = rule.kind || 'has-text';
+    if (kind === 'xpath') {
+      if (!doc.evaluate || !rule.text) return;
+      const snapshot = doc.evaluate(rule.text, doc, null, 7, null);
+      for (let index = 0; index < snapshot.snapshotLength; index += 1) hideNode(snapshot.snapshotItem(index));
+      return;
+    }
+    const nodes = queryAll(doc, rule.selector || '*');
+    if (kind === 'remove') { nodes.forEach(node => { if (node.remove) node.remove(); }); return; }
+    if (kind === 'style') {
+      nodes.forEach(node => { if (node.style) node.style.cssText = (node.style.cssText || '') + ';' + (rule.text || ''); });
+      return;
+    }
+    if (kind === 'upward') {
+      nodes.forEach(node => {
+        let target = node;
+        if (/^\d+$/.test(rule.text || '')) {
+          let count = Number(rule.text);
+          while (count > 0 && target.parentElement) { target = target.parentElement; count -= 1; }
+        } else if (rule.text && node.closest) target = node.closest(rule.text) || node;
+        hideNode(target);
+      });
+      return;
+    }
+    if (kind === 'matches-css') {
+      const raw = String(rule.text || '');
+      const splitAt = raw.indexOf(',') >= 0 ? raw.indexOf(',') : raw.indexOf(':');
+      const prop = (splitAt >= 0 ? raw.slice(0, splitAt) : raw).trim();
+      const expected = splitAt >= 0 ? raw.slice(splitAt + 1).trim() : '';
+      nodes.forEach(node => {
+        let value = '';
+        try { value = root.getComputedStyle ? root.getComputedStyle(node).getPropertyValue(prop) : ''; } catch (error) { value = ''; }
+        if (!value && node.style) value = node.style[prop] || '';
+        if (!expected || String(value).indexOf(expected) >= 0) hideNode(node);
+      });
+      return;
+    }
+    nodes.forEach(node => {
+      const text = node.textContent || '';
+      if (rule.text && text.indexOf(rule.text) < 0) return;
+      hideNode(node);
+    });
+  }
   function applyBlocking(globalCSS, hostMap, procedural) {
     const host = (root.location && root.location.hostname) || '';
     let extra = '';
@@ -79,18 +129,24 @@
     });
     ensureStyle('rikugan-cosmetic', (globalCSS || '') + extra);
     const doc = root.document;
+    root.__rgBlockArgs = [globalCSS, hostMap, procedural];
     if (!doc || !doc.querySelectorAll) return;
     (procedural || []).forEach(rule => {
       const domains = rule.domains || [];
       if (domains.length && !domains.some(domain => hostMatches(host, domain))) return;
-      let nodes = [];
-      try { nodes = Array.from(doc.querySelectorAll(rule.selector || '*')); } catch (error) { return; }
-      nodes.forEach(node => {
-        const text = node.textContent || '';
-        if (rule.text && text.indexOf(rule.text) < 0) return;
-        if (node.style && node.style.setProperty) node.style.setProperty('display', 'none', 'important');
-      });
+      applyProcedural(doc, rule);
     });
+    if (!root.__rgBlockWatch && doc.body && typeof root.MutationObserver === 'function') {
+      let timer = 0;
+      root.__rgBlockWatch = new root.MutationObserver(() => {
+        if (timer) root.clearTimeout(timer);
+        timer = root.setTimeout(() => {
+          const args = root.__rgBlockArgs || [];
+          applyBlocking(args[0], args[1], args[2]);
+        }, 60);
+      });
+      root.__rgBlockWatch.observe(doc.body, { subtree: true, childList: true });
+    }
   }
   function textNodes(rootNode) {
     const doc = root.document;
@@ -116,7 +172,7 @@
   function collectTexts(limit) {
     const body = root.document && root.document.body;
     const items = [];
-    const maxNodes = limit || 2500;
+    const maxNodes = limit > 0 ? limit : 100000;
     textNodes(body).forEach(node => {
       if (Object.keys(root.__rgTextNodes || {}).length >= maxNodes) return;
       const text = visibleText(node);
@@ -124,7 +180,7 @@
       const id = 't' + (root.__rgSeq = (root.__rgSeq || 0) + 1);
       remember(node, id);
       const size = 800;
-      for (let start = 0, piece = 0; start < text.length && piece < 8; start += size, piece += 1) {
+      for (let start = 0, piece = 0; start < text.length && piece < 40; start += size, piece += 1) {
         items.push({ id: id + '.' + piece, text: text.slice(start, start + size) });
       }
     });
@@ -158,16 +214,20 @@
     const doc = root.document;
     if (!doc || !doc.body || typeof root.MutationObserver !== 'function') return false;
     if (root.__rgWatch) root.__rgWatch.disconnect();
-    const until = Date.now() + Math.min(ms || 20000, 30000);
+    const bounded = ms > 0;
+    const until = Date.now() + ms;
     const observer = new root.MutationObserver(() => {
-      if (Date.now() > until) { observer.disconnect(); return; }
-      const items = collectTexts(2500);
+      if (bounded && Date.now() > until) { observer.disconnect(); return; }
+      const items = collectTexts(0);
       if (!items.length || !root.webkit || !webkit.messageHandlers || !webkit.messageHandlers.rikuganPage) return;
-      webkit.messageHandlers.rikuganPage.postMessage({ action: 'texts', items: items.slice(0, 40) });
+      webkit.messageHandlers.rikuganPage.postMessage({ action: 'texts', items: items.slice(0, 200) });
     });
     root.__rgWatch = observer;
     observer.observe(doc.body, { subtree: true, childList: true, characterData: true });
     return true;
+  }
+  function stopWatch() {
+    if (root.__rgWatch) { root.__rgWatch.disconnect(); root.__rgWatch = null; }
   }
   function blockFrom(node) {
     if (!node || node.nodeType !== 1) return null;
@@ -196,7 +256,7 @@
     const blocks = [];
     const images = [];
     const walk = node => {
-      if (!node || blocks.length > 400) return;
+      if (!node || blocks.length > 2000) return;
       const block = blockFrom(node);
       if (block) {
         blocks.push(block);
@@ -330,32 +390,43 @@
       root.addEventListener('unhandledrejection', event => send('error', 'Unhandled rejection: ' + (event && event.reason && event.reason.message || event && event.reason || '')));
     }
     if (root.console && !root.console.__rgWrapped) {
-      const original = root.console.error;
-      root.console.error = function () {
-        send('error', Array.from(arguments).join(' '));
-        if (typeof original === 'function') return original.apply(this, arguments);
-      };
+      ['log', 'info', 'warn', 'error'].forEach(level => {
+        const original = root.console[level];
+        root.console[level] = function () {
+          send(level, Array.from(arguments).map(item => {
+            try { return typeof item === 'string' ? item : JSON.stringify(item); } catch (error) { return String(item); }
+          }).join(' '));
+          if (typeof original === 'function') return original.apply(this, arguments);
+        };
+      });
       root.console.__rgWrapped = true;
     }
   }
   function installNotifications(decision) {
-    const NotificationAPI = root.Notification;
-    if (!NotificationAPI) return false;
     const mode = decision || 'ask';
-    if (mode === 'block') {
-      NotificationAPI.requestPermission = () => Promise.resolve('denied');
-      return true;
-    }
-    if (mode === 'allow') {
-      NotificationAPI.requestPermission = () => Promise.resolve('granted');
-      return true;
-    }
-    NotificationAPI.requestPermission = () => new Promise(resolve => {
+    root.__rgNotifyMode = mode === 'allow' ? 'granted' : mode === 'block' ? 'denied' : 'default';
+    function RikuganNotification(title, options) {
+      const current = root.__rgNotifyMode || 'default';
+      if (current === 'denied') throw new Error('Notification permission denied');
+      const payload = { action: 'show-notification', title: String(title || ''), body: String((options && options.body) || '') };
+      if (current === 'granted') { post(payload); return; }
       const id = 'n' + Math.random().toString(36).slice(2);
       root.__rgNotify = root.__rgNotify || {};
-      root.__rgNotify[id] = resolve;
+      root.__rgNotify[id] = decisionName => {
+        root.__rgNotifyMode = decisionName;
+        if (decisionName === 'granted') post(payload);
+      };
+      post({ action: 'notification', id: id });
+    }
+    RikuganNotification.permission = root.__rgNotifyMode;
+    RikuganNotification.requestPermission = () => new Promise(resolve => {
+      if (root.__rgNotifyMode === 'granted' || root.__rgNotifyMode === 'denied') { resolve(root.__rgNotifyMode); return; }
+      const id = 'n' + Math.random().toString(36).slice(2);
+      root.__rgNotify = root.__rgNotify || {};
+      root.__rgNotify[id] = decisionName => { root.__rgNotifyMode = decisionName; RikuganNotification.permission = decisionName; resolve(decisionName); };
       post({ action: 'notification', id: id });
     });
+    root.Notification = RikuganNotification;
     return true;
   }
   function startPicker() {
@@ -461,7 +532,7 @@
   }
   const api = {
     selector, setAppearance, setFont, darkCSS: darkRules, applyBlocking, collectTexts, applyTexts, restoreTexts,
-    watchNewText, extractArticle, collectMedia, parseM3U8, parseMPD, installNetHook, installConsole, installNotifications,
+    watchNewText, stopWatch, extractArticle, collectMedia, parseM3U8, parseMPD, installNetHook, installConsole, installNotifications,
     startPicker, countMatches, clearFind, videoAction, fill, ensureStyle
   };
   root.RikuganPageTools = api;

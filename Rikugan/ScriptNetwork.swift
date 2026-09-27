@@ -57,7 +57,7 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
 
     static func downloadText(_ url: URL) async throws -> String {
         let result: [String: Any] = try await withCheckedThrowingContinuation { continuation in
-            fetch(URLRequest(url: url), limit: 2_000_000, permits: { $0.scheme == "https" && $0.user == nil && $0.password == nil }) {
+            fetch(URLRequest(url: url), limit: 8_000_000, permits: { $0.scheme == "https" && $0.user == nil && $0.password == nil }) {
                 continuation.resume(with: $0)
             }
         }

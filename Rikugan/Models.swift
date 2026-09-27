@@ -104,7 +104,8 @@ struct UserScript: Codable, Identifiable, Equatable {
         "GM_listValues", "GM.listValues", "GM_xmlhttpRequest", "GM.xmlHttpRequest",
         "GM_setClipboard", "GM.setClipboard", "GM_openInTab", "GM.openInTab",
         "GM_registerMenuCommand", "GM.registerMenuCommand", "GM_unregisterMenuCommand", "GM.unregisterMenuCommand",
-        "GM_getResourceText", "GM.getResourceText", "GM_getResourceURL", "GM.getResourceURL", "unsafeWindow"
+        "GM_getResourceText", "GM.getResourceText", "GM_getResourceURL", "GM.getResourceURL", "unsafeWindow",
+        "GM_addValueChangeListener", "GM.addValueChangeListener", "GM_removeValueChangeListener", "GM.removeValueChangeListener"
     ]
 
     static let capabilityNotes: [String: String] = [
@@ -112,7 +113,7 @@ struct UserScript: Codable, Identifiable, Equatable {
         "GM_xmlhttpRequest": "Partial。无 Cookie，按 @connect 检查重定向，onprogress 报告已下载字节，abort() 会取消 URLSession 任务。单次响应 8 MB。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
         "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",
-        "unsafeWindow": "Partial。@grant none 就是页面 window。隔离脚本可读可写 JSON 属性，可调用页面函数；Document 等不可序列化对象仍会标明 Partial。",
+        "unsafeWindow": "Partial。@grant none 就是页面 window。隔离脚本通过页面里的对象句柄读写 window 和 DOM，可以调用页面函数；不能把隔离世界的函数送进页面。",
         "document-body": "Supported。document-start 注入后等到 body 存在再执行。"
     ]
 

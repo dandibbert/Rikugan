@@ -19,6 +19,8 @@ struct DownloadLive: Equatable {
     private var webDownloads: [UUID: WKDownload] = [:]
     private var webResume: [UUID: Data] = [:]
     private var webTabs: [UUID: UUID] = [:]
+    private var webFiles: [UUID: URL] = [:]
+    private var pollTask: Task<Void, Never>?
 
     func activate(_ model: AppModel) {
         self.model = model
@@ -96,6 +98,7 @@ struct DownloadLive: Equatable {
         webDownloads[id]?.cancel { _ in }
         tasks[id] = nil
         webDownloads[id] = nil
+        webFiles[id] = nil
         resumeData[id] = nil
         webResume[id] = nil
         live[id] = nil
@@ -120,19 +123,23 @@ struct DownloadLive: Equatable {
         model.updateProfile(model.profile.id) { $0.downloads.insert(record, at: 0) }
         return id
     }
-    func attachWebKit(_ id: UUID, download: WKDownload, tab: UUID) {
+    func attachWebKit(_ id: UUID, download: WKDownload, tab: UUID, file: URL) {
         webDownloads[id] = download
         webTabs[id] = tab
+        webFiles[id] = file
         owners[id] = model?.profile.id
+        ensureWebPoll()
     }
     func finishWebKit(_ id: UUID, fileName: String) {
         webDownloads[id] = nil
         webResume[id] = nil
+        webFiles[id] = nil
         update(id, state: "finished", fileName: fileName)
     }
     func failWebKit(_ id: UUID, resume: Data?, message: String) {
         if let resume { webResume[id] = resume }
         webDownloads[id] = nil
+        webFiles[id] = nil
         if model?.state.profiles.flatMap(\.downloads).first(where: { $0.id == id })?.state == "paused" {
             update(id, resumable: resume != nil || webResume[id] != nil)
             return
@@ -140,6 +147,23 @@ struct DownloadLive: Equatable {
         live[id] = nil
         update(id, state: resume == nil ? "failed" : "paused", resumable: resume != nil)
         model?.message = message
+    }
+    /// Public WKDownloadDelegate has no byte-progress method. WebKit writes the destination
+    /// file as bytes arrive, so speed and ETA come from that file's size.
+    private func ensureWebPoll() {
+        guard pollTask == nil else { return }
+        pollTask = Task { @MainActor in
+            while !webFiles.isEmpty {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                for (id, url) in webFiles {
+                    let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+                    let total = model.flatMap { model in model.state.profiles.flatMap(\.downloads).first { $0.id == id }?.total } ?? 0
+                    progress(id, written: size, expected: max(total, 0))
+                    if size > 0 { update(id, received: size) }
+                }
+            }
+            pollTask = nil
+        }
     }
     private func resumeWebKit(_ id: UUID) {
         guard let data = webResume[id], let model else { return }

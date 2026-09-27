@@ -141,6 +141,8 @@ struct MediaSheet: View {
                         let width = (item["width"] as? NSNumber)?.intValue ?? 0
                         let height = (item["height"] as? NSNumber)?.intValue ?? 0
                         if width > 0 { Text("\(width)×\(height)").font(.caption2).foregroundStyle(.secondary) }
+                        if let size = item["size"] as? NSNumber, size.int64Value > 0 { Text(ByteFormat.bytes(size.int64Value)).font(.caption2).foregroundStyle(.secondary) }
+                        else if let size = item["size"] as? Int, size > 0 { Text(ByteFormat.bytes(Int64(size))).font(.caption2).foregroundStyle(.secondary) }
                         Button("下载") { Task { await download(item["url"] as? String) } }.font(.subheadline)
                     }
                 }
@@ -171,6 +173,34 @@ struct MediaSheet: View {
             else { found.append(contentsOf: PlaylistText.parseMPD(text, base: url)) }
         }
         variants = found
+        await enrichSizes()
+    }
+    private func enrichSizes() async {
+        var next = items
+        for index in next.indices {
+            let existing = (next[index]["size"] as? NSNumber)?.int64Value ?? Int64(next[index]["size"] as? Int ?? 0)
+            if existing > 0 { continue }
+            guard let raw = next[index]["url"] as? String, let url = URL(string: raw) else { continue }
+            if let length = await contentLength(url) { next[index]["size"] = length }
+        }
+        items = next
+    }
+    private func contentLength(_ url: URL) async -> Int64? {
+        guard ["http", "https"].contains(url.scheme ?? "") else { return nil }
+        var head = URLRequest(url: url)
+        head.httpMethod = "HEAD"
+        head.timeoutInterval = 8
+        if let header = await cookieHeader(for: url) { head.setValue(header, forHTTPHeaderField: "Cookie") }
+        if let page = tab.webView.url { head.setValue(page.absoluteString, forHTTPHeaderField: "Referer") }
+        if let (_, response) = try? await URLSession.shared.data(for: head), let http = response as? HTTPURLResponse, http.expectedContentLength > 0 {
+            return http.expectedContentLength
+        }
+        var ranged = head
+        ranged.httpMethod = "GET"
+        ranged.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        guard let (_, response) = try? await URLSession.shared.data(for: ranged), let http = response as? HTTPURLResponse else { return nil }
+        if let range = http.value(forHTTPHeaderField: "Content-Range"), let total = range.split(separator: "/").last, let value = Int64(total), value > 0 { return value }
+        return http.expectedContentLength > 0 ? http.expectedContentLength : nil
     }
     private func playlistText(_ url: URL) async -> String? {
         var request = URLRequest(url: url)
@@ -345,6 +375,13 @@ final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 }
 
+enum PageTranslation {
+    static let backend = "apple"
+    static func configuration(target: String) -> TranslationSession.Configuration {
+        TranslationSession.Configuration(target: Locale.Language(identifier: target))
+    }
+}
+
 struct TranslateSheet: View {
     @ObservedObject var tab: BrowserTab
     @EnvironmentObject var model: AppModel
@@ -364,10 +401,11 @@ struct TranslateSheet: View {
                     ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
                 }
                 Button(original ? "显示译文" : "显示原文") { Task { await toggle() } }.disabled(rows.isEmpty)
-                Text("当前能工作的翻译后端只有 Apple 设备端 Translation。没有配置网络密钥的第二家服务，这里不会假装有。未下载的语言包由系统提示。一篇普通文章会分批译完，最多 2500 个文本节点；页面变化会在约 20 秒内补译。").font(.footnote).foregroundStyle(.secondary)
+                Text("翻译后端是 Apple 设备端 Translation（PageTranslation.backend）。没有第二家网络服务。语言列表是可以交给系统的目标语言；没下载的语言包由系统报错。打开这个页面期间会把正文分批译完，并持续补译新出现的文字。").font(.footnote).foregroundStyle(.secondary)
             }.navigationTitle("翻译网页")
                 .translationTask(configuration) { session in await translate(session) }
                 .onChange(of: tab.liveTexts) { _, items in Task { await translateIncoming(items) } }
+                .onDisappear { Task { _ = await PageTools.call("RikuganPageTools.stopWatch()", in: tab.webView) } }
         }.task { await collect() }
     }
     static let languages = [
@@ -378,10 +416,13 @@ struct TranslateSheet: View {
         ("pl", "波兰语"), ("tr", "土耳其语"), ("uk", "乌克兰语"), ("hi", "印地语"), ("cs", "捷克语"),
         ("da", "丹麦语"), ("fi", "芬兰语"), ("el", "希腊语"), ("he", "希伯来语"), ("hu", "匈牙利语"),
         ("ms", "马来语"), ("nb", "挪威语"), ("ro", "罗马尼亚语"), ("sk", "斯洛伐克语"), ("sv", "瑞典语"),
-        ("ca", "加泰罗尼亚语"), ("hr", "克罗地亚语"), ("bg", "保加利亚语")
+        ("ca", "加泰罗尼亚语"), ("hr", "克罗地亚语"), ("bg", "保加利亚语"),
+        ("bn", "孟加拉语"), ("ta", "泰米尔语"), ("te", "泰卢固语"), ("mr", "马拉地语"), ("ur", "乌尔都语"),
+        ("fa", "波斯语"), ("fil", "菲律宾语"), ("sw", "斯瓦希里语"), ("sr", "塞尔维亚语"), ("sl", "斯洛文尼亚语"),
+        ("et", "爱沙尼亚语"), ("lv", "拉脱维亚语"), ("lt", "立陶宛语"), ("kk", "哈萨克语"), ("mn", "蒙古语")
     ]
     private func collect() async {
-        let value = await PageTools.call("RikuganPageTools.collectTexts(2500)", in: tab.webView) as? [[String: Any]] ?? []
+        let value = await PageTools.call("RikuganPageTools.collectTexts(0)", in: tab.webView) as? [[String: Any]] ?? []
         rows = value.compactMap { item in
             guard let id = item["id"] as? String, let text = item["text"] as? String else { return nil }
             return (id, text)
@@ -389,14 +430,18 @@ struct TranslateSheet: View {
         let sample = rows.prefix(8).map(\.text).joined(separator: " ")
         let recognizer = NLLanguageRecognizer(); recognizer.processString(sample)
         status = "检测语言：\(recognizer.dominantLanguage?.rawValue ?? "未知") · \(rows.count) 段"
-        configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget))
+        configuration = PageTranslation.configuration(target: model.profile.settings.translateTarget)
     }
     private func translate(_ session: TranslationSession) async {
         guard !translating else { return }
         translating = true
         defer { translating = false }
-        let cap = Array(rows.prefix(2500).filter { !applied.contains($0.id) })
-        guard !cap.isEmpty else { return }
+        let cap = rows.filter { !applied.contains($0.id) }
+        guard !cap.isEmpty else {
+            status = "已翻译 \(applied.count) 段。这个页面打开时会继续补译。"
+            _ = await PageTools.call("RikuganPageTools.watchNewText(0)", in: tab.webView)
+            return
+        }
         var index = 0
         var done = applied.count
         while index < cap.count {
@@ -414,12 +459,12 @@ struct TranslateSheet: View {
             }
             index += batch.count
         }
-        if rows.prefix(2500).contains(where: { !applied.contains($0.id) }) {
-            configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget))
+        if rows.contains(where: { !applied.contains($0.id) }) {
+            configuration = PageTranslation.configuration(target: model.profile.settings.translateTarget)
             return
         }
-        status = "已翻译 \(done) 段。之后约 20 秒内的新文字会继续翻译。"
-        _ = await PageTools.call("RikuganPageTools.watchNewText(20000)", in: tab.webView)
+        status = "已翻译 \(done) 段。这个页面打开时会继续补译。"
+        _ = await PageTools.call("RikuganPageTools.watchNewText(0)", in: tab.webView)
     }
     private func translateIncoming(_ items: [[String: String]]) async {
         let fresh = items.compactMap { item -> (id: String, text: String)? in
@@ -430,7 +475,7 @@ struct TranslateSheet: View {
         rows.append(contentsOf: fresh)
         status = "页面有新文字，正在补译 \(fresh.count) 段"
         guard !translating else { return }
-        configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget))
+        configuration = PageTranslation.configuration(target: model.profile.settings.translateTarget)
     }
     private func apply(_ pairs: [[String: String]]) async throws {
         guard let data = try? JSONSerialization.data(withJSONObject: pairs), let json = String(data: data, encoding: .utf8) else { return }
@@ -440,7 +485,7 @@ struct TranslateSheet: View {
         original.toggle()
         let call = original ? "RikuganPageTools.restoreTexts()" : "RikuganPageTools.applyTexts([])"
         if original { _ = await PageTools.call(call, in: tab.webView) }
-        else { configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget)) }
+        else { configuration = PageTranslation.configuration(target: model.profile.settings.translateTarget) }
     }
 }
 
@@ -462,6 +507,11 @@ struct SiteSettingsSheet: View {
                     toggle("用户脚本", key: \.userScriptsEnabled)
                     toggle("JavaScript", key: \.javascriptEnabled)
                     Picker("弹窗", selection: optional(\.popups)) { Text("允许").tag(Optional("allow")); Text("询问").tag(Optional("ask")); Text("禁止").tag(Optional("block")) }
+                    Picker("网页字体", selection: optional(\.fontFamily)) {
+                        Text("跟随身份").tag(String?.none)
+                        Text("系统默认").tag(String?(""))
+                        ForEach(FontLibrary.families().prefix(80), id: \.self) { Text($0).tag(String?($0)) }
+                    }
                     Section("网页权限") {
                         ForEach(["camera", "microphone", "location", "clipboard", "notification"], id: \.self) { kind in
                             Picker(kind, selection: permission(kind)) { Text("询问").tag("ask"); Text("允许").tag("allow"); Text("禁止").tag("block") }
@@ -605,24 +655,41 @@ struct ContentBlockingView: View {
             }
             Section("AdGuard 订阅") {
                 ForEach(model.profile.settings.subscriptions) { sub in
-                    VStack(alignment: .leading) { Text(sub.name); Text(sub.url).font(.caption2).foregroundStyle(.secondary); Text(sub.body.isEmpty ? "尚未下载" : "\(sub.body.split(separator: "\n").count) 行").font(.caption) }
+                    VStack(alignment: .leading) {
+                        Text(sub.name)
+                        Text(sub.url).font(.caption2).foregroundStyle(.secondary)
+                        Text(sub.body.isEmpty ? "尚未下载" : "\(sub.body.split(separator: "\n").count) 行").font(.caption)
+                        Button("重新下载") { Task { await refreshSubscription(sub) } }.font(.caption)
+                    }
                 }.onDelete { index in model.updateProfile(model.profile.id) { $0.settings.subscriptions.remove(atOffsets: index) }; rebuild() }
                 TextField("名称", text: $subName)
                 TextField("https://…/filters.txt", text: $subURL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("添加并下载") { Task { await addSubscription() } }
             }
-            Text("网络规则按每 5 万条切成 WKContentRuleList。WebKit 没有公开硬上限，但过大的列表会编译失败，失败的那一段会退回纯网络规则。元素隐藏、例外规则、#$# 样式和能转成 CSS :has 的 #?# 会注入页面。:has-text / :contains 用脚本隐藏。不处理 scriptlet、redirect、removeparam。这不是完整 EasyList。").font(.footnote).foregroundStyle(.secondary)
+            Text("订阅按原文件编译，单次下载上限 8 MB，够一份完整的 EasyList 体量；不在解析时砍到 1500 条。网络规则按每 5 万条切成 WKContentRuleList（Safari 内容拦截扩展的实际上限；WebKit 没有公开硬顶，编译失败的段会退回纯网络规则）。支持例外规则、资源类型、域名、元素隐藏、样式注入，以及 :has、:has-text、:contains、:xpath、:matches-css、:upward、:remove、:style。不处理 scriptlet 和 redirect。这不是把 EasyList 内置进包里。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("内容拦截")
     }
     private func setting(_ key: WritableKeyPath<BrowserSettings, Bool>) -> Binding<Bool> {
         Binding(get: { model.profile.settings[keyPath: key] }, set: { value in model.updateProfile(model.profile.id) { $0.settings[keyPath: key] = value }; rebuild() })
     }
+    private func refreshSubscription(_ sub: FilterSubscription) async {
+        guard let url = URL(string: sub.url), url.scheme == "https" else { model.message = "订阅只接受 HTTPS。"; return }
+        do {
+            let text = try await ScriptNetwork.downloadText(url)
+            model.updateProfile(model.profile.id) { profile in
+                if let index = profile.settings.subscriptions.firstIndex(where: { $0.id == sub.id }) {
+                    profile.settings.subscriptions[index].body = text
+                    profile.settings.subscriptions[index].updatedAt = Date()
+                }
+            }
+            rebuild()
+        } catch { model.message = error.localizedDescription }
+    }
     private func addSubscription() async {
         guard let url = URL(string: subURL), url.scheme == "https" else { model.message = "订阅只接受 HTTPS。"; return }
         do {
             let text = try await ScriptNetwork.downloadText(url)
-            let body = String(text.prefix(1_500_000))
-            model.updateProfile(model.profile.id) { $0.settings.subscriptions.append(FilterSubscription(name: subName.isEmpty ? "订阅" : subName, url: subURL, body: body, updatedAt: Date())) }
+            model.updateProfile(model.profile.id) { $0.settings.subscriptions.append(FilterSubscription(name: subName.isEmpty ? "订阅" : subName, url: subURL, body: text, updatedAt: Date())) }
             subURL = ""; rebuild()
         } catch { model.message = error.localizedDescription }
     }
@@ -642,7 +709,7 @@ struct FontSettingsView: View {
                 ForEach(FontLibrary.families(), id: \.self) { Text($0).tag($0) }
             }
             Button("安装字体文件") { importing = true }
-            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf、otf、ttc 会注册到本进程，并用 data URL 注入当前身份的网页。woff / woff2 会被拒绝。字体是身份级设置，不是每个站点单独一份。").font(.footnote).foregroundStyle(.secondary)
+            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf、otf、ttc 会注册到本进程，并用 data URL 注入网页。woff / woff2 Core Text 不能注册，导入会被拒绝。身份字体作用到网页；站点设置里可以单独覆盖。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("网页字体")
             .fileImporter(isPresented: $importing, allowedContentTypes: [.font, .data], allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first { do { try model.importFont(url) } catch { model.message = error.localizedDescription } }

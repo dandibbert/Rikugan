@@ -73,13 +73,12 @@ struct ScriptCommand: Identifiable {
                   let json = String(data: data, encoding: .utf8) else { replyHandler(nil, "脚本存储必须为 JSON，且不能超过 2 MB。"); return }
             if !ScriptVault.persists(isPrivate: tab.isPrivate) {
                 session.privateScriptValues[script.id] = stored
-                replyHandler(true, nil)
-                return
+            } else {
+                session.model?.updateProfile(session.profileID) { profile in
+                    if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].storageJSON = json }
+                }
             }
-            session.model?.updateProfile(session.profileID) { profile in
-                if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].storageJSON = json }
-            }
-            session.scheduleScriptRefresh()
+            broadcastValue(script: script, key: key, value: operation == "deleteValue" ? nil : stored[key], except: tab, session: session)
             replyHandler(true, nil)
         case "setClipboard":
             UIPasteboard.general.string = String((args["text"] as? String ?? "").prefix(1_000_000))
@@ -131,6 +130,17 @@ struct ScriptCommand: Identifiable {
             return session.privateScriptValues[script.id] ?? [:]
         }
         return Self.values(script)
+    }
+    private func broadcastValue(script: UserScript, key: String, value: Any?, except tab: BrowserTab, session: BrowserSession) {
+        let payload: Any = value ?? NSNull()
+        guard let data = try? JSONSerialization.data(withJSONObject: [payload]), var text = String(data: data, encoding: .utf8) else { return }
+        text.removeFirst(); text.removeLast()
+        let keyJS = PageTools.jsString(key) ?? "\"\""
+        let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
+        let source = "globalThis.__rikuganValueChanged && globalThis.__rikuganValueChanged(\(keyJS), \(text), true)"
+        for other in session.tabs where other.id != tab.id && other.isPrivate == tab.isPrivate {
+            other.webView.evaluateJavaScript(source, in: nil, in: world) { _, _ in }
+        }
     }
     private func reportProgress(id: String, loaded: Int, total: Int, world: WKContentWorld) {
         guard let tab else { return }

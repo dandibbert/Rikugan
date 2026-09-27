@@ -9,7 +9,7 @@ import Foundation
 /// scriptlets (`#%#`, `##+js`), `$redirect`, `$removeparam`, `$csp` and `$replace` are dropped.
 enum AdBlockEngine {
     static let chunkDefault = 50_000
-    static let maxLines = 300_000
+    static let maxLines = 500_000
 
     struct Compiled: Equatable {
         var chunks: [String]
@@ -190,7 +190,6 @@ enum AdBlockEngine {
         if let range = line.range(of: "#?#") {
             let domains = domainList(String(line[..<range.lowerBound])).include
             let selector = String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-            if selector.contains(":matches-css") || selector.contains(":xpath") || selector.contains(":upward") || selector.contains(":remove(") { return nil }
             if let procedural = procedural(selector) {
                 return .procedural(domains, procedural.kind, procedural.selector, procedural.text)
             }
@@ -283,17 +282,35 @@ enum AdBlockEngine {
     }
 
     private static func procedural(_ selector: String) -> (kind: String, selector: String, text: String)? {
-        for marker in ["has-text", "contains", "-abp-contains"] {
+        let markers = ["has-text", "contains", "-abp-contains", "xpath", "matches-css", "upward", "remove", "style"]
+        for marker in markers {
             let token = ":" + marker + "("
             guard let start = selector.range(of: token) else { continue }
             let head = String(selector[..<start.lowerBound]).trimmingCharacters(in: .whitespaces)
             let rest = selector[start.upperBound...]
             guard let end = rest.lastIndex(of: ")") else { return nil }
             let text = String(rest[..<end]).trimmingCharacters(in: .whitespaces)
-            let base = head.isEmpty ? "*" : head
-            guard base == "*" || safeSelector(base), !text.isEmpty, text.count < 160 else { return nil }
-            let kind = marker == "has-text" ? "has-text" : "contains"
-            return (kind, base, text)
+            let base = head.isEmpty ? (marker == "xpath" ? "" : "*") : head
+            if marker != "xpath", base != "*", !safeSelector(base) { return nil }
+            switch marker {
+            case "xpath":
+                guard !text.isEmpty, text.count < 400, !text.contains("<"), !text.lowercased().contains("javascript") else { return nil }
+                return ("xpath", base, text)
+            case "remove":
+                return ("remove", base, "")
+            case "style":
+                guard text.count < 500, safeCSS(text.contains("{") ? text : "x{" + text + "}") else { return nil }
+                return ("style", base, text)
+            case "upward":
+                guard !text.isEmpty, text.count < 160, !text.contains("{") else { return nil }
+                return ("upward", base, text)
+            case "matches-css":
+                guard !text.isEmpty, text.count < 160, !text.contains("{") else { return nil }
+                return ("matches-css", base, text)
+            default:
+                guard !text.isEmpty, text.count < 160 else { return nil }
+                return (marker == "has-text" ? "has-text" : "contains", base, text)
+            }
         }
         return nil
     }

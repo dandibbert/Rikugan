@@ -3,6 +3,14 @@ import WebKit
 
 struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var existingID: UUID? }
 
+struct PageNotice: Identifiable, Equatable {
+    var id = UUID()
+    var host: String
+    var title: String
+    var body: String
+    var date = Date()
+}
+
 @MainActor final class AppModel: ObservableObject {
     @Published var state: AppState
     @Published var session: BrowserSession?
@@ -11,6 +19,8 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
     @Published var preparedExtension: PreparedExtension?
     @Published var working = false
     @Published var pendingShare: (action: String, value: String)?
+    @Published var notices: [PageNotice] = []
+    @Published var noticeToast: PageNotice?
     let downloadCenter = DownloadCenter()
     let windows = WindowRegistry()
     let root: URL
@@ -42,6 +52,12 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         registerFonts()
     }
 
+    func deliverNotice(host: String, title: String, body: String) {
+        let notice = PageNotice(host: host, title: title, body: body)
+        notices.insert(notice, at: 0)
+        if notices.count > 40 { notices.removeLast(notices.count - 40) }
+        noticeToast = notice
+    }
     func start() {
         guard session == nil else { return }
         activate(state.activeProfileID)

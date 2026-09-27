@@ -100,7 +100,8 @@ extension BrowserTab: WKScriptMessageHandler {
         let host = webView.url?.host
         let site = session?.profile.site(for: host)
         let mode = site?.darkMode ?? session?.profile.settings.darkMode ?? "off"
-        let family = session?.profile.settings.webFontFamily ?? ""
+        let siteFont = site?.fontFamily
+        let family = siteFont ?? session?.profile.settings.webFontFamily ?? ""
         var face = ""
         if let font = session?.profile.settings.importedFonts.first(where: { $0.family == family }), let session, let model = session.model {
             let file = model.directory(session.profileID).appendingPathComponent("Fonts").appendingPathComponent(font.fileName)
@@ -223,6 +224,15 @@ extension BrowserTab: WKScriptMessageHandler {
             if !rows.isEmpty { liveTexts = rows }
             return
         }
+        if action == "show-notification" {
+            let title = body["title"] as? String ?? "通知"
+            let text = body["body"] as? String ?? ""
+            let host = webView.url?.host ?? ""
+            let saved = session?.profile.permission(host: host, kind: "notification") ?? "ask"
+            if saved == "block" { return }
+            session?.model?.deliverNotice(host: host, title: title, body: text)
+            return
+        }
         if action == "notification", let id = body["id"] as? String {
             let host = webView.url?.host ?? ""
             let saved = session?.profile.permission(host: host, kind: "notification") ?? "ask"
@@ -230,7 +240,7 @@ extension BrowserTab: WKScriptMessageHandler {
                 resolveNotification(id, decision: saved == "allow" ? "granted" : "denied")
                 return
             }
-            BrowserPresentation.choice(title: host.isEmpty ? "通知" : host, message: "这个网页想显示通知。Rikugan 会记住允许或禁止，但 iOS 不会为网页 Notification 弹出系统横幅。") { [weak self] choice in
+            BrowserPresentation.choice(title: host.isEmpty ? "通知" : host, message: "这个网页想显示通知。允许后会出现在 App 内通知列表，iOS 不会弹出系统横幅。") { [weak self] choice in
                 guard let self else { return }
                 if choice != "ask" {
                     self.session?.model?.updateProfile(self.session?.profileID ?? UUID()) { profile in

@@ -19,7 +19,21 @@ struct RootView: View {
             }
         }
         .overlay(alignment: .top) {
-            if model.working { HStack(spacing: 10) { ProgressView(); Text("正在处理导入…").font(.subheadline) }.padding().background(.regularMaterial, in: Capsule()).padding(.top) }
+            VStack(spacing: 8) {
+                if model.working { HStack(spacing: 10) { ProgressView(); Text("正在处理导入…").font(.subheadline) }.padding().background(.regularMaterial, in: Capsule()) }
+                if let toast = model.noticeToast {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(toast.title).font(.subheadline.weight(.semibold))
+                        if !toast.body.isEmpty { Text(toast.body).font(.caption).lineLimit(2) }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: 360, alignment: .leading)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if model.noticeToast?.id == toast.id { model.noticeToast = nil } }
+                    }
+                }
+            }.padding(.top)
         }
     }
 }
@@ -215,10 +229,21 @@ struct BrowserPage: View {
                     Button { shortcut(id) } label: { Image(systemName: ShortcutCatalog.symbol(id)).frame(width: 30, height: 30) }.accessibilityLabel(ShortcutCatalog.title(id))
                 }
                 ForEach(toolbarExtensions.prefix(3)) { record in
+                    let presentation = session.actionPresentation(record.id)
                     Button { session.performExtension(record.id) } label: {
-                        Text(String(record.name.prefix(1))).font(.system(size: 12, weight: .bold))
-                            .frame(width: 26, height: 26)
-                            .background(Circle().stroke(Color.secondary.opacity(0.45)))
+                        ZStack(alignment: .topTrailing) {
+                            if let image = presentation.icon {
+                                Image(uiImage: image).resizable().scaledToFit().frame(width: 22, height: 22)
+                            } else {
+                                Text(String(record.name.prefix(1))).font(.system(size: 12, weight: .bold))
+                                    .frame(width: 26, height: 26)
+                                    .background(Circle().stroke(Color.secondary.opacity(0.45)))
+                            }
+                            if !presentation.badge.isEmpty {
+                                Text(presentation.badge).font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
+                                    .padding(.horizontal, 3).background(Color.red, in: Capsule()).offset(x: 8, y: -6)
+                            }
+                        }.frame(width: 30, height: 30)
                     }
                     .accessibilityLabel(record.name)
                     .accessibilityIdentifier("extension.toolbar.\(record.name)")
@@ -722,6 +747,16 @@ struct SettingsView: View {
                 Section("备份") {
                     Button("导出标签页和设置") { if let url = try? model.exportBackup() { BrowserPresentation.share([url]) } }
                     Button("导入备份") { importing = true }
+                }
+                Section("网页通知") {
+                    if model.notices.isEmpty { Text("还没有网页通知。允许通知后，页面的 Notification 会出现在这里，不会变成系统横幅。").font(.footnote).foregroundStyle(.secondary) }
+                    ForEach(model.notices) { notice in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(notice.title).font(.subheadline)
+                            if !notice.body.isEmpty { Text(notice.body).font(.caption) }
+                            Text(notice.host).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 Section("本身份的下载") { DownloadList(center: model.downloadCenter) }
                 Section("关于 Rikugan") {
