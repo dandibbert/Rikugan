@@ -204,4 +204,17 @@ let blocked = false;
 clip.readText().catch(() => { blocked = true; });
 setImmediate(() => assert.equal(blocked, true));
 
+const relayed = [];
+sandbox.addEventListener = (type, fn) => { sandbox.__relay = fn; };
+sandbox.postMessage = data => { relayed.push(data); };
+sandbox.webkit = { messageHandlers: { rikuganPage: { postMessage(body) { sandbox.__host = body; } } } };
+assert.equal(sandbox.RikuganPageTools.installExtensionRelay(), true);
+sandbox.__relay({ data: { source: 'rikugan-extension-host', payload: { id: 'rg1', api: 'scripting.insertCSS', details: { css: 'body{color:red}' } } } });
+assert.equal(sandbox.__host.action, 'extension-host');
+assert.equal(sandbox.__host.api, 'scripting.insertCSS');
+assert.equal(sandbox.__host.details.css, 'body{color:red}');
+sandbox.__rgExtHostDone({ id: 'rg1', result: null, error: null });
+assert.equal(relayed[0].source, 'rikugan-extension-host-result');
+assert.equal(relayed[0].id, 'rg1');
+
 console.log('PASS: page tools selector, dark CSS, playlists, find count, adblock subset');

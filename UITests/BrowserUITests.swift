@@ -18,6 +18,8 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["用户脚本运行成功"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.webViews.staticTexts["脚本标记已写入"].exists)
         XCTAssertTrue(app.webViews.staticTexts["扩展运行成功"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.webViews.staticTexts["脚本注入成功"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.webViews.staticTexts["通知已创建"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.webViews.staticTexts["GM 存储计数：1"].exists)
         app.webViews.buttons["写入身份标记"].tap()
         XCTAssertTrue(app.webViews.staticTexts["本身份已保存"].exists)
@@ -36,10 +38,14 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["本身份是空的"].waitForExistence(timeout: 20))
         XCTAssertFalse(app.webViews.staticTexts["用户脚本运行成功"].exists)
         XCTAssertFalse(app.webViews.staticTexts["扩展运行成功"].exists)
+        XCTAssertFalse(app.webViews.staticTexts["脚本注入成功"].exists)
+        XCTAssertFalse(app.webViews.staticTexts["通知已创建"].exists)
         app.buttons["browser.profiles"].tap()
         app.buttons["profile.个人"].tap()
         XCTAssertTrue(app.webViews.staticTexts["本身份已保存"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.webViews.staticTexts["扩展运行成功"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.webViews.staticTexts["脚本注入成功"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.webViews.staticTexts["通知已创建"].exists)
         XCTAssertTrue(app.webViews.staticTexts["GM 存储计数：2"].waitForExistence(timeout: 20))
     }
     @MainActor private func navigate(_ app: XCUIApplication) {

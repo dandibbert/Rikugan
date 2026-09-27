@@ -18,9 +18,9 @@ GitHub Actions 在功能分支推送、针对 `main` 的 pull request，以及 `
 
 ## 扩展支持边界
 
-使用 iOS 18.4 起公开的 `WKWebExtension`、`WKWebExtensionContext`、`WKWebExtensionController`，不是自制 `chrome.*` 全量替代品，也不会把扩展改写成用户脚本。支持标准 ZIP、解压目录、CRX2/CRX3（剥掉头后交给同一套校验）、WebKit 支持的 Manifest V3、content scripts、后台、messaging、storage、action/popup、options、网站权限和基础 tabs/window 宿主。工具栏横向滚动，已启用且已载入的扩展都会显示按钮，第 4 个也能点，点按走 `performExtension` → `performAction`。图标和 badge 来自 `WKWebExtension.Action`，弹出的是 WebKit 自己的 popup。扩展详情里的插入 CSS / 执行脚本调用 `BrowserSession.insertExtensionCSS` 和 `executeExtensionScript`，不是第二套 `chrome.scripting`。可以从 Chrome 或 Edge 扩展 ID / 商店链接下载 CRX。商店更新地址如果返回 `<gupdate><updatecheck codebase>` XML，会解析 `codebase` 再下载那个 CRX，不会把 XML 当成扩展包。扩展详情和扩展列表里可以按更新 URL 检查更新。下载失败会显示原因，不会假装安装成功。更新时若权限变多，会先说明新增项再替换文件。
+使用 iOS 18.4 起公开的 `WKWebExtension`、`WKWebExtensionContext`、`WKWebExtensionController`，不是自制 `chrome.*` 全量替代品，也不会把扩展改写成用户脚本。支持标准 ZIP、解压目录、CRX2/CRX3（剥掉头后交给同一套校验）、WebKit 支持的 Manifest V3、content scripts、后台、messaging、storage、action/popup、options、网站权限和基础 tabs/window 宿主。工具栏横向滚动，已启用且已载入的扩展都会显示按钮，第 4 个也能点，点按走 `performExtension` → `performAction`。图标和 badge 来自 `WKWebExtension.Action`，弹出的是 WebKit 自己的 popup。扩展脚本调用 `chrome.scripting.insertCSS` 和 `chrome.scripting.executeScript`。WebKit 已经提供这些方法时沿用 WebKit，不覆盖。没有这些方法时，载入扩展前会把桥接脚本写进 service worker 和 content script：`css` 字符串与 `func` / `code` 字符串转发到 `BrowserSession.insertExtensionCSS` / `executeExtensionScript`，标签页是扩展点名的那个，否则是当前标签页。`world` 和 `files` 仍丢弃。扩展详情里的按钮仍是手动入口。这不是第二套完整 `chrome.scripting`。网页里只挂消息中继，不在页面上定义 `chrome.scripting`。可以从 Chrome 或 Edge 扩展 ID / 商店链接下载 CRX。商店更新地址如果返回 `<gupdate><updatecheck codebase>` XML，会解析 `codebase` 再下载那个 CRX，不会把 XML 当成扩展包。扩展详情和扩展列表里可以按更新 URL 检查更新。下载失败会显示原因，不会假装安装成功。更新时若权限变多，会先说明新增项再替换文件。
 
-**不能保证任意 Chrome/Firefox 扩展能直接运行。** 设置里的兼容表只把 WebKit 实际实现的 API 标成 Supported。`scripting` 与 `notifications` 是 Partial：宿主可以把 CSS 和脚本字符串放进当前标签页，页面通知会进 App 内列表并提交 `UNUserNotificationCenter`。`debugger` 与 `nativeMessaging` 仍是 Unsupported，并写进 `WKWebExtensionContext.unsupportedAPIs`（`debugger.*`、`runtime.sendNativeMessage`、`connectNative`）。没有自研 `chrome.debugger`、`chrome.notifications` 或 `nativeMessaging`。扩展的签名及商店来源不由本 App 验证。FairPlay / Widevine、未签名 IPA 作为系统默认浏览器、把内容规则做成真实 HTTP 2xx 重定向或改写原始响应字节，都做不到。
+**不能保证任意 Chrome/Firefox 扩展能直接运行。** 设置里的兼容表只把扩展脚本真正能调用、且参数没有被丢掉的 API 标成 Supported。`scripting` 与 `notifications` 是 Partial。`chrome.scripting.insertCSS` / `executeScript` 能把 `css` 字符串和 `func` / `code` 字符串放进目标标签页；`world` 与 `files` 不会假装成功。`chrome.notifications.create` / `clear` / `getAll` 会写入通知记录、进入 App 内通知列表，并提交 `UNUserNotificationCenter`。`onClicked`、按钮和 `update` 没有。页面 `Notification` 仍走同一条系统通知。`debugger` 与 `nativeMessaging` 仍是 Unsupported，并写进 `WKWebExtensionContext.unsupportedAPIs`（`debugger.*`、`runtime.sendNativeMessage`、`connectNative`）。没有自研 `chrome.debugger` 或 `nativeMessaging`。扩展的签名及商店来源不由本 App 验证。FairPlay / Widevine、未签名 IPA 作为系统默认浏览器、把内容规则做成真实 HTTP 2xx 重定向或改写原始响应字节，都做不到。
 
 Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每个身份也有独立的 `WKWebExtensionController.Configuration(identifier:)`。这是一款 App 内的逻辑分区，不是多个独立安装 App 的 OS 安全边界。
 
@@ -72,6 +72,7 @@ brew install xcodegen
 python3 scripts/prepare_resources.py
 node scripts/test_runtime.cjs
 node scripts/test_page_tools.cjs
+node scripts/test_extension_bridge.cjs
 xcodegen generate
 xcodebuild -project Rikugan.xcodeproj -scheme Rikugan \
   -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
@@ -82,7 +83,7 @@ cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
 ( cd dist && zip -qry Rikugan-0.2.0-unsigned.ipa Payload )
 ```
 
-自动化 UI 测试使用 CI 上 `127.0.0.1:8765` 的测试网页，不依赖公共网站：安装内置示例 → 验证脚本/扩展注入 → 检查 GM 存储 → 检查扩展后台通信和 popup → 写入 Cookie/localStorage → 新身份确认无数据且无扩展/脚本 → 切回验证数据保留。
+自动化 UI 测试使用 CI 上 `127.0.0.1:8765` 的测试网页，不依赖公共网站：安装内置示例 → 验证脚本/扩展注入 → 检查 GM 存储 → 检查扩展后台通信、`chrome.scripting` 写入的「脚本注入成功」、`chrome.notifications.create` 的「通知已创建」和 popup → 写入 Cookie/localStorage → 新身份确认无数据且无扩展/脚本 → 切回验证数据保留。
 
 真实设备重签安装、键盘交互、长期内存压力，以及具体第三方扩展的兼容性，仍需要设备上验证；模拟器测试不能替代这些。
 

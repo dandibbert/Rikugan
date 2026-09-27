@@ -66,6 +66,7 @@ extension BrowserSession {
         }
         try FileManager.default.copyItem(at: source, to: destination)
         do {
+            try ExtensionBridge.install(at: destination, directory: directory, source: ExtensionBridge.source)
             let manifest = Self.manifestData(at: destination, directory: directory)
             var parsed: ParsedManifest?
             if let manifest {
@@ -102,7 +103,10 @@ extension BrowserSession {
         guard #available(iOS 18.4, *) else { extensionErrors[record.id] = Self.extensionOSMessage; return }
         guard let model else { return }
         do {
-            let extensionObject = try await WKWebExtension(resourceBaseURL: model.directory(profileID).appendingPathComponent(record.relativePath))
+            let base = model.directory(profileID).appendingPathComponent(record.relativePath)
+            let directory = (try? base.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            try ExtensionBridge.install(at: base, directory: directory, source: ExtensionBridge.source)
+            let extensionObject = try await WKWebExtension(resourceBaseURL: base)
             guard isActive else { return }
             try activateExtension(extensionObject, record: record)
         } catch { extensionErrors[record.id] = error.localizedDescription }
@@ -119,6 +123,7 @@ extension BrowserSession {
             "runtime.sendNativeMessage", "runtime.connectNative",
             "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand"
         ]
+        ExtensionBridge.attach(to: context.webViewConfiguration.userContentController, handler: extensionPageBridge)
         for permission in record.allowedPermissions { context.setPermissionStatus(.grantedExplicitly, for: WKWebExtension.Permission(rawValue: permission)) }
         for pattern in record.allowedPatterns {
             if let match = try? WKWebExtension.MatchPattern(string: pattern) { context.setPermissionStatus(.grantedExplicitly, for: match) }

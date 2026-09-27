@@ -17,7 +17,7 @@ enum PageTools {
         let lets = scriptlets.isEmpty ? "[]" : scriptlets
         let policies = csp.isEmpty ? "[]" : csp
         let swaps = replacements.isEmpty ? "[]" : replacements
-        let boot = "(function(){try{if(globalThis.RikuganPageTools){RikuganPageTools.applyBlocking(\(css), \(host), \(rules));RikuganPageTools.applyScriptlets(\(lets));RikuganPageTools.applyCSP(\(policies));RikuganPageTools.applyReplace(\(swaps), location.href);RikuganPageTools.installConsole();}}catch(e){}})();"
+        let boot = "(function(){try{if(globalThis.RikuganPageTools){RikuganPageTools.applyBlocking(\(css), \(host), \(rules));RikuganPageTools.applyScriptlets(\(lets));RikuganPageTools.applyCSP(\(policies));RikuganPageTools.applyReplace(\(swaps), location.href);RikuganPageTools.installConsole();RikuganPageTools.installExtensionRelay();}}catch(e){}})();"
         controller.addUserScript(WKUserScript(source: boot, injectionTime: .atDocumentStart, forMainFrameOnly: false))
     }
 

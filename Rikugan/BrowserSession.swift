@@ -8,6 +8,7 @@ import WebKit
     var extensionControllerBox: AnyObject?
     var extensionContextBox: [UUID: AnyObject] = [:]
     var popupPresenterBox: AnyObject?
+    lazy var extensionPageBridge: ExtensionPageBridge = ExtensionPageBridge(session: self)
     static let extensionOSMessage = "需要 iOS 18.4"
     @Published var tabs: [BrowserTab] = []
     @Published var selectedID: UUID?
@@ -193,6 +194,7 @@ import WebKit
     func installPageTools(on tab: BrowserTab) {
         let hostJSON = (try? JSONSerialization.data(withJSONObject: hostCSS)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic, hostCSS: hostJSON, procedural: proceduralJSON, scriptlets: scriptletJSON, csp: cspJSON, replacements: replaceJSON)
+        if tab.isExtensionPage { ExtensionBridge.attach(to: tab.webView.configuration.userContentController, handler: extensionPageBridge) }
         tab.ensurePageHandler()
         tab.syncContentRules()
     }
@@ -246,18 +248,66 @@ import WebKit
         guard #available(iOS 18.4, *) else { return "" }
         return extensionContext(id: id)?.errors.map(\.localizedDescription).joined(separator: "\n") ?? ""
     }
-    func insertExtensionCSS(_ css: String) {
-        guard let tab = activeTab, let expression = ExtensionScripting.insertCSSExpression(css) else {
-            model?.message = "没有可以插入样式的当前标签页。"
+    func insertExtensionCSS(_ css: String, tab: BrowserTab? = nil) {
+        let target = tab ?? activeTab
+        guard let target, let expression = ExtensionScripting.insertCSSExpression(css) else {
+            if tab == nil { model?.message = "没有可以插入样式的当前标签页。" }
             return
         }
-        Task { _ = await PageTools.call(expression, in: tab.webView) }
+        Task { _ = await PageTools.call(expression, in: target.webView) }
     }
-    func executeExtensionScript(_ source: String) {
-        guard let tab = activeTab, !source.isEmpty else { model?.message = "没有可以执行脚本的当前标签页。"; return }
-        tab.webView.evaluateJavaScript(source, in: nil, in: .page) { [weak self] _, error in
-            if let error { self?.model?.message = error.localizedDescription }
+    func executeExtensionScript(_ source: String, tab: BrowserTab? = nil) {
+        let target = tab ?? activeTab
+        guard let target, !source.isEmpty else {
+            if tab == nil { model?.message = "没有可以执行脚本的当前标签页。" }
+            return
         }
+        target.webView.evaluateJavaScript(source, in: nil, in: .page) { [weak self] _, error in
+            if let error, tab == nil { self?.model?.message = error.localizedDescription }
+        }
+    }
+    func injectExtensionCSS(_ css: String, tab: BrowserTab) async -> Bool {
+        guard let expression = ExtensionScripting.insertCSSExpression(css) else { return false }
+        let value = await PageTools.call(expression, in: tab.webView)
+        if let failed = value as? [String: Any], failed["error"] != nil { return false }
+        return (value as? Bool) != false
+    }
+    func evaluateExtensionScript(_ source: String, tab: BrowserTab) async -> Result<Any?, Error> {
+        guard !source.isEmpty else { return .failure(RikuganError.message("没有可以执行脚本的当前标签页。")) }
+        return await withCheckedContinuation { continuation in
+            tab.webView.evaluateJavaScript(source, in: nil, in: .page) { value, error in
+                if let error { continuation.resume(returning: .failure(error)) }
+                else { continuation.resume(returning: .success(value)) }
+            }
+        }
+    }
+    func handleExtensionHost(api: String, details: [String: Any], tab: BrowserTab?) async -> ExtensionHostOutcome {
+        guard !extensionContextBox.isEmpty else { return ExtensionHostOutcome(error: "没有已载入的扩展。") }
+        if api.hasPrefix("notifications.") {
+            guard let model else { return ExtensionHostOutcome(error: "没有通知记录。") }
+            var records = model.extensionNotices
+            let outcome = ExtensionBridge.apply(api: api, details: details, records: &records) { title, message in
+                model.deliverNotice(host: "extension", title: title, body: message)
+            }
+            model.extensionNotices = records
+            return outcome
+        }
+        let call = ExtensionBridge.command(api: api, details: details)
+        if let error = call.error { return ExtensionHostOutcome(error: error) }
+        guard let target = tab ?? activeTab else { return ExtensionHostOutcome(error: "没有目标标签页。") }
+        if let css = call.css {
+            let inserted = await injectExtensionCSS(css, tab: target)
+            return inserted ? ExtensionHostOutcome(result: NSNull()) : ExtensionHostOutcome(error: "没有插入样式。")
+        }
+        if let code = call.code {
+            switch await evaluateExtensionScript(code, tab: target) {
+            case .success(let value):
+                return ExtensionHostOutcome(result: [["result": ExtensionBridge.boxed(value)]])
+            case .failure(let error):
+                return ExtensionHostOutcome(error: error.localizedDescription)
+            }
+        }
+        return ExtensionHostOutcome(error: "不支持的扩展调用。")
     }
 }
 
@@ -308,6 +358,7 @@ extension BrowserSession {
     var contentRulesOn = false
     var installedRuleLists: [WKContentRuleList] = []
     var pageHandlerInstalled = false
+    var isExtensionPage = false
     var refreshTask: Task<Void, Never>?
     var findNeedle = ""
     var findCursor = 0
@@ -324,6 +375,11 @@ extension BrowserSession {
     init(saved: SavedTab, session: BrowserSession, configuration supplied: WKWebViewConfiguration? = nil) {
         id = saved.id; self.session = session; pageTitle = saved.title; address = saved.url; isHome = saved.url.isEmpty; desktop = saved.desktop
         isPrivate = saved.isPrivate; groupID = saved.groupID; autoRefreshSeconds = saved.autoRefreshSeconds
+        if let supplied {
+            if #available(iOS 18.4, *) {
+                isExtensionPage = session.allExtensionContexts().contains { $0.webViewConfiguration === supplied }
+            }
+        }
         let configuration = supplied ?? WKWebViewConfiguration()
         configuration.websiteDataStore = saved.isPrivate ? session.privateStore : session.dataStore
         if #available(iOS 18.4, *) { configuration.webExtensionController = session.extensionController }

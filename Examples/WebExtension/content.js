@@ -6,5 +6,12 @@ browser.runtime.sendMessage({type: 'rikugan-probe'}).then(result => {
   title.textContent = result?.ok ? '扩展运行成功' : '扩展后台异常';
   const detail = document.createElement('div');
   detail.textContent = '后台通信与扩展存储计数：' + (result?.visits ?? result?.error ?? '?');
-  panel.append(title, detail); document.body.prepend(panel);
+  panel.append(title, detail);
+  if (result?.notification) {
+    const note = document.createElement('div');
+    note.id = 'rikugan-notification-result';
+    note.textContent = '通知已创建';
+    panel.append(note);
+  }
+  document.body.prepend(panel);
 }).catch(error => { console.error('Rikugan Demo', error); });

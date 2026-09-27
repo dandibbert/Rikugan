@@ -123,7 +123,7 @@ extension BrowserTab: WKScriptMessageHandler {
         let css = PageTools.jsString(session?.globalCosmetic ?? "") ?? "\"\""
         Task { [weak self] in
             guard let self else { return }
-            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.applyReplace(\(replacements), \(href)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installClipboard(\(clipboardJS)),RikuganPageTools.installConsole(),true", in: self.webView)
+            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.applyReplace(\(replacements), \(href)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installClipboard(\(clipboardJS)),RikuganPageTools.installConsole(),RikuganPageTools.installExtensionRelay(),true", in: self.webView)
         }
     }
     func captureThumbnail() {
@@ -260,6 +260,18 @@ extension BrowserTab: WKScriptMessageHandler {
                     }
                 }
                 finish(choice == "allow" ? "allow" : "block")
+            }
+            return
+        }
+        if action == "extension-host" {
+            let id = body["id"] as? String ?? ""
+            let api = body["api"] as? String ?? ""
+            let details = body["details"] as? [String: Any] ?? [:]
+            Task { [weak self] in
+                guard let self else { return }
+                let outcome = await self.session?.handleExtensionHost(api: api, details: details, tab: self) ?? ExtensionHostOutcome(error: "扩展没有载入。")
+                let script = ExtensionBridge.pageReply(id: id, result: outcome.result, error: outcome.error)
+                self.webView.evaluateJavaScript(script, in: nil, in: .page) { _, _ in }
             }
             return
         }

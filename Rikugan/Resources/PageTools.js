@@ -51,6 +51,29 @@
     }
     style.textContent = css;
   }
+  function installExtensionRelay() {
+    if (!root || root.__rikuganExtensionRelay || typeof root.addEventListener !== 'function') return false;
+    root.__rikuganExtensionRelay = true;
+    root.addEventListener('message', function (event) {
+      const data = event && event.data;
+      if (!data || data.source !== 'rikugan-extension-host' || !data.payload) return;
+      const payload = data.payload;
+      const bridge = root.webkit && root.webkit.messageHandlers && root.webkit.messageHandlers.rikuganPage;
+      if (!bridge || typeof bridge.postMessage !== 'function') {
+        if (typeof root.postMessage === 'function') root.postMessage({ source: 'rikugan-extension-host-result', id: payload.id, error: 'no page bridge' }, '*');
+        return;
+      }
+      try { bridge.postMessage({ action: 'extension-host', id: payload.id, api: payload.api, details: payload.details || {} }); }
+      catch (error) {
+        if (typeof root.postMessage === 'function') root.postMessage({ source: 'rikugan-extension-host-result', id: payload.id, error: String(error) }, '*');
+      }
+    });
+    root.__rgExtHostDone = function (payload) {
+      const data = payload || {};
+      if (typeof root.postMessage === 'function') root.postMessage({ source: 'rikugan-extension-host-result', id: data.id, result: data.result, error: data.error || null }, '*');
+    };
+    return true;
+  }
   function insertExtensionCSS(css) {
     const doc = root.document;
     if (!doc || typeof doc.createElement !== 'function') return false;
@@ -741,7 +764,7 @@
   const api = {
     selector, setAppearance, setFont, darkCSS: darkRules, applyBlocking, applyScriptlets, applyCSP, applyReplace, collectTexts, applyTexts, restoreTexts,
     watchNewText, stopWatch, extractArticle, collectMedia, parseM3U8, parseMPD, installNetHook, installConsole, installNotifications,
-    startPicker, countMatches, clearFind, videoAction, fill, ensureStyle, insertExtensionCSS, installClipboard
+    startPicker, countMatches, clearFind, videoAction, fill, ensureStyle, insertExtensionCSS, installClipboard, installExtensionRelay
   };
   root.RikuganPageTools = api;
   try { installNetHook(); } catch (error) {}

@@ -22,6 +22,7 @@ struct PageNotice: Identifiable, Equatable {
     @Published var pendingShare: (action: String, value: String)?
     @Published var notices: [PageNotice] = []
     @Published var noticeToast: PageNotice?
+    var extensionNotices: [String: ExtensionNoticeRecord] = [:]
     let downloadCenter = DownloadCenter()
     let windows = WindowRegistry()
     let root: URL

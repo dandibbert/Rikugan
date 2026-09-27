@@ -6,7 +6,7 @@ enum ChromeAPIMatrix {
     static let entries: [Entry] = [
         .init(api: "runtime", level: "Supported", note: "由 WKWebExtension 实现 onMessage、sendMessage、connect、getURL、id。不是自研 chrome.runtime。sendNativeMessage / connectNative 明确禁用。"),
         .init(api: "storage", level: "Supported", note: "由 WKWebExtension 的扩展存储提供 local / sync / session，按身份隔离。"),
-        .init(api: "scripting", level: "Partial", note: "扩展详情调用 BrowserSession.insertExtensionCSS 与 executeExtensionScript，把 CSS 写进当前标签页并在页面世界执行脚本字符串。这不是第二套 chrome.scripting。WebKit 自己的 chrome.scripting 仍取决于系统。"),
+        .init(api: "scripting", level: "Partial", note: "扩展脚本调用 chrome.scripting.insertCSS 与 chrome.scripting.executeScript。WebKit 已实现时沿用 WebKit，不覆盖。没有这些方法时，service worker 与 content script 里的桥把 css 字符串、func/code 字符串转发到 BrowserSession.insertExtensionCSS / executeExtensionScript，目标是扩展点名的标签页，否则是当前标签页的顶层页面世界。world 与 files 丢弃，files 返回错误。不是第二套完整 chrome.scripting。"),
         .init(api: "tabs", level: "Partial", note: "query、create、update、reload、remove、activate。窗口管理只覆盖 App 内窗口。"),
         .init(api: "permissions", level: "Supported", note: "安装确认、可选权限与网站权限变更都会再次询问。"),
         .init(api: "content_scripts", level: "Supported", note: "matches、exclude_matches、js、css、run_at、all_frames。"),
@@ -16,7 +16,7 @@ enum ChromeAPIMatrix {
         .init(api: "cookies", level: "Partial", note: "只能访问当前身份网站存储里 WebKit 暴露的 cookie。"),
         .init(api: "downloads", level: "Partial", note: "浏览器自己的下载管理器可用；chrome.downloads 取决于 WebKit。"),
         .init(api: "i18n", level: "Partial", note: "跟随扩展包内的 _locales，缺少的文案不会伪造。"),
-        .init(api: "notifications", level: "Partial", note: "页面 Notification 和 App 内通知列表会提交 UNUserNotificationCenter，并在用户允许时申请系统通知授权。notifications 已从 unsupportedAPIs 移除。没有自研 chrome.notifications；若 WebKit 不转发 chrome.notifications.create，扩展调用不会被记成成功。"),
+        .init(api: "notifications", level: "Partial", note: "扩展脚本调用 chrome.notifications.create、clear、getAll 时，桥把记录交给 App 内通知列表和 SystemNotifications.deliver。页面 Notification 仍走同一条系统通知。onClicked、按钮和 update 没有。不是完整 chrome.notifications。"),
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
         .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带 DNR 由 WebKit 执行。Rikugan 的广告拦截是独立引擎，不把扩展改写成用户脚本。"),
         .init(api: "debugger", level: "Unsupported", note: "已列入 unsupportedAPIs。不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),
@@ -165,6 +165,28 @@ enum ZipArchive {
             return nil
         }
         return nil
+    }
+
+    static func unpack(_ data: Data) -> [(String, Data)]? {
+        let bytes = [UInt8](data)
+        guard let directory = centralDirectory(bytes) else { return nil }
+        var files: [(String, Data)] = []
+        for entry in directory {
+            if entry.name.isEmpty || entry.name.hasSuffix("/") { continue }
+            guard entry.offset + 30 <= bytes.count else { return nil }
+            let nameLength = int16(bytes, entry.offset + 26)
+            let extra = int16(bytes, entry.offset + 28)
+            let start = entry.offset + 30 + nameLength + extra
+            guard start >= 0, start + entry.compressed <= bytes.count else { return nil }
+            let slice = Data(bytes[start..<(start + entry.compressed)])
+            let file: Data?
+            if entry.method == 0 { file = slice }
+            else if entry.method == 8 { file = inflate(slice, expected: entry.uncompressed) }
+            else { return nil }
+            guard let file else { return nil }
+            files.append((entry.name, file))
+        }
+        return files
     }
 
     private struct Entry { var name: String; var method: Int; var compressed: Int; var uncompressed: Int; var offset: Int }

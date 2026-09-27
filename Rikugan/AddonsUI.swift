@@ -107,7 +107,7 @@ struct AddonsView: View {
                 }
                 Section {
                     Button("安装功能自检示例", systemImage: "checkmark.seal") { confirmDemo = true }.accessibilityIdentifier("addons.demo")
-                    Text("示例只匹配 example.com 和本机测试站点，用于检查脚本注入、GM 存储、扩展后台通信、storage 与弹窗。").font(.caption).foregroundStyle(.secondary)
+                    Text("示例只匹配 example.com 和本机测试站点，用于检查脚本注入、GM 存储、扩展后台通信、storage、chrome.scripting、chrome.notifications 与弹窗。").font(.caption).foregroundStyle(.secondary)
                 }
             }.navigationTitle("扩展与脚本")
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() }.accessibilityIdentifier("addons.done") } }
@@ -130,7 +130,7 @@ struct AddonsView: View {
                 .alert("安装自检组件？", isPresented: $confirmDemo) {
                     Button("取消", role: .cancel) {}
                     Button("安装示例") { Task { await model.installDemos() } }
-                } message: { Text("将安装一个示例扩展和一个示例脚本。扩展申请 tabs、storage，以及 example.com 和 127.0.0.1 测试页访问权限。") }
+                } message: { Text("将安装一个示例扩展和一个示例脚本。扩展申请 tabs、storage、scripting、notifications，以及 example.com 和 127.0.0.1 测试页访问权限。") }
         }
     }
 }
