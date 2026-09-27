@@ -24,6 +24,9 @@ import UserNotifications
         let extID: String
         var opener: Endpoint
         var receivers: [Endpoint]
+        /// Messages posted by the opener before the receiving side was connected.
+        var pending: [Any] = []
+        var connected = false
     }
 
     /// Who is calling.
@@ -579,6 +582,8 @@ import UserNotifications
         guard let portID = args["portId"] as? String else { return }
         let name = args["name"] as? String ?? ""
         let senderInfo = sender(for: caller)
+        let opener = caller.endpoint
+        ports[portID] = PortState(extID: ext.id, opener: opener, receivers: [])
         var receivers: [Endpoint] = []
         let open = "return globalThis.__rikuganChrome ? globalThis.__rikuganChrome.openPort(id, n, s) : false;"
         if args["target"] as? String == "tab", let tabID = args["tabId"] as? Int, let tab = TabRegistry.shared.tab(tabID), let webView = tab.webView {
@@ -597,17 +602,29 @@ import UserNotifications
                 }
             }
         }
-        let opener = caller.endpoint
-        guard !receivers.isEmpty else {
+        guard !receivers.isEmpty, var state = ports[portID] else {
+            ports.removeValue(forKey: portID)
             deliverPortEvent(opener, portID: portID, type: "disconnect", message: nil)
             return
         }
-        ports[portID] = PortState(extID: ext.id, opener: opener, receivers: receivers)
+        state.receivers = receivers
+        state.connected = true
+        let queued = state.pending
+        state.pending = []
+        ports[portID] = state
+        for message in queued {
+            for target in receivers { deliverPortEvent(target, portID: portID, type: "message", message: message) }
+        }
     }
 
     private func postToPort(_ portID: String, message: Any, caller: Caller) {
-        guard let state = ports[portID] else { return }
+        guard var state = ports[portID] else { return }
         let key = caller.endpoint.key
+        if state.opener.key == key && !state.connected {
+            state.pending.append(message)
+            ports[portID] = state
+            return
+        }
         let targets = state.opener.key == key ? state.receivers : [state.opener]
         for target in targets { deliverPortEvent(target, portID: portID, type: "message", message: message) }
     }
