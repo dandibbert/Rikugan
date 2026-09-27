@@ -253,13 +253,13 @@ enum ZipArchive {
         let capacity = max(expected, 65_536)
         return input.withUnsafeBytes { raw -> Data? in
             guard let source = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
-            var stream = compression_stream(dst_ptr: nil, dst_size: 0, src_ptr: nil, src_size: 0, state: nil)
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: capacity)
+            defer { buffer.deallocate() }
+            var stream = compression_stream(dst_ptr: buffer, dst_size: capacity, src_ptr: source, src_size: input.count, state: nil)
             guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else { return nil }
             defer { compression_stream_destroy(&stream) }
             stream.src_ptr = source
             stream.src_size = input.count
-            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: capacity)
-            defer { buffer.deallocate() }
             var output = Data()
             while output.count <= 8_000_000 {
                 stream.dst_ptr = buffer
