@@ -1,84 +1,141 @@
-name: Build and test iOS
+name: Build unsigned IPA
 on:
   push:
-    branches: [main]
+    branches: ['**']
   workflow_dispatch:
 permissions:
   contents: write
 concurrency:
   group: rikugan-${{ github.ref }}
   cancel-in-progress: true
+env:
+  APP_VERSION: "1.0.0"
+
 jobs:
-  ios:
+  core-tests:
+    name: Core unit tests + JS runtime tests
     runs-on: macos-15
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
         run: |
-          if [ -d /Applications/Xcode_16.4.app ]; then sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer; fi
+          XCODE=$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
-          xcodebuild -showsdks
-      - name: Prepare project and resources
+      - name: Swift package tests (URL matcher, metadata, manifests, filters, DNR, ZIP/CRX)
+        run: swift test 2>&1 | tee core-tests.log
+      - name: JavaScript runtime tests (GM API, chrome.* shim, page tools)
+        run: node scripts/test_js.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-test-log
+          path: core-tests.log
+          retention-days: 14
+
+  ipa:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i ios
+      - name: Generate Xcode project
         run: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-          python3 scripts/prepare_resources.py
-          node scripts/test_runtime.cjs
           xcodegen generate
-      - name: Build unsigned iPhone app
+      - name: Build for device (unsigned, Release)
         run: |
           set -o pipefail
           xcodebuild -project Rikugan.xcodeproj -scheme Rikugan -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
-            CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} ARCHS=arm64 build | tee build-device.log
-      - name: Test core, extension runtime and profile isolation
+            CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD|\*\*" || true
+          test -d build/Build/Products/Release-iphoneos/Rikugan.app
+      - name: Show compiler errors
+        if: failure()
+        run: grep -E "error:" build.log | sort -u | head -150 || true
+      - name: Package IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
+          find dist/Payload -name _CodeSignature -type d -exec rm -rf {} +
+          find dist/Payload -name embedded.mobileprovision -delete
+          ls dist/Payload/Rikugan.app/PlugIns || true
+          cd dist
+          zip -qry "Rikugan-${APP_VERSION}-build${GITHUB_RUN_NUMBER}-unsigned.ipa" Payload
+          rm -rf Payload
+          shasum -a 256 *.ipa > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Rikugan-unsigned-ipa
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 14
+
+  selftest:
+    name: Simulator self-test (extension + userscript + adblock)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+      - name: Generate Xcode project
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+      - name: Run UI self-test on simulator
         run: |
           set -o pipefail
-          python3 -m http.server 8765 --bind 127.0.0.1 --directory Tests/Fixtures > /tmp/rikugan-fixture.log 2>&1 &
-          FIXTURE_PID=$!
-          trap 'kill "$FIXTURE_PID" || true' EXIT
-          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin); print(next(x["udid"] for k in sorted(d["devices"], reverse=True) if "iOS" in k for x in d["devices"][k] if x["name"].startswith("iPhone")))')
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k in sorted(d, reverse=True) if "iOS" in k for x in d[k] if x["name"].startswith("iPhone")))')
+          echo "Simulator: $SIMULATOR_ID"
           xcrun simctl boot "$SIMULATOR_ID" || true
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
           xcodebuild test -project Rikugan.xcodeproj -scheme Rikugan -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build \
-            -resultBundlePath TestResults.xcresult -parallel-testing-enabled NO \
-            CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} | tee test.log
-      - name: Package unsigned IPA
-        run: |
-          mkdir -p dist/Payload
-          cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
-          rm -rf dist/Payload/Rikugan.app/_CodeSignature
-          find dist/Payload -name embedded.mobileprovision -delete
-          file dist/Payload/Rikugan.app/Rikugan
-          cd dist
-          zip -qry Rikugan-0.1.0-unsigned.ipa Payload
-          rm -rf Payload
-          shasum -a 256 *.ipa > SHA256SUMS.txt
-      - name: Upload installable artifact
-        uses: actions/upload-artifact@v4
+            -resultBundlePath SelfTest.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee selftest.log | grep -E "error:|Test Case|SELFTEST|\*\*" || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" selftest.log
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: Rikugan-unsigned-IPA
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 90
-      - name: Publish tested prerelease
+          name: selftest-evidence
+          path: |
+            SelfTest.xcresult
+            selftest.log
+          retention-days: 14
+
+  release:
+    name: Publish prerelease
+    needs: [core-tests, ipa, selftest]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Rikugan-unsigned-ipa
+          path: dist
+      - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v0.1.0-build.${GITHUB_RUN_NUMBER}"
+          TAG="v${APP_VERSION}-build.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" dist/*.ipa dist/SHA256SUMS.txt \
-            --title "Rikugan 0.1.0 · build ${GITHUB_RUN_NUMBER}" \
+            --title "Rikugan ${APP_VERSION} (build ${GITHUB_RUN_NUMBER}, ${GITHUB_REF_NAME})" \
             --target "$GITHUB_SHA" --prerelease --notes-file docs/RELEASE_NOTES.md
-      - name: Upload test evidence and logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Rikugan-test-evidence
-          path: |
-            TestResults.xcresult
-            build-device.log
-            test.log
-          retention-days: 30
-
