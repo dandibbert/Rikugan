@@ -56,8 +56,9 @@ jobs:
           xcodebuild -project Rikugan.xcodeproj -scheme Rikugan -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
-            CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD|\*\*" || true
-          test -d build/Build/Products/Release-iphoneos/Rikugan.app
+            CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} build 2>&1 | tee build.log | grep -E "error:|BUILD|\*\*" || true
+          grep -q "\*\* BUILD SUCCEEDED \*\*" build.log
+          test -f build/Build/Products/Release-iphoneos/Rikugan.app/Rikugan
       - name: Show compiler errors
         if: failure()
         run: grep -E "error:" build.log | sort -u | head -150 || true
@@ -67,7 +68,8 @@ jobs:
           cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
           find dist/Payload -name _CodeSignature -type d -exec rm -rf {} +
           find dist/Payload -name embedded.mobileprovision -delete
-          ls dist/Payload/Rikugan.app/PlugIns || true
+          ls dist/Payload/Rikugan.app/PlugIns
+          file dist/Payload/Rikugan.app/Rikugan
           cd dist
           zip -qry "Rikugan-${APP_VERSION}-build${GITHUB_RUN_NUMBER}-unsigned.ipa" Payload
           rm -rf Payload

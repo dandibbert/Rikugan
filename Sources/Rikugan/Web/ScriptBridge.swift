@@ -138,10 +138,16 @@ extension WKScriptMessage {
             guard decision else { return ["error": true, "code": 1, "message": "User denied Geolocation"] }
             do {
                 let location = try await locationProvider.current(highAccuracy: args["highAccuracy"] as? Bool ?? false)
-                return ["latitude": location.coordinate.latitude, "longitude": location.coordinate.longitude,
-                        "accuracy": location.horizontalAccuracy, "altitude": location.altitude,
-                        "altitudeAccuracy": location.verticalAccuracy, "heading": location.course >= 0 ? location.course : NSNull(),
-                        "speed": location.speed >= 0 ? location.speed : NSNull(), "timestamp": location.timestamp.timeIntervalSince1970 * 1000]
+                var position: [String: Any] = [:]
+                position["latitude"] = location.coordinate.latitude
+                position["longitude"] = location.coordinate.longitude
+                position["accuracy"] = location.horizontalAccuracy
+                position["altitude"] = location.altitude
+                position["altitudeAccuracy"] = location.verticalAccuracy
+                position["heading"] = location.course >= 0 ? location.course as Any : NSNull()
+                position["speed"] = location.speed >= 0 ? location.speed as Any : NSNull()
+                position["timestamp"] = location.timestamp.timeIntervalSince1970 * 1000.0
+                return position
             } catch {
                 return ["error": true, "code": 2, "message": error.localizedDescription]
             }

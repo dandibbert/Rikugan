@@ -97,10 +97,11 @@ enum MIME {
 
 @MainActor enum Presenter {
     static var keyWindow: UIWindow? {
-        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .sorted { ($0.activationState == .foregroundActive ? 0 : 1) < ($1.activationState == .foregroundActive ? 0 : 1) }
-            .flatMap(\.windows).first { $0.isKeyWindow } ??
-            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first
+        let scenes: [UIWindowScene] = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let active: [UIWindowScene] = scenes.filter { $0.activationState == .foregroundActive }
+        let ordered: [UIWindowScene] = active + scenes.filter { $0.activationState != .foregroundActive }
+        let windows: [UIWindow] = ordered.flatMap { $0.windows }
+        return windows.first(where: { $0.isKeyWindow }) ?? windows.first
     }
 
     static func topController(from view: UIView? = nil) -> UIViewController? {
