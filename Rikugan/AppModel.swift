@@ -303,9 +303,12 @@ struct PageNotice: Identifiable, Equatable {
                let file = Bundle.main.url(forResource: "DemoExtension", withExtension: "zip") {
                 let prepared = try await session.prepareExtension(file)
                 try session.installExtension(prepared)
-                if #available(iOS 18.4, *), !await session.warmExtensionBackground(id: prepared.id) {
-                    message = session.extensionErrors[prepared.id] ?? "扩展后台没有载入。"
-                    return
+                if #available(iOS 18.4, *) {
+                    let backgroundReady = await session.warmExtensionBackground(id: prepared.id)
+                    if !backgroundReady {
+                        message = session.extensionErrors[prepared.id] ?? "扩展后台没有载入。"
+                        return
+                    }
                 }
             }
             message = "自检组件已安装。打开 example.com 测试页，可看到扩展和用户脚本的运行结果。"
