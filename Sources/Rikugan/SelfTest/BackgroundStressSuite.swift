@@ -47,6 +47,9 @@ import WebKit
         }
 
         let total = rounds
+        let watch = SelfTestContext.MainThreadWatch()
+        watch.start()
+        defer { watch.stop() }
         var failedRounds = 0
         var log: [[String: Any]] = []
         let suiteStart = Date()
@@ -55,7 +58,10 @@ import WebKit
             var timings: [String: Double] = [:]
             func step(_ name: String, _ body: () async -> String?) async {
                 let t = Date()
-                if let failure = await body() { failures.append("\(name): \(failure)") }
+                watch.reset()
+                if let failure = await body() {
+                    failures.append("\(name): \(failure) [mainThreadMaxGap=\(String(format: "%.2f", watch.maxGap))s webViews=\(RikuganWebView.liveByPurpose) bgTimeline=\(bg.timeline.suffix(6).joined(separator: "; "))]")
+                }
                 timings[name] = (Date().timeIntervalSince(t) * 1000).rounded() / 1000
             }
 
@@ -151,6 +157,7 @@ import WebKit
             ctx.record("第 \(round + 1)/\(total) 轮", failures.isEmpty, failures.joined(separator: " | "))
         }
         ctx.extras["rounds"] = log
+        ctx.extras["webViewsAtEnd"] = RikuganWebView.liveByPurpose
         ctx.extras["failedRounds"] = failedRounds
         ctx.extras["seconds"] = Date().timeIntervalSince(suiteStart)
         ctx.record("压力测试总计", failedRounds == 0, String(format: "%d/%d rounds passed in %.1fs", total - failedRounds, total, Date().timeIntervalSince(suiteStart)))

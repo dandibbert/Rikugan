@@ -141,7 +141,36 @@ final class LocalHTTPServer: @unchecked Sendable {
     /// Evaluates and returns the error text instead of swallowing it.
     func evalResult(_ tab: BrowserTab, _ js: String, world: WKContentWorld = .page, arguments: [String: Any] = [:]) async -> (Any?, String?) {
         guard let webView = tab.webView else { return (nil, "no web view") }
-        do { return (try await webView.rkCall(js, arguments: arguments, world: world), nil) } catch { return (nil, error.localizedDescription) }
+        do { return (try await webView.rkCall(js, arguments: arguments, world: world), nil) } catch { return (nil, Self.describe(error)) }
+    }
+
+    /// WebKit reports JS exceptions as a generic error; the message is in userInfo.
+    static func describe(_ error: Error) -> String {
+        let info = (error as NSError).userInfo
+        if let message = info["WKJavaScriptExceptionMessage"] as? String {
+            let line = info["WKJavaScriptExceptionLineNumber"].map { " @\($0)" } ?? ""
+            return "JS exception: " + message + line
+        }
+        return error.localizedDescription
+    }
+
+    /// Measures main-thread responsiveness: the longest gap between 50 ms ticks since `reset()`.
+    final class MainThreadWatch {
+        private var timer: Timer?
+        private var last = Date()
+        private(set) var maxGap: TimeInterval = 0
+        func start() {
+            timer?.invalidate()
+            last = Date()
+            timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                let now = Date()
+                self.maxGap = max(self.maxGap, now.timeIntervalSince(self.last))
+                self.last = now
+            }
+        }
+        func reset() { maxGap = 0; last = Date() }
+        func stop() { timer?.invalidate(); timer = nil }
     }
 
     func attr(_ tab: BrowserTab, _ name: String) async -> String? {
