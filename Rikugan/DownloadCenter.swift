@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 struct DownloadLive: Equatable {
     var received: Int64 = 0
@@ -7,7 +8,7 @@ struct DownloadLive: Equatable {
     var updated = Date()
 }
 
-@MainActor final class DownloadCenter: NSObject, URLSessionDownloadDelegate {
+@MainActor final class DownloadCenter: NSObject, ObservableObject, URLSessionDownloadDelegate {
     weak var model: AppModel?
     @Published var live: [UUID: DownloadLive] = [:]
     private var session: URLSession!
@@ -39,7 +40,7 @@ struct DownloadLive: Equatable {
         let id = UUID()
         owners[id] = profile
         let fileName = safeName(name ?? url.lastPathComponent)
-        let record = DownloadRecord(id: id, name: fileName, fileName: fileName, state: "running", source: url.absoluteString, resumable: true)
+        let record = DownloadRecord(id: id, name: fileName, fileName: fileName, state: "running", resumable: true, source: url.absoluteString)
         model.updateProfile(profile) { $0.downloads.insert(record, at: 0) }
         var request = URLRequest(url: url)
         request.setValue("Rikugan", forHTTPHeaderField: "User-Agent")

@@ -208,22 +208,28 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         try encoder.encode(backup).write(to: url, options: .atomic)
         return url
     }
-    func importBackup(_ data: Data) throws {
-        let backup = try JSONDecoder().decode(PortableBackup.self, from: data)
-        guard backup.version <= 2 else { throw RikuganError.message("这份备份来自更新的 Rikugan，当前版本不能导入。") }
-        updateProfile(state.activeProfileID) { profile in
-            profile.tabs = backup.tabs.filter { !$0.isPrivate }
-            profile.tabGroups = backup.tabGroups
-            profile.selectedTabID = backup.selectedTabID
-            profile.bookmarks = backup.bookmarks
-            profile.bookmarkFolders = backup.bookmarkFolders
-            profile.settings = backup.settings
-            profile.siteSettings = backup.siteSettings
-            profile.searchEngine = backup.searchEngine
-            profile.searchHistory = backup.searchHistory
+    func importBackup(_ data: Data) throws { try applyBackup(BackupImporter.decode(data), merge: false) }
+    func applyBackup(_ backup: PortableBackup, merge: Bool) throws {
+        // Persist and stop the OLD session first, so shutdown cannot overwrite imported tabs.
+        session?.shutdown()
+        let previous = state
+        do {
+            let recovery = root.appendingPathComponent("before-import-\(UUID().uuidString).json")
+            try JSONEncoder().encode(previous).write(to: recovery, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            guard let index = state.profiles.firstIndex(where: { $0.id == state.activeProfileID }) else {
+                throw RikuganError.message("当前身份不存在。")
+            }
+            var next = state
+            next.profiles[index] = BackupImporter.applying(backup, to: next.profiles[index], merge: merge)
+            try save(next)
+            activate(next.activeProfileID)
+            registerFonts()
+            message = "已导入标签页、分组和设置，原资料已保留恢复副本。"
+        } catch {
+            state = previous
+            activate(previous.activeProfileID)
+            throw error
         }
-        message = "已导入标签页、分组和自定义设置。扩展二进制和钥匙串没有包含在备份里。"
-        activate(state.activeProfileID)
     }
     func registerFonts() {
         for font in profile.settings.importedFonts {

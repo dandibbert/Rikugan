@@ -9,7 +9,7 @@ extension BrowserSession {
             worlds.append(.world(name: "rikugan.script." + script.id.uuidString))
         }
         for world in worlds {
-            tab.webView.evaluateJavaScript(js, in: nil, in: world) { _, _ in }
+            tab.webView.evaluateJavaScript(js, in: nil, in: world) { _ in }
         }
     }
     func closeOthers(keeping tab: BrowserTab) {

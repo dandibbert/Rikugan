@@ -194,17 +194,18 @@ enum ZipArchive {
     }
 
     private static func inflate(_ input: Data, expected: Int) -> Data? {
-        guard !input.isEmpty else { return Data() }
-        let capacity = max(expected, 65_536)
+        guard expected >= 0, expected <= 8_000_000 else { return nil }
+        guard !input.isEmpty else { return expected == 0 ? Data() : nil }
+        let capacity = 65_536
         return input.withUnsafeBytes { raw -> Data? in
             guard let source = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
-            var stream = compression_stream()
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: capacity)
+            defer { buffer.deallocate() }
+            var stream = compression_stream(dst_ptr: buffer, dst_size: capacity, src_ptr: source, src_size: input.count, state: nil)
             guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else { return nil }
             defer { compression_stream_destroy(&stream) }
             stream.src_ptr = source
             stream.src_size = input.count
-            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: capacity)
-            defer { buffer.deallocate() }
             var output = Data()
             while output.count <= 8_000_000 {
                 stream.dst_ptr = buffer
@@ -212,7 +213,7 @@ enum ZipArchive {
                 let status = compression_stream_process(&stream, 1)
                 let produced = capacity - stream.dst_size
                 if produced > 0 { output.append(buffer, count: produced) }
-                if status == COMPRESSION_STATUS_END { return output }
+                if status == COMPRESSION_STATUS_END { return output.count == expected ? output : nil }
                 if status == COMPRESSION_STATUS_ERROR || produced == 0 { return nil }
             }
             return nil

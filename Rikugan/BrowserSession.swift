@@ -66,7 +66,7 @@ import WebKit
         extensionController.delegate = nil
     }
     @discardableResult func addTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false, groupID: UUID? = nil) -> BrowserTab {
-        var saved = SavedTab(isPrivate: isPrivate, groupID: groupID)
+        var saved = SavedTab(groupID: groupID, isPrivate: isPrivate)
         if let groupID { saved.groupID = groupID }
         let tab = BrowserTab(saved: saved, session: self, configuration: configuration)
         tabs.append(tab); extensionController.didOpenTab(tab)

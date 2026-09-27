@@ -177,5 +177,27 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(copy.searchHistory, ["cats"])
         XCTAssertEqual(copy.settings.customRules.first?.text, "||example.net^")
     }
+    func testBackupValidationAndMerge() throws {
+        let group = TabGroup(name: "研究")
+        var backup = PortableBackup()
+        backup.tabs = [SavedTab(url: "https://example.com", groupID: group.id)]
+        backup.tabGroups = [group]
+        backup.bookmarks = [PageRecord(title: "Example", url: "https://example.com")]
+        let decoded = try BackupImporter.decode(JSONEncoder().encode(backup))
+        var original = BrowserProfile(name: "个人")
+        original.tabs = [SavedTab(url: "https://webkit.org")]
+        original.history = [PageRecord(title: "History", url: "https://webkit.org")]
+        let merged = BackupImporter.applying(decoded, to: original, merge: true)
+        XCTAssertEqual(merged.tabs.count, 2)
+        XCTAssertEqual(merged.history, original.history)
+        XCTAssertEqual(merged.tabs.last?.groupID, merged.tabGroups.first?.id)
+        XCTAssertEqual(BackupImporter.applying(decoded, to: original, merge: false).tabs.count, 1)
+        backup.tabs[0].url = "javascript:alert(1)"
+        XCTAssertThrowsError(try BackupImporter.decode(JSONEncoder().encode(backup)))
+        backup.tabs[0].url = "https://example.com"
+        backup.settings.wallpaperFile = "../state.json"
+        XCTAssertThrowsError(try BackupImporter.decode(JSONEncoder().encode(backup)))
+        XCTAssertThrowsError(try BackupImporter.decode(Data("broken".utf8)))
+    }
 }
 

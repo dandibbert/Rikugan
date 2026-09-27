@@ -576,6 +576,7 @@ struct SettingsView: View {
     @State private var clearing = false
     @State private var importing = false
     @State private var wallpaper = false
+    @State private var backupPreview: BackupPreview?
     var body: some View {
         NavigationStack {
             Form {
@@ -642,9 +643,14 @@ struct SettingsView: View {
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json], allowsMultipleSelection: false) { result in
                     if case .success(let urls) = result, let url = urls.first {
                         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-                        if let data = try? Data(contentsOf: url) { try? model.importBackup(data) }
+                        do {
+                            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                            guard size <= 8_000_000 else { throw RikuganError.message("备份超过 8 MB。") }
+                            backupPreview = BackupPreview(backup: try BackupImporter.decode(Data(contentsOf: url)), fileName: url.lastPathComponent)
+                        } catch { model.message = "未导入备份：\(error.localizedDescription)" }
                     }
                 }
+                .sheet(item: $backupPreview) { BackupPreviewSheet(preview: $0) }
                 .fileImporter(isPresented: $wallpaper, allowedContentTypes: [.image], allowsMultipleSelection: false) { result in
                     if case .success(let urls) = result, let url = urls.first {
                         do { try model.importWallpaper(url) } catch { model.message = error.localizedDescription }
