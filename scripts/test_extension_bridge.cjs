@@ -446,6 +446,22 @@ function load(extra) {
     /Unsupported: runtime.connectNative/
   );
   await assert.rejects(
+    unsupportedHost.chrome.runtime.onConnectNative.addListener(function () {}),
+    /Unsupported: runtime.onConnectNative/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.webRequest.onSendHeaders.addListener(function () {}),
+    /Unsupported: webRequest.onSendHeaders/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.webRequest.onBeforeRedirect.addListener(function () {}),
+    /Unsupported: webRequest.onBeforeRedirect/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.downloads.download({ url: 'https://example.com/file.bin' }),
+    /Unsupported: downloads.download/
+  );
+  await assert.rejects(
     unsupportedHost.chrome.webRequest.handlerBehaviorChanged(),
     /Unsupported: webRequest.handlerBehaviorChanged/
   );

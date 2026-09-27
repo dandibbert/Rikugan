@@ -626,12 +626,15 @@
     fill(bucket(list, 'scripting'), 'registerContentScripts', unsupportedAPI('scripting.registerContentScripts'));
     fill(bucket(list, 'scripting'), 'unregisterContentScripts', unsupportedAPI('scripting.unregisterContentScripts'));
     fill(bucket(list, 'scripting'), 'getRegisteredContentScripts', unsupportedAPI('scripting.getRegisteredContentScripts'));
-    var webRequestEvents = ['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived', 'onAuthRequired', 'onResponseStarted', 'onCompleted', 'onErrorOccurred'];
+    var webRequestEvents = ['onBeforeRequest', 'onBeforeSendHeaders', 'onSendHeaders', 'onHeadersReceived', 'onAuthRequired', 'onResponseStarted', 'onBeforeRedirect', 'onCompleted', 'onErrorOccurred'];
     var webRequestAPI = bucket(list, 'webRequest');
     webRequestEvents.forEach(function (name) { fillUnsupportedEvent(webRequestAPI, name, 'webRequest.' + name); });
     fill(webRequestAPI, 'handlerBehaviorChanged', unsupportedAPI('webRequest.handlerBehaviorChanged'));
-    fill(bucket(list, 'runtime'), 'sendNativeMessage', unsupportedAPI('runtime.sendNativeMessage'));
-    fill(bucket(list, 'runtime'), 'connectNative', unsupportedAPI('runtime.connectNative'));
+    var runtimeAPI = bucket(list, 'runtime');
+    fill(runtimeAPI, 'sendNativeMessage', unsupportedAPI('runtime.sendNativeMessage'));
+    fill(runtimeAPI, 'connectNative', unsupportedAPI('runtime.connectNative'));
+    fillUnsupportedEvent(runtimeAPI, 'onConnectNative', 'runtime.onConnectNative');
+    fill(bucket(list, 'downloads'), 'download', unsupportedAPI('downloads.download'));
     var debuggers = bucket(list, 'debugger');
     fill(debuggers, 'attach', unsupportedAPI('debugger.attach'));
     fill(debuggers, 'detach', unsupportedAPI('debugger.detach'));

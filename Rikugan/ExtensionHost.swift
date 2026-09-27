@@ -133,11 +133,13 @@ extension BrowserSession {
         context.isInspectable = true
         context.hasAccessToPrivateData = false
         context.unsupportedAPIs = [
-            "runtime.sendNativeMessage", "runtime.connectNative",
+            "runtime.sendNativeMessage", "runtime.connectNative", "runtime.onConnectNative",
+            "downloads", "downloads.download",
             "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand", "debugger.getTargets",
             "debugger.onEvent", "debugger.onDetach",
             "webRequest", "webRequest.handlerBehaviorChanged", "webRequest.onBeforeRequest",
-            "webRequest.onBeforeSendHeaders", "webRequest.onHeadersReceived", "webRequest.onAuthRequired",
+            "webRequest.onBeforeSendHeaders", "webRequest.onSendHeaders", "webRequest.onHeadersReceived",
+            "webRequest.onAuthRequired", "webRequest.onBeforeRedirect",
             "webRequest.onResponseStarted", "webRequest.onCompleted", "webRequest.onErrorOccurred",
             "scripting.registerContentScripts", "scripting.unregisterContentScripts", "scripting.getRegisteredContentScripts"
         ]
