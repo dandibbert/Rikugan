@@ -1,0 +1,11 @@
+.DS_Store
+build/
+dist/
+*.xcodeproj/
+*.xcworkspace/
+*.xcresult/
+*.ipa
+DerivedData/
+Rikugan/Resources/Assets.xcassets/AppIcon.appiconset/*.png
+Rikugan/Resources/DemoExtension.zip
+
