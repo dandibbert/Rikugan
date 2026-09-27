@@ -47,6 +47,9 @@ enum AutofillPolicy {
 enum AutofillVault {
     private static let service = "com.dandibbert.Rikugan.autofill"
     static func load(profile: UUID) -> [AutofillItem] {
+        (try? loadChecked(profile: profile)) ?? []
+    }
+    static func loadChecked(profile: UUID) throws -> [AutofillItem] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -55,9 +58,13 @@ enum AutofillVault {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data,
-              let decoded = try? JSONDecoder().decode([AutofillItem].self, from: data) else { return [] }
-        return decoded
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let data = item as? Data else {
+            throw RikuganError.message("读取钥匙串自动填充数据失败（\(status)）。")
+        }
+        do { return try JSONDecoder().decode([AutofillItem].self, from: data).map { try $0.validated() } }
+        catch { throw RikuganError.message("钥匙串自动填充数据损坏或版本不兼容，原数据未修改：\(error.localizedDescription)") }
     }
     static func save(profile: UUID, items: [AutofillItem]) throws {
         guard items.count <= 200 else { throw RikuganError.message("每个身份最多保存 200 个自动填充条目。") }
@@ -69,14 +76,15 @@ enum AutofillVault {
             kSecAttrService as String: service,
             kSecAttrAccount as String: profile.uuidString
         ]
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-        var status = SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
+        // Existing entries were created with WhenUnlockedThisDeviceOnly. Update
+        // only the mutable secret bytes; changing accessibility on an existing
+        // keychain item is less portable and can fail on real devices.
+        let updateAttributes: [String: Any] = [kSecValueData as String: data]
+        var status = SecItemUpdate(base as CFDictionary, updateAttributes as CFDictionary)
         if status == errSecItemNotFound {
             var insert = base
-            for (key, value) in attributes { insert[key] = value }
+            insert[kSecValueData as String] = data
+            insert[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
             status = SecItemAdd(insert as CFDictionary, nil)
         }
         guard status == errSecSuccess else { throw RikuganError.message("钥匙串拒绝保存自动填充数据（\(status)）。数据没有写入 UserDefaults。") }

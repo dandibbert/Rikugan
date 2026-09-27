@@ -568,7 +568,10 @@ struct LibraryView: View {
     private var childFolders: [BookmarkFolder] { model.profile.bookmarkFolders.filter { $0.parentID == folder } }
     private var filteredBookmarks: [PageRecord] {
         model.profile.bookmarks.filter { page in
-            (folder == nil || page.folderID == folder) && (query.isEmpty || page.title.localizedCaseInsensitiveContains(query) || page.url.localizedCaseInsensitiveContains(query))
+            let matchesQuery = query.isEmpty || page.title.localizedCaseInsensitiveContains(query) || page.url.localizedCaseInsensitiveContains(query)
+            // At the root, show root bookmarks only. A non-empty search is global
+            // so users don't need to guess which nested folder contains a match.
+            return matchesQuery && (!query.isEmpty || page.folderID == folder)
         }
     }
     private var filteredHistory: [PageRecord] {

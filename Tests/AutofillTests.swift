@@ -16,4 +16,10 @@ final class AutofillTests: XCTestCase {
         XCTAssertThrowsError(try AutofillItem(kind: "unknown", title: "", host: "", username: "", secret: "").validated())
         XCTAssertThrowsError(try AutofillItem(kind: "password", title: String(repeating: "x", count: 17000), host: "", username: "", secret: "").validated())
     }
+    func testRootAndSubdomainNormalizationDoesNotAcceptSiblingSuffixes() throws {
+        let item = try AutofillItem(kind: "identity", title: "Me", host: ".Example.com.", username: "", secret: "").validated()
+        XCTAssertEqual(item.host, "example.com")
+        XCTAssertTrue(AutofillPolicy.canFill(item, pageURL: URL(string: "https://a.example.com/")))
+        XCTAssertFalse(AutofillPolicy.canFill(item, pageURL: URL(string: "https://badexample.com/")))
+    }
 }

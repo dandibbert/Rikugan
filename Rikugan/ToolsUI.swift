@@ -394,7 +394,10 @@ struct AutofillSheet: View {
                 }.onDelete(perform: deleteItems)
             }.navigationTitle("自动填充")
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("添加", systemImage: "plus") { editing = true } } }
-                .onAppear { items = AutofillVault.load(profile: model.profile.id) }
+                .onAppear {
+                    do { items = try AutofillVault.loadChecked(profile: model.profile.id) }
+                    catch { model.message = error.localizedDescription }
+                }
                 .sheet(isPresented: $editing) { AutofillEditor(draft: $draft) { saveDraft() } }
         }
     }
