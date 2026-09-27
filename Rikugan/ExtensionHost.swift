@@ -117,8 +117,8 @@ extension BrowserSession {
         if ready {
             context.didOpenWindow(self)
             context.didFocusWindow(self)
-            for tab in tabs { context.didOpenTab(tab) }
-            if let tab = activeTab { context.didActivateTab(tab, previousActiveTab: nil) }
+            for tab in tabs where !tab.isPrivate { context.didOpenTab(tab) }
+            if let tab = activeTab, !tab.isPrivate { context.didActivateTab(tab, previousActiveTab: nil) }
         }
         do {
             if webExtension.hasBackgroundContent {
@@ -171,6 +171,7 @@ extension BrowserSession {
         }
     }
     func performExtension(_ id: UUID) {
+        guard activeTab?.isPrivate != true else { model?.message = "本版本不向扩展开放无痕标签。"; return }
         guard let context = contexts[id], let tab = activeTab else { model?.message = "扩展没有载入，请检查扩展详情里的错误。"; return }
         context.userGesturePerformed(in: tab)
         context.performAction(for: tab)
@@ -263,9 +264,9 @@ extension BrowserSession {
 }
 
 extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow {
-    func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] { tabs }
-    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { activeTab }
-    func isPrivate(for context: WKWebExtensionContext) -> Bool { activeTab?.isPrivate == true }
+    func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] { tabs.filter { !$0.isPrivate } }
+    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { activeTab?.isPrivate == false ? activeTab : nil }
+    func isPrivate(for context: WKWebExtensionContext) -> Bool { false }
     func frame(for context: WKWebExtensionContext) -> CGRect { BrowserPresentation.presenter?.view.bounds ?? .zero }
     func screenFrame(for context: WKWebExtensionContext) -> CGRect { UIScreen.main.bounds }
     func webExtensionController(_ controller: WKWebExtensionController, openWindowsFor context: WKWebExtensionContext) -> [any WKWebExtensionWindow] { [self] }
@@ -332,16 +333,16 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
 }
 
 extension BrowserTab: WKWebExtensionTab {
-    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { session }
-    func indexInWindow(for context: WKWebExtensionContext) -> Int { session?.tabs.firstIndex(where: { $0.id == id }) ?? 0 }
-    func webView(for context: WKWebExtensionContext) -> WKWebView? { existingWebView }
-    func title(for context: WKWebExtensionContext) -> String? { pageTitle }
-    func url(for context: WKWebExtensionContext) -> URL? { existingWebView?.url ?? URL(string: address) }
+    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { isPrivate ? nil : session }
+    func indexInWindow(for context: WKWebExtensionContext) -> Int { session?.tabs.filter { !$0.isPrivate }.firstIndex(where: { $0.id == id }) ?? 0 }
+    func webView(for context: WKWebExtensionContext) -> WKWebView? { isPrivate ? nil : existingWebView }
+    func title(for context: WKWebExtensionContext) -> String? { isPrivate ? nil : pageTitle }
+    func url(for context: WKWebExtensionContext) -> URL? { isPrivate ? nil : (existingWebView?.url ?? URL(string: address)) }
     func pendingURL(for context: WKWebExtensionContext) -> URL? { isLoading ? URL(string: address) : nil }
     func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !isLoading }
     func isSelected(for context: WKWebExtensionContext) -> Bool { session?.selectedID == id }
     func size(for context: WKWebExtensionContext) -> CGSize { existingWebView?.bounds.size ?? .zero }
-    func zoomFactor(for context: WKWebExtensionContext) -> Double { existingWebView?.pageZoom ?? 1 }
+    func zoomFactor(for context: WKWebExtensionContext) -> Double { Double(existingWebView?.pageZoom ?? 1) }
     func setZoomFactor(_ zoomFactor: Double, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { webView.pageZoom = min(5, max(0.25, zoomFactor)); completionHandler(nil) }
     func activate(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { session?.select(self); completionHandler(nil) }
     func setSelected(_ selected: Bool, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { if selected { session?.select(self) }; completionHandler(nil) }

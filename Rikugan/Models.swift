@@ -22,7 +22,8 @@ struct BrowserProfile: Codable, Identifiable, Equatable {
 
     func site(for host: String?) -> SiteSettings? {
         guard let host = host?.lowercased(), !host.isEmpty else { return nil }
-        return siteSettings.first { $0.host.lowercased() == host } ?? siteSettings.first { host.hasSuffix("." + $0.host.lowercased()) }
+        return siteSettings.filter { $0.host.lowercased() == host || host.hasSuffix("." + $0.host.lowercased()) }
+            .max { $0.host.count < $1.host.count }
     }
     func permission(host: String, kind: String) -> String {
         webPermissions.first { $0.host.lowercased() == host.lowercased() && $0.kind == kind }?.decision ?? "ask"

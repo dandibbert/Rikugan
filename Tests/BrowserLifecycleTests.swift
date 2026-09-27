@@ -12,10 +12,11 @@ import WebKit
         return (model, session)
     }
     private func clean(_ model: AppModel, _ session: BrowserSession) {
-        model.downloadCenter.removeProfile(session.profileID)
-        session.shutdown(); model.session = nil
+        let identifiers = model.state.profiles.map(\.id)
+        for id in identifiers { model.downloadCenter.removeProfile(id) }
+        model.session?.shutdown(); session.shutdown(); model.session = nil
         try? FileManager.default.removeItem(at: model.root)
-        WKWebsiteDataStore.remove(forIdentifier: session.profileID) { _ in }
+        for id in identifiers { WKWebsiteDataStore.remove(forIdentifier: id) { _ in } }
     }
     private func waitUntil(_ description: String, timeout: TimeInterval = 30,
                            condition: () async -> Bool) async throws {
@@ -103,6 +104,7 @@ import WebKit
             await PageTools.call("document.documentElement.getAttribute('data-private-gm')", in: tab.webView) as? String == "1"
         }
         XCTAssertFalse(tab.webView.configuration.websiteDataStore.isPersistent)
+        XCTAssertNil(tab.webView.configuration.webExtensionController, "Private pages must not attach to the normal extension runtime")
         XCTAssertEqual(model.profile.scripts[0].storageJSON, "{\"count\":7}")
         try await waitUntil("Private value was not stored") { session.privateScriptStorage[script.id] != nil }
         session.persistTabs()
@@ -138,8 +140,12 @@ import WebKit
         model.downloadCenter.start(url: URL(string: "http://127.0.0.1:8765/__download.bin")!)
         try await waitUntil("Second download not registered") { model.profile.downloads.count == 2 }
         let cancelled = model.profile.downloads[0].id
+        model.addProfile("Other download owner")
+        XCTAssertNotEqual(model.profile.id, session.profileID)
         model.downloadCenter.cancel(cancelled)
         try await Task.sleep(nanoseconds: 300_000_000)
-        XCTAssertEqual(model.profile.downloads[0].state, "cancelled", "Late callbacks must not resurrect downloads")
+        let original = try XCTUnwrap(model.state.profiles.first { $0.id == session.profileID })
+        XCTAssertEqual(original.downloads.first { $0.id == cancelled }?.state, "cancelled", "Late callbacks must not resurrect downloads or target the new profile")
+        XCTAssertTrue(model.profile.downloads.isEmpty)
     }
 }

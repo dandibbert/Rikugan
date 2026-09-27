@@ -46,4 +46,23 @@ final class ScriptUpdateTests: XCTestCase {
         }
         XCTAssertNotNil(reinstall)
     }
+
+    @MainActor func testReinstallKeepsLatestIdentityToggleAndStorage() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let model = AppModel(storageRoot: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var installed = try UserScript.parse(source(version: "1"))
+        installed.enabled = false; installed.storageJSON = "{\"count\":42}"
+        let owner = model.profile.id
+        model.updateProfile(owner) { $0.scripts = [installed] }
+        let prepared = try UserScript.parse(source(version: "2"))
+        try model.commitScript(prepared, profileID: owner, replacing: installed.id)
+        XCTAssertEqual(model.profile.scripts.count, 1)
+        XCTAssertEqual(model.profile.scripts[0].id, installed.id)
+        XCTAssertEqual(model.profile.scripts[0].storageJSON, installed.storageJSON)
+        XCTAssertFalse(model.profile.scripts[0].enabled)
+        model.updateProfile(owner) { $0.scripts.removeAll() }
+        XCTAssertThrowsError(try model.commitScript(prepared, profileID: owner, replacing: installed.id))
+        XCTAssertTrue(model.profile.scripts.isEmpty)
+    }
 }

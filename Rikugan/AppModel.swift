@@ -172,11 +172,25 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
             script.resources[index].mime = mime
         }
         script.updatedAt = Date()
-        updateProfile(profileID) { profile in
-            if let i = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[i] = script }
-            else { profile.scripts.append(script) }
-        }
+        try commitScript(script, profileID: profileID, replacing: existingID)
         if session?.profileID == profileID { session?.refreshScripts() }
+    }
+    func commitScript(_ prepared: UserScript, profileID: UUID, replacing existingID: UUID?) throws {
+        guard let p = state.profiles.firstIndex(where: { $0.id == profileID }) else {
+            throw RikuganError.message("安装期间身份已删除，未保存脚本。")
+        }
+        var next = state, script = prepared
+        if let existingID {
+            guard let i = next.profiles[p].scripts.firstIndex(where: { $0.id == existingID }) else {
+                throw RikuganError.message("安装期间原脚本已删除，没有创建重复副本。")
+            }
+            let current = next.profiles[p].scripts[i]
+            script.id = current.id; script.enabled = current.enabled; script.storageJSON = current.storageJSON
+            next.profiles[p].scripts[i] = script
+        } else { next.profiles[p].scripts.append(script) }
+        // Fetching dependencies can take time. Read the latest GM data and enabled
+        // state only at commit, and propagate disk errors rather than claiming success.
+        try save(next)
     }
     func installDemos() async {
         guard let session else { return }

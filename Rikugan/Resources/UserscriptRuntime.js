@@ -20,7 +20,12 @@
       return hostOK && glob(parts[3], url.pathname + url.search);
     } catch (_) { return false; }
   };
-  const matched = href => ['http:', 'https:'].includes(new URL(href).protocol)
+  const siteEnabled = href => {
+    const host = new URL(href).hostname.toLowerCase();
+    const rule = (config.siteRules || []).find(r => host === r.host || host.endsWith('.' + r.host));
+    return !rule || rule.enabled !== false;
+  };
+  const matched = href => siteEnabled(href) && ['http:', 'https:'].includes(new URL(href).protocol)
     && (config.matches.some(p => match(p, href)) || config.includes.some(p => glob(p, href)))
     && !config.excludes.some(p => glob(p, href)) && !config.excludeMatches.some(p => match(p, href));
   const allowed = name => config.grants.includes('GM.' + name) || config.grants.includes('GM_' + (name === 'xmlHttpRequest' ? 'xmlhttpRequest' : name));
@@ -122,7 +127,16 @@
   const schedule = () => {
     if (config.runAt === 'document-body') {
       if (typeof document === 'undefined' || document.body) run();
-      else document.addEventListener('DOMContentLoaded', run, {once: true});
+      else {
+        let done = false;
+        const ready = () => {
+          if (done || !document.body) return;
+          done = true; observer.disconnect(); document.removeEventListener('DOMContentLoaded', ready); run();
+        };
+        const observer = new MutationObserver(ready);
+        observer.observe(document, {childList: true, subtree: true});
+        document.addEventListener('DOMContentLoaded', ready, {once: true});
+      }
     } else if (config.runAt === 'document-idle') {
       if (typeof requestIdleCallback === 'function') requestIdleCallback(run, {timeout: 1000});
       else setTimeout(run, 1);
@@ -135,6 +149,10 @@
     ranFor = current;
     schedule();
   };
-  globalThis.__rikuganOnURLChange = () => { try { boot(location.href); } catch (error) { console.error(error); } };
+  // @grant none scripts share the page world: registering one must not replace
+  // every preceding script's SPA URL hook.
+  const hooks = globalThis.__rikuganURLChangeHooks || (globalThis.__rikuganURLChangeHooks = Object.create(null));
+  hooks[config.id] = () => { try { boot(location.href); } catch (error) { console.error(error); } };
+  globalThis.__rikuganOnURLChange = () => Object.values(hooks).forEach(hook => hook());
   try { boot(location.href); } catch (_) {}
 })();

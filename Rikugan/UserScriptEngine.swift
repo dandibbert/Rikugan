@@ -31,11 +31,15 @@ struct ScriptCommand: Identifiable {
             let jsonStorage = tab?.isPrivate == true ? (tab?.session?.privateScriptStorage[script.id] ?? "{}") : script.storageJSON
             let storage = (jsonStorage.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? [:]
             let resources = Dictionary(uniqueKeysWithValues: script.resources.map { ($0.name, ["text": $0.text, "url": $0.dataURL]) })
+            let siteRules: [[String: Any]] = (tab?.session?.profile.siteSettings ?? [])
+                .sorted { $0.host.count > $1.host.count }
+                .map { ["host": $0.host.lowercased(), "enabled": $0.userScriptsEnabled ?? true] }
             let configuration: [String: Any] = [
                 "id": script.id.uuidString, "name": script.name, "namespace": script.namespace, "author": script.author,
                 "version": script.version, "handler": name, "matches": script.matches, "includes": script.includes,
                 "excludes": script.excludes, "excludeMatches": script.excludeMatches,
-                "grants": script.grants, "runAt": script.runAt, "storage": storage, "resources": resources, "isolated": script.isolated
+                "grants": script.grants, "runAt": script.runAt, "storage": storage, "resources": resources,
+                "isolated": script.isolated, "siteRules": siteRules
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys]),
                   let json = String(data: data, encoding: .utf8) else { continue }

@@ -9,6 +9,7 @@ root = Path(__file__).resolve().parents[1]
 dist = root / "dist"
 dist.mkdir(exist_ok=True)
 manifest = {
+    "repository": "dandibbert/Rikugan",
     "commit": os.environ.get("GITHUB_SHA", "local"),
     "runID": os.environ.get("GITHUB_RUN_ID", "local"),
     "testOutcome": os.environ.get("TEST_OUTCOME", "not-run"),
@@ -23,7 +24,8 @@ with zipfile.ZipFile(dist / "tests.zip", "w", zipfile.ZIP_DEFLATED) as archive:
                 archive.write(path, path.relative_to(root))
     for path in sorted((root / "scripts").glob("test_*.cjs")):
         archive.write(path, path.relative_to(root))
-    for name in ["build-device.log", "test.log", "webkit-runtime.log", "scripts/fixture_server.py", "project.yml"]:
+    for name in ["build-device.log", "test.log", "webkit-runtime.log", "scripts/fixture_server.py", "project.yml",
+                 "Rikugan/Resources/UserscriptRuntime.js", "Rikugan/Resources/PageTools.js", "Rikugan/Resources/WebFontEngine.js"]:
         path = root / name
         if path.is_file():
             archive.write(path, name)

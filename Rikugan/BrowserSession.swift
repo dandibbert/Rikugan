@@ -55,8 +55,11 @@ import Combine
         guard isActive else { return }
         extensionController.didOpenWindow(self)
         extensionController.didFocusWindow(self)
-        for tab in tabs { extensionController.didOpenTab(tab) }
-        if let tab = activeTab { extensionController.didActivateTab(tab, previousActiveTab: nil); tab.restoreIfNeeded() }
+        for tab in tabs where !tab.isPrivate { extensionController.didOpenTab(tab) }
+        if let tab = activeTab {
+            if !tab.isPrivate { extensionController.didActivateTab(tab, previousActiveTab: nil) }
+            tab.restoreIfNeeded()
+        }
         ready = true; persistTabs()
         Task { [weak self] in
             guard let self else { return }
@@ -80,7 +83,8 @@ import Combine
         var saved = SavedTab(groupID: groupID, isPrivate: isPrivate)
         if let groupID { saved.groupID = groupID }
         let tab = BrowserTab(saved: saved, session: self, configuration: configuration)
-        tabs.append(tab); extensionController.didOpenTab(tab)
+        tabs.append(tab)
+        if !tab.isPrivate { extensionController.didOpenTab(tab) }
         if activate { select(tab) }
         if let url { tab.navigate(url) }
         else if !isPrivate, profile.settings.homepage == "custom", let home = URL(string: profile.settings.homepageURL), !profile.settings.homepageURL.isEmpty { tab.navigate(home) }
@@ -91,7 +95,7 @@ import Combine
     func select(_ tab: BrowserTab) {
         let previous = activeTab; selectedID = tab.id
         tab.lastActiveAt = Date()
-        extensionController.didActivateTab(tab, previousActiveTab: previous)
+        if !tab.isPrivate { extensionController.didActivateTab(tab, previousActiveTab: previous?.isPrivate == false ? previous : nil) }
         tab.restoreIfNeeded(); persistTabs()
     }
     func close(_ tab: BrowserTab) {
@@ -106,7 +110,7 @@ import Combine
         let wasActive = selectedID == tab.id
         let wasPrivate = tab.isPrivate
         tabs.remove(at: index); thumbnails[tab.id] = nil; favicons[tab.id] = nil
-        extensionController.didCloseTab(tab, windowIsClosing: false)
+        if !tab.isPrivate { extensionController.didCloseTab(tab, windowIsClosing: false) }
         commands.removeAll { $0.tabID == tab.id }; tab.teardown()
         if wasPrivate, !tabs.contains(where: \.isPrivate) {
             privateStore = .nonPersistent(); privateScriptStorage.removeAll()
@@ -142,8 +146,7 @@ import Combine
         guard isActive else { return }
         for tab in tabs {
             guard let webView = tab.existingWebView else { continue }
-            let allowed = tab.userscriptsAllowed
-            tab.scriptEngine.configure(webView.configuration.userContentController, scripts: allowed ? profile.scripts : [])
+            tab.scriptEngine.configure(webView.configuration.userContentController, scripts: profile.scripts)
             PageTools.install(on: webView.configuration.userContentController, cosmeticCSS: globalCosmetic)
             tab.ensurePageHandler()
             tab.syncContentRules()
@@ -232,7 +235,9 @@ import Combine
         if let existingWebView { return existingWebView }
         let configuration = supplied ?? WKWebViewConfiguration()
         configuration.websiteDataStore = isPrivate ? (session?.privateStore ?? .nonPersistent()) : (session?.dataStore ?? .nonPersistent())
-        configuration.webExtensionController = session?.extensionController
+        // WebKit caches privacy per extension window, not per mixed browser tab.
+        // Private tabs therefore never join the ordinary extension controller.
+        configuration.webExtensionController = isPrivate ? nil : session?.extensionController
         configuration.userContentController = WKUserContentController()
         configuration.allowsInlineMediaPlayback = true
         configuration.allowsPictureInPictureMediaPlayback = true
@@ -241,7 +246,7 @@ import Combine
         configuration.defaultWebpagePreferences.preferredContentMode = desktop ? .desktop : .mobile
         let webView = WKWebView(frame: .zero, configuration: configuration)
         existingWebView = webView
-        scriptEngine.configure(configuration.userContentController, scripts: userscriptsAllowed ? (session?.profile.scripts ?? []) : [])
+        scriptEngine.configure(configuration.userContentController, scripts: session?.profile.scripts ?? [])
         PageTools.install(on: configuration.userContentController, cosmeticCSS: session?.globalCosmetic ?? "")
         ensurePageHandler(); syncContentRules()
         webView.navigationDelegate = self; webView.uiDelegate = self
@@ -267,7 +272,7 @@ import Combine
             session?.noteURLChange(self)
         }
         if let title = webView.title, !title.isEmpty { pageTitle = title }
-        if !properties.isEmpty { session?.extensionController.didChangeTabProperties(properties, for: self) }
+        if !isPrivate, !properties.isEmpty { session?.extensionController.didChangeTabProperties(properties, for: self) }
     }
     func restoreIfNeeded() {
         guard !restored else { return }

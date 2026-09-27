@@ -10,7 +10,7 @@
 
 ## 安装
 
-GitHub Actions 在功能分支推送、针对 `main` 的 pull request，以及 `main` 推送时，用 macOS 上的 `xcodebuild` 编译 **未签名** IPA，并通过 `actions/upload-artifact` 上传名为 `Rikugan-unsigned-IPA` 的 artifact。打开对应 workflow run，下载 `dist/Rikugan-0.2.0-unsigned.ipa`。`main` 上测试成功后，同一份 IPA 也会出现在 prerelease。没有签名证书或描述文件，不能直接点开安装，需要用自己的证书或侧载工具重签。最低 iOS / iPadOS **18.4**，设备产物为 arm64。
+GitHub Actions 在功能分支推送、针对 `main` 的 pull request，以及 `main` 推送时，用 macOS 上的 `xcodebuild` 编译 **未签名** IPA，并上传名为 `Rikugan-unsigned-IPA` 的 artifact，其中包含 `Rikugan-0.3.0-unsigned.ipa`。`main` 上测试成功后，同一份 IPA 也会出现在 prerelease。没有签名证书或描述文件，不能直接点开安装，需要用自己的证书或侧载工具重签。最低 iOS / iPadOS **18.4**，设备产物为 arm64。
 
 默认 Bundle ID：`com.dandibbert.Rikugan`。工程带有 App Group `group.com.dandibbert.Rikugan`，供分享扩展和主 App 交换待打开的链接；未签名包不会激活这个 group，重签时描述文件需要包含同一个 group。没有默认浏览器 entitlement，设置页也不会把它说成可用。一个 App 内可建立多个身份，不必多开 IPA。
 
@@ -72,7 +72,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 ## 构建与验证
 
-GitHub Actions（`.github/workflows/build.yml`，`macos-15`）在 `main`、`cursor/**` 推送、pull request 或手动触发时：生成资源和 Xcode 项目 → 用 `CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`、`CODE_SIGN_IDENTITY=''` 编译真机目标 → 把 `.app` 放进 `Payload/` 并打成 `Rikugan-0.2.0-unsigned.ipa` → **立刻上传 artifact** → 再跑模拟器单元和 UI 测试。测试失败不会撤掉已经上传的 IPA。只有 `main` 推送且测试成功时才发 prerelease。不需要签名用的 secret。
+GitHub Actions（`.github/workflows/build.yml`，`macos-15`）在 `main`、`cursor/**` 推送、pull request 或手动触发时：生成资源和 Xcode 项目 → 用 `CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`、`CODE_SIGN_IDENTITY=''` 编译真机目标 → 把 `.app` 放进 `Payload/` 并打成 `Rikugan-0.3.0-unsigned.ipa` → **立刻上传 artifact** → 再跑模拟器单元和 UI 测试。测试失败不会撤掉已经上传的 IPA，失败证据仍会打包为 tests.zip。只有 `main` 推送且测试成功时才发 prerelease。不需要签名用的 secret。
 
 ```bash
 brew install xcodegen
@@ -86,7 +86,7 @@ xcodebuild -project Rikugan.xcodeproj -scheme Rikugan \
   CODE_SIGN_IDENTITY='' ARCHS=arm64 build
 mkdir -p dist/Payload
 cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
-( cd dist && zip -qry Rikugan-0.2.0-unsigned.ipa Payload )
+( cd dist && zip -qry Rikugan-0.3.0-unsigned.ipa Payload )
 ```
 
 自动化 UI 测试使用 CI 上 `127.0.0.1:8765` 的测试网页，不依赖公共网站：安装内置示例 → 验证脚本/扩展注入 → 检查 GM 存储 → 检查扩展后台通信和 popup → 写入 Cookie/localStorage → 新身份确认无数据且无扩展/脚本 → 切回验证数据保留。

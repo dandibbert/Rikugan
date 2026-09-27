@@ -27,6 +27,9 @@ assert.equal(run('http://example.com/a').sandbox.didRun, undefined);
 assert.equal(run('file:///tmp/a', {matches: ['<all_urls>']}).sandbox.didRun, undefined);
 assert.equal(run('https://example.com/private/a', {excludeMatches: ['https://example.com/private/*']}).sandbox.didRun, undefined);
 assert.equal(run('http://127.0.0.1:8765/', {matches: ['http://127.0.0.1/*']}).sandbox.didRun, true);
+assert.equal(run('https://example.com/', {siteRules: [{host: 'example.com', enabled: false}]}).sandbox.didRun, undefined);
+assert.equal(run('https://child.example.com/', {siteRules: [{host: 'example.com', enabled: false}]}).sandbox.didRun, undefined);
+assert.equal(run('https://child.example.com/', {siteRules: [{host: 'child.example.com', enabled: true}, {host: 'example.com', enabled: false}]}).sandbox.didRun, true);
 const storage = run('https://example.com/', {grants: ['GM_getValue', 'GM_setValue'], storage: {x: 1}}, "globalThis.before = GM_getValue('x'); GM_setValue('x', 2); globalThis.after = GM_getValue('x'); globalThis.unauthorized = typeof GM_xmlhttpRequest;");
 assert.equal(storage.sandbox.before, 1); assert.equal(storage.sandbox.after, 2);
 assert.equal(storage.sandbox.unauthorized, 'undefined');
@@ -60,4 +63,16 @@ assert.match(isolated.sandbox.partial, /Partial/);
 const body = run('https://example.com/a', { runAt: 'document-body' });
 assert.equal(body.sandbox.didRun, true);
 console.log('PASS: userscript runtime syntax, URL guards, exclusions, grants, resources and partial unsafeWindow');
+
+const shared = vm.createContext({URL, location: new URL('https://example.com/a'), console, setTimeout, document: {body: {}, readyState: 'complete'}, window: {}});
+for (const id of ['first', 'second']) {
+  const config = {id, name: id, matches: ['https://example.com/*'], includes: [], excludes: [], excludeMatches: [], grants: [], runAt: 'document-end', storage: {}};
+  const source = `globalThis.${id} = (globalThis.${id} || 0) + 1;`;
+  new vm.Script(template.replace('/*__CONFIG__*/', JSON.stringify(config)).replace('/*__SOURCE__*/', source)).runInContext(shared);
+}
+shared.location = new URL('https://example.com/b');
+shared.__rikuganOnURLChange();
+shared.__rikuganOnURLChange();
+assert.equal(shared.first, 2); assert.equal(shared.second, 2);
+console.log('PASS: per-site script disabling and multiple page-world scripts survive SPA routing without duplicate execution');
 
