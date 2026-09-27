@@ -1,6 +1,6 @@
 browser.runtime.onMessage.addListener((message, sender, reply) => {
   if (message.type === 'rikugan-api-probe') {
-    const mutableDNRDisabled = typeof browser.declarativeNetRequest.updateDynamicRules === 'undefined';
+    const mutableDNRDisabled = typeof browser.declarativeNetRequest === 'undefined';
     Promise.all([
       browser.permissions.contains({origins: ['http://127.0.0.1/*']}),
       browser.permissions.contains({origins: ['http://localhost/*']}),

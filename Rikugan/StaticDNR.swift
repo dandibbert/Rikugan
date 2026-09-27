@@ -7,8 +7,11 @@ import WebKit
 /// Compile a separate list per extension; never mix its allow rules with those
 /// of another extension or with the browser's own content blocker.
 enum StaticDNR {
-    static let notice = "静态 DNR 兼容模式：宿主编译并执行 block/allow、优先级、URL 过滤及资源类型。动态/session 规则、运行时规则集修改、redirect/modifyHeaders 和不支持的条件会明确报错，不会假装成功。"
-    static let unsupportedAPIs = [
+    static let notice = "静态 DNR 兼容模式：仅执行 manifest 中启用的 block/allow 规则，支持优先级、URL 过滤及资源类型。原生 declarativeNetRequest JavaScript 命名空间不提供（包括查询与动态/session 修改）；redirect/modifyHeaders 和未支持条件会阻止加载并说明原因，不会假装成功。"
+    // DNR methods are not Dynamic in WebKit's bindings, so listing individual
+    // methods alone does not hide them. The namespace IS Dynamic. Hide it as a
+    // whole; manifest-defined rules are independently executed by this host.
+    static let unsupportedAPIs = ["browser.declarativeNetRequest", "chrome.declarativeNetRequest", "declarativeNetRequest"] + [
         "updateDynamicRules", "updateSessionRules", "updateEnabledRulesets", "updateStaticRules",
         "setExtensionActionOptions", "getMatchedRules", "testMatchOutcome"
     ].flatMap { method in

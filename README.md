@@ -66,7 +66,9 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 多标签、标签组、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照）、地址栏关键词与 `{query}` 搜索引擎、前进/后退/刷新、自动刷新、系统分享、页内查找、桌面版模式、书签文件夹、按天历史、下载暂停/继续/进度、网页对话框、站点级权限（摄像头、麦克风、位置、剪贴板、弹窗、外部跳转）。iPhone 保持原来的单栏界面；较宽的 iPad 使用侧栏和标签条，并可以打开第二个窗口。
 
-另外有：内置广告域名和 AdGuard 子集规则（网络规则走 `WKContentRuleList`，元素隐藏同时注入 CSS，订阅和自定义规则有上限）、页面暗黑、阅读模式、Apple Translation 整页替换、媒体嗅探、图片保存、二维码、HTML5 画中画 / 全屏 / AirPlay、打印和 PDF、钥匙串自动填充（只在点按后填入，不写 UserDefaults）、实验控制台，以及 Share Extension。普通网页文件输入由 WebKit/系统处理。
+另外有：内置广告域名和 AdGuard 子集规则（网络和元素隐藏均走 `WKContentRuleList`，保留站点和白名单条件，订阅和自定义规则有上限）、页面暗黑、阅读模式、Apple Translation 整页替换、媒体嗅探、图片保存、二维码、HTML5 画中画 / 全屏 / AirPlay、打印和 PDF、钥匙串自动填充（只在点按后填入，不写 UserDefaults）、实验控制台，以及 Share Extension。普通网页文件输入由 WebKit/系统处理。
+
+扩展静态 DNR 由独立宿主规则列表执行 manifest 中的 block/allow 子集；不提供原生 declarativeNetRequest JavaScript 命名空间（含查询和动态/session 修改），未支持的规则条件明确报错。具体限制见扩展预览、详情和实现对照。
 
 没有系统默认浏览器资格，也没有 iCloud 同步。FairPlay / Widevine 不在范围内。广告规则不是完整 EasyList。分享扩展需带 App Group 的描述文件重签才能共享待打开内容；iOS 不保证允许分享扩展直接启动主 App，失败时会明确提示手动打开。缺少 App Group 时提供复制退路，不谎报已发送。
 
@@ -76,7 +78,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 ## 构建与验证
 
-GitHub Actions（`.github/workflows/build.yml`，`macos-15`）在 `main`、`cursor/**` 推送、pull request 或手动触发时：生成资源和 Xcode 项目 → 用 `CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`、`CODE_SIGN_IDENTITY=''` 编译真机目标 → 把 `.app` 放进 `Payload/` 并打成 `Rikugan-0.3.0-unsigned.ipa` → **立刻上传 artifact** → 再跑模拟器单元和 UI 测试。测试失败不会撤掉已经上传的 IPA，失败证据仍会打包为 tests.zip。只有 `main` 推送且测试成功时才发 prerelease。不需要签名用的 secret。
+GitHub Actions（`.github/workflows/build.yml`，`macos-15`）在 `main`、`cursor/**` 推送、pull request 或手动触发时：生成资源和 Xcode 项目 → 用 `CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`、`CODE_SIGN_IDENTITY=''` 编译真机目标 → 把 `.app` 放进 `Payload/` 并打成 `Rikugan-0.4.0-unsigned.ipa` → **立刻上传 artifact** → 再跑模拟器单元和 UI 测试。测试失败不会撤掉已经上传的 IPA，失败证据仍会打包为 tests.zip。只有 `main` 推送且测试成功时才发 prerelease。不需要签名用的 secret。
 
 ```bash
 brew install xcodegen
