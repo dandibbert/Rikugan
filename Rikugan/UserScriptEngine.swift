@@ -28,7 +28,8 @@ struct ScriptCommand: Identifiable {
                 controller.addScriptMessageHandler(self, contentWorld: world, name: name)
                 handlers.append((name, world)); scripts[name] = script
             }
-            let storage = (script.storageJSON.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? [:]
+            let jsonStorage = tab?.isPrivate == true ? (tab?.session?.privateScriptStorage[script.id] ?? "{}") : script.storageJSON
+            let storage = (jsonStorage.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? [:]
             let resources = Dictionary(uniqueKeysWithValues: script.resources.map { ($0.name, ["text": $0.text, "url": $0.dataURL]) })
             let configuration: [String: Any] = [
                 "id": script.id.uuidString, "name": script.name, "namespace": script.namespace, "author": script.author,
@@ -56,6 +57,7 @@ struct ScriptCommand: Identifiable {
         guard let tab, let session = tab.session, session.isActive,
               let cached = scripts[message.name], let script = session.profile.scripts.first(where: { $0.id == cached.id && $0.enabled }),
               let origin = message.frameInfo.request.url, script.matchesURL(origin), (!script.noFrames || message.frameInfo.isMainFrame),
+              session.profile.site(for: origin.host)?.userScriptsEnabled != false,
               let body = message.body as? [String: Any], let operation = body["operation"] as? String else {
             replyHandler(nil, "脚本或页面未授权。"); return
         }
@@ -63,7 +65,7 @@ struct ScriptCommand: Identifiable {
         let args = body["args"] as? [String: Any] ?? [:]
         switch operation {
         case "getValue", "listValues":
-            let storage = Self.values(script)
+            let storage = values(script, session: session, isPrivate: tab.isPrivate)
             if operation == "listValues" { replyHandler(Array(storage.keys), nil) }
             else {
                 let key = args["key"] as? String ?? ""
@@ -71,12 +73,15 @@ struct ScriptCommand: Identifiable {
             }
         case "setValue", "deleteValue":
             guard let key = args["key"] as? String, key.utf8.count < 4096 else { replyHandler(nil, "无效的存储键。"); return }
-            var values = Self.values(script)
+            var values = self.values(script, session: session, isPrivate: tab.isPrivate)
             if operation == "deleteValue" { values.removeValue(forKey: key) } else { values[key] = args["value"] ?? NSNull() }
             guard JSONSerialization.isValidJSONObject(values), let data = try? JSONSerialization.data(withJSONObject: values), data.count <= 2_000_000,
                   let json = String(data: data, encoding: .utf8) else { replyHandler(nil, "脚本存储必须为 JSON，且不能超过 2 MB。"); return }
-            session.model?.updateProfile(session.profileID) { profile in
-                if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].storageJSON = json }
+            if tab.isPrivate { session.privateScriptStorage[script.id] = json }
+            else {
+                session.model?.updateProfile(session.profileID) { profile in
+                    if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].storageJSON = json }
+                }
             }
             session.scheduleScriptRefresh()
             replyHandler(true, nil)
@@ -86,7 +91,7 @@ struct ScriptCommand: Identifiable {
         case "openInTab":
             guard let raw = args["url"] as? String, let url = URL(string: raw, relativeTo: origin)?.absoluteURL,
                   ["http", "https"].contains(url.scheme ?? "") else { replyHandler(nil, "只能打开 HTTP(S) 页面。"); return }
-            session.addTab(url: url, activate: !(args["background"] as? Bool ?? false))
+            session.addTab(url: url, activate: !(args["background"] as? Bool ?? false), isPrivate: tab.isPrivate, groupID: tab.groupID)
             replyHandler(true, nil)
         case "registerMenuCommand":
             guard message.frameInfo.isMainFrame, let id = args["id"] as? String, let title = args["title"] as? String else { replyHandler(nil, "菜单命令仅支持顶层页面。"); return }
@@ -118,6 +123,12 @@ struct ScriptCommand: Identifiable {
     }
     static func values(_ script: UserScript) -> [String: Any] {
         guard let data = script.storageJSON.data(using: .utf8), let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return values
+    }
+    private func values(_ script: UserScript, session: BrowserSession, isPrivate: Bool) -> [String: Any] {
+        guard isPrivate else { return Self.values(script) }
+        let json = session.privateScriptStorage[script.id] ?? "{}"
+        guard let data = json.data(using: .utf8), let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
         return values
     }
 }

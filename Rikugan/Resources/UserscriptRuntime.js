@@ -29,7 +29,7 @@
   const resources = config.resources || {};
   const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
   const GM_info = {
-    scriptHandler: 'Rikugan', version: '0.2.0',
+    scriptHandler: 'Rikugan', version: '0.3.0',
     script: { name: config.name, namespace: config.namespace || '', version: config.version, author: config.author || '', grants: config.grants, resources: Object.keys(resources) },
     scriptWillUpdate: false,
     capabilities: { unsafeWindow: config.isolated ? 'partial' : 'supported', GM_getResourceText: 'supported', GM_xmlhttpRequest: 'partial' }

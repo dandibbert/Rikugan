@@ -124,7 +124,8 @@ struct DownloadRecord: Codable, Identifiable, Equatable {
 }
 
 struct PortableBackup: Codable, Equatable {
-    var version = 2
+    var version = 3
+    var format = "com.dandibbert.rikugan.backup"
     var exportedAt = Date()
     var tabs: [SavedTab] = []
     var tabGroups: [TabGroup] = []

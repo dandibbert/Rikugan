@@ -3,13 +3,14 @@ import WebKit
 
 extension BrowserSession {
     func noteURLChange(_ tab: BrowserTab) {
+        guard let webView = tab.existingWebView else { return }
         let js = "globalThis.__rikuganOnURLChange && globalThis.__rikuganOnURLChange()"
         var worlds: [WKContentWorld] = [.page]
         for script in profile.scripts where script.enabled && script.isolated {
             worlds.append(.world(name: "rikugan.script." + script.id.uuidString))
         }
         for world in worlds {
-            tab.webView.evaluateJavaScript(js, in: nil, in: world) { _ in }
+            webView.evaluateJavaScript(js, in: nil, in: world) { _ in }
         }
     }
     func closeOthers(keeping tab: BrowserTab) {
@@ -45,11 +46,12 @@ extension BrowserSession {
 
 extension BrowserTab: WKScriptMessageHandler {
     func ensurePageHandler() {
-        guard !pageHandlerInstalled else { return }
+        guard !pageHandlerInstalled, let webView = existingWebView else { return }
         webView.configuration.userContentController.add(self, contentWorld: .page, name: "rikuganPage")
         pageHandlerInstalled = true
     }
     func syncContentRules() {
+        guard let webView = existingWebView else { return }
         guard let list = session?.contentRuleList else { contentRulesOn = false; return }
         let host = webView.url?.host ?? URL(string: address)?.host
         let allowed = (session?.profile.settings.contentBlocking ?? true) && (session?.profile.site(for: host)?.contentBlocking ?? true)
@@ -58,7 +60,7 @@ extension BrowserTab: WKScriptMessageHandler {
         else if !allowed && contentRulesOn { controller.remove(list); contentRulesOn = false }
     }
     func setAutoRefresh(_ seconds: Int) {
-        autoRefreshSeconds = max(0, seconds)
+        autoRefreshSeconds = min(86400, max(0, seconds))
         refreshTask?.cancel()
         refreshTask = nil
         guard autoRefreshSeconds > 0 else { session?.persistTabs(); return }
@@ -75,6 +77,7 @@ extension BrowserTab: WKScriptMessageHandler {
         session?.persistTabs()
     }
     func applyDecorations() {
+        guard let webView = existingWebView else { return }
         webView.isInspectable = session?.profile.settings.inspectable ?? true
         let host = webView.url?.host
         let site = session?.profile.site(for: host)
@@ -92,17 +95,23 @@ extension BrowserTab: WKScriptMessageHandler {
         let blockClipboard = clipboard == "block" ? "try{if(navigator.clipboard){navigator.clipboard.readText=()=>Promise.reject(new Error('Blocked by Rikugan'));}}catch(e){}" : ""
         Task { [weak self] in
             guard let self else { return }
-            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),\(blockClipboard)true", in: self.webView)
+            guard self.existingWebView === webView else { return }
+            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),\(blockClipboard)true", in: webView)
         }
     }
     func captureThumbnail() {
-        guard !isHome, !isPrivate else { return }
-        webView.takeSnapshot(with: nil) { [weak self] image, _ in
+        guard !isHome, !isPrivate, let webView = existingWebView else { return }
+        let configuration = WKSnapshotConfiguration(); configuration.snapshotWidth = 240
+        webView.takeSnapshot(with: configuration) { [weak self] image, _ in
             guard let self, let image else { return }
-            Task { @MainActor in self.session?.thumbnails[self.id] = image }
+            Task { @MainActor in
+                guard self.session?.tabs.contains(where: { $0.id == self.id }) == true, self.existingWebView != nil else { return }
+                self.session?.thumbnails[self.id] = image
+            }
         }
     }
     func captureIcon() {
+        guard !isPrivate, let webView = existingWebView else { return }
         Task { [weak self] in
             guard let self else { return }
             guard let href = await PageTools.call("(function(){var n=document.querySelector('link[rel*=\"icon\"]');return n&&n.href||'';})()", in: webView) as? String,
@@ -173,8 +182,8 @@ extension BrowserTab: WKScriptMessageHandler {
         let menu = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
             UIMenu(children: [
                 UIAction(title: "打开") { _ in self?.navigate(url) },
-                UIAction(title: "新标签页打开") { _ in self?.session?.addTab(url: url, activate: true) },
-                UIAction(title: "后台打开") { _ in self?.session?.addTab(url: url, activate: false) },
+                UIAction(title: "新标签页打开") { _ in guard let self else { return }; self.session?.addTab(url: url, activate: true, isPrivate: self.isPrivate, groupID: self.groupID) },
+                UIAction(title: "后台打开") { _ in guard let self else { return }; self.session?.addTab(url: url, activate: false, isPrivate: self.isPrivate, groupID: self.groupID) },
                 UIAction(title: "复制链接") { _ in UIPasteboard.general.url = url }
             ])
         }

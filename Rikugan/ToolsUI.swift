@@ -513,19 +513,21 @@ struct DownloadList: View {
             let live = center.live[record.id]
             VStack(alignment: .leading, spacing: 6) {
                 Text(record.name).font(.subheadline)
-                if record.state == "running" || record.state == "paused" {
+                if ["running", "pausing", "paused"].contains(record.state) {
                     let received = live?.received ?? record.received
                     let total = live?.total ?? record.total
                     ProgressView(value: total > 0 ? Double(received) / Double(total) : nil)
                     Text([record.state == "paused" ? "已暂停" : "下载中", total > 0 ? "\(Int(Double(received) / Double(total) * 100))%" : nil, ByteFormat.speed(live?.speed ?? 0), ByteFormat.remaining(received: received, total: total, speed: live?.speed ?? 0)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                     HStack {
                         if record.resumable && record.state == "running" { Button("暂停") { center.pause(record.id) } }
-                        if record.state == "paused" { Button("继续") { center.resume(record.id) } }
+                        if record.state == "paused" && record.resumable { Button("继续") { center.resume(record.id) } }
+                        if record.state == "pausing" { Text("正在暂停…") }
                         Button("取消") { center.cancel(record.id) }
                     }.font(.caption)
                 } else {
                     Text(record.state == "finished" ? "已完成 · \(ByteFormat.bytes(record.total))" : record.state).font(.caption).foregroundStyle(.secondary)
                     HStack {
+                        if record.state == "failed" && record.resumable { Button("重试续传") { center.resume(record.id) } }
                         if record.state == "finished" {
                             ShareLink(item: center.fileURL(record, profile: model.profile.id)) { Image(systemName: "square.and.arrow.up") }
                             NavigationLink("打开") { QuickLookView(url: center.fileURL(record, profile: model.profile.id)) }

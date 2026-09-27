@@ -334,14 +334,14 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
 extension BrowserTab: WKWebExtensionTab {
     func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { session }
     func indexInWindow(for context: WKWebExtensionContext) -> Int { session?.tabs.firstIndex(where: { $0.id == id }) ?? 0 }
-    func webView(for context: WKWebExtensionContext) -> WKWebView? { webView }
+    func webView(for context: WKWebExtensionContext) -> WKWebView? { existingWebView }
     func title(for context: WKWebExtensionContext) -> String? { pageTitle }
-    func url(for context: WKWebExtensionContext) -> URL? { webView.url }
+    func url(for context: WKWebExtensionContext) -> URL? { existingWebView?.url ?? URL(string: address) }
     func pendingURL(for context: WKWebExtensionContext) -> URL? { isLoading ? URL(string: address) : nil }
     func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !isLoading }
     func isSelected(for context: WKWebExtensionContext) -> Bool { session?.selectedID == id }
-    func size(for context: WKWebExtensionContext) -> CGSize { webView.bounds.size }
-    func zoomFactor(for context: WKWebExtensionContext) -> Double { webView.pageZoom }
+    func size(for context: WKWebExtensionContext) -> CGSize { existingWebView?.bounds.size ?? .zero }
+    func zoomFactor(for context: WKWebExtensionContext) -> Double { existingWebView?.pageZoom ?? 1 }
     func setZoomFactor(_ zoomFactor: Double, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { webView.pageZoom = min(5, max(0.25, zoomFactor)); completionHandler(nil) }
     func activate(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { session?.select(self); completionHandler(nil) }
     func setSelected(_ selected: Bool, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { if selected { session?.select(self) }; completionHandler(nil) }
@@ -352,7 +352,7 @@ extension BrowserTab: WKWebExtensionTab {
     func close(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { session?.close(self); completionHandler(nil) }
     func duplicate(using configuration: WKWebExtension.TabConfiguration, for context: WKWebExtensionContext,
                    completionHandler: @escaping ((any WKWebExtensionTab)?, Error?) -> Void) {
-        completionHandler(session?.addTab(url: webView.url, activate: configuration.shouldBeActive), nil)
+        completionHandler(session?.addTab(url: existingWebView?.url ?? URL(string: address), activate: configuration.shouldBeActive, isPrivate: isPrivate, groupID: groupID), nil)
     }
     func takeSnapshot(using configuration: WKSnapshotConfiguration, for context: WKWebExtensionContext,
                       completionHandler: @escaping (UIImage?, Error?) -> Void) { webView.takeSnapshot(with: configuration, completionHandler: completionHandler) }

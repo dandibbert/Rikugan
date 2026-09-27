@@ -1,5 +1,11 @@
 # Rikugan · 六眼
 
+## 0.3.0 · 最新规格续做
+
+本轮加入标签按需创建/内存压力挂起与 WebKit 状态恢复、v2→v3 备份迁移和引用校验、无痕新标签及 GM 存储隔离；修复脚本元数据更新和重复重装；下载统一使用带当前身份 Cookie 的 WKDownload，支持进度、暂停、服务器支持时的续传、取消与失败记录。具体实现、自动化测试入口和未完成项见 `docs/IMPLEMENTATION_STATUS.md`。
+
+本版本文件名为 `Rikugan-0.3.0-unsigned.ipa`。成功主分支构建同时发布 `tests.zip` 与 `SHA256SUMS.txt`；测试包 manifest 会记录真实结果，真机验证不会冒充已完成。
+
 自用 iOS 浏览器：**WebExtension + 用户脚本 + 多身份**。SwiftUI / WKWebView 原生实现，无内购、无账号服务、无遥测。不使用 Teak 的二进制、代码或购买信息。
 
 ## 安装

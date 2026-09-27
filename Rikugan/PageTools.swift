@@ -41,7 +41,7 @@ enum BlockListCoordinator {
         let identifier = "rikugan.rules"
         if let existing = session.contentRuleList {
             for tab in session.tabs {
-                tab.webView.configuration.userContentController.remove(existing)
+                tab.existingWebView?.configuration.userContentController.remove(existing)
                 tab.contentRulesOn = false
             }
             session.contentRuleList = nil

@@ -160,7 +160,8 @@ struct BrowserPage: View {
             if tab.isLoading { ProgressView(value: tab.progress).progressViewStyle(.linear) }
             if !barOnTop { chrome }
         }
-        .onAppear { input = tab.isHome ? "" : tab.address }
+        .onAppear { input = tab.isHome ? "" : tab.address; tab.visiblePageCount += 1; tab.lastActiveAt = Date(); tab.restoreIfNeeded() }
+        .onDisappear { tab.visiblePageCount = max(0, tab.visiblePageCount - 1) }
         .onChange(of: tab.address) { _, value in if !addressFocused { input = value } }
         .onChange(of: addressFocused) { _, value in if value { input = tab.isHome ? "" : tab.address }; refreshSuggestions() }
         .onChange(of: input) { _, _ in refreshSuggestions() }
@@ -425,7 +426,9 @@ struct TabsView: View {
                 else if let icon = session.favicons[tab.id] { Image(uiImage: icon).resizable().frame(width: 22, height: 22) }
                 else { Image(systemName: tab.isHome ? "house" : (tab.isPrivate ? "eyeglasses" : "globe")) }
                 VStack(alignment: .leading) { Text(tab.pageTitle).lineLimit(1); Text(tab.isHome ? "新标签页" : tab.address).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                Spacer(); if tab.id == session.selectedID { Image(systemName: "checkmark.circle.fill") }
+                Spacer()
+                if tab.isSuspended { Image(systemName: "moon.zzz").accessibilityLabel("已休眠，打开时恢复") }
+                if tab.id == session.selectedID { Image(systemName: "checkmark.circle.fill") }
             }
         }
         .contextMenu {
@@ -610,7 +613,7 @@ struct SettingsView: View {
                     if !model.profile.settings.wallpaperFile.isEmpty { Button("清除首页壁纸", role: .destructive) { model.clearWallpaper() } }
                     Toggle("拦截 App Store 跳转", isOn: Binding(get: { model.profile.settings.preventAppStoreRedirect }, set: { value in model.updateProfile(session.profileID) { $0.settings.preventAppStoreRedirect = value } }))
                     Toggle("拦截外部 App 跳转", isOn: Binding(get: { model.profile.settings.preventExternalAppRedirect }, set: { value in model.updateProfile(session.profileID) { $0.settings.preventExternalAppRedirect = value } }))
-                    Toggle("允许 Safari 检查网页", isOn: Binding(get: { model.profile.settings.inspectable }, set: { value in model.updateProfile(session.profileID) { $0.settings.inspectable = value }; session.tabs.forEach { $0.webView.isInspectable = value } }))
+                    Toggle("允许 Safari 检查网页", isOn: Binding(get: { model.profile.settings.inspectable }, set: { value in model.updateProfile(session.profileID) { $0.settings.inspectable = value }; session.tabs.forEach { $0.existingWebView?.isInspectable = value } }))
                     NavigationLink("内容拦截") { ContentBlockingView() }
                     NavigationLink("网页字体") { FontSettingsView() }
                     NavigationLink("扩展 API 兼容性") { CapabilityView() }

@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import Combine
 
 @MainActor final class BrowserSession: NSObject, ObservableObject {
     weak var model: AppModel?
@@ -21,6 +22,9 @@ import WebKit
     var popupPresenter: PopupPresenter?
     private var scriptRefresh: Task<Void, Never>?
     private var stopped = false
+    private var memoryWarning: AnyCancellable?
+    // Private GM values live only for the current private browsing session.
+    var privateScriptStorage: [UUID: String] = [:]
     var profile: BrowserProfile { model?.state.profiles.first { $0.id == profileID } ?? BrowserProfile(name: "个人") }
     var activeTab: BrowserTab? { tabs.first { $0.id == selectedID } ?? tabs.first }
     var isActive: Bool { !stopped && model?.state.activeProfileID == profileID }
@@ -40,6 +44,8 @@ import WebKit
         let saved = profile.tabs.isEmpty ? [SavedTab()] : profile.tabs
         tabs = saved.map { BrowserTab(saved: $0, session: self) }
         selectedID = saved.contains(where: { $0.id == profile.selectedTabID }) ? profile.selectedTabID : saved.first?.id
+        memoryWarning = NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
+            .sink { [weak self] _ in Task { @MainActor in self?.reclaimInactiveTabs() } }
     }
     func start() async {
         for record in profile.extensions where record.enabled {
@@ -61,6 +67,7 @@ import WebKit
     func shutdown() {
         guard !stopped else { return }
         persistTabs(); stopped = true; scriptRefresh?.cancel()
+        memoryWarning = nil; privateScriptStorage.removeAll()
         popupPresenter?.dismiss()
         extensionController.didCloseWindow(self)
         for context in contexts.values { try? extensionController.unload(context) }
@@ -83,6 +90,7 @@ import WebKit
     }
     func select(_ tab: BrowserTab) {
         let previous = activeTab; selectedID = tab.id
+        tab.lastActiveAt = Date()
         extensionController.didActivateTab(tab, previousActiveTab: previous)
         tab.restoreIfNeeded(); persistTabs()
     }
@@ -100,7 +108,9 @@ import WebKit
         tabs.remove(at: index); thumbnails[tab.id] = nil; favicons[tab.id] = nil
         extensionController.didCloseTab(tab, windowIsClosing: false)
         commands.removeAll { $0.tabID == tab.id }; tab.teardown()
-        if wasPrivate, !tabs.contains(where: \.isPrivate) { privateStore = .nonPersistent() }
+        if wasPrivate, !tabs.contains(where: \.isPrivate) {
+            privateStore = .nonPersistent(); privateScriptStorage.removeAll()
+        }
         if tabs.isEmpty { addTab() }
         else if wasActive { select(tabs[min(index, tabs.count - 1)]) }
         persistTabs()
@@ -131,9 +141,10 @@ import WebKit
     func refreshScripts() {
         guard isActive else { return }
         for tab in tabs {
+            guard let webView = tab.existingWebView else { continue }
             let allowed = tab.userscriptsAllowed
-            tab.scriptEngine.configure(tab.webView.configuration.userContentController, scripts: allowed ? profile.scripts : [])
-            PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic)
+            tab.scriptEngine.configure(webView.configuration.userContentController, scripts: allowed ? profile.scripts : [])
+            PageTools.install(on: webView.configuration.userContentController, cosmeticCSS: globalCosmetic)
             tab.ensurePageHandler()
             tab.syncContentRules()
         }
@@ -156,17 +167,33 @@ import WebKit
         }
     }
     func clearWebsiteData() async {
-        for tab in tabs { tab.webView.stopLoading() }
+        for tab in tabs { tab.existingWebView?.stopLoading(); tab.discardRecoveryState() }
         await dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
         model?.updateProfile(profileID) { $0.history.removeAll() }
-        for tab in tabs where !tab.isHome { tab.webView.reload() }
+        for tab in tabs where !tab.isHome { tab.existingWebView?.reload() }
+    }
+
+    /// Keep the selected tab, every visible iPad window and one recently used tab.
+    /// Media/capture/download tabs are not evicted. Metadata queries never wake tabs.
+    func reclaimInactiveTabs(keepingRecent count: Int = 1) {
+        guard isActive else { return }
+        thumbnails.removeAll(); favicons.removeAll()
+        let candidates = tabs.filter { $0.existingWebView != nil && $0.id != selectedID && $0.visiblePageCount == 0 }
+            .sorted { $0.lastActiveAt > $1.lastActiveAt }
+        for tab in candidates.dropFirst(max(0, count)) { tab.suspendIfIdle() }
     }
 }
 
 @MainActor final class BrowserTab: NSObject, ObservableObject, Identifiable {
     let id: UUID
     weak var session: BrowserSession?
-    let webView: WKWebView
+    private(set) var existingWebView: WKWebView?
+    var webView: WKWebView { restoreIfNeeded(); return makeWebView() }
+    @Published private(set) var isSuspended = false
+    var visiblePageCount = 0
+    // WebKit's opaque state contains history/form/scroll data. Never serialize it
+    // to disk or backups (especially not private form contents).
+    private var recoveryState: Any?
     let scriptEngine = UserScriptEngine()
     @Published var pageTitle: String
     @Published var address: String
@@ -179,40 +206,47 @@ import WebKit
     @Published var desktop: Bool
     private var observations: [NSKeyValueObservation] = []
     private var restored = false
-    private var downloads: [ObjectIdentifier: URL] = [:]
     var isPrivate: Bool
     var groupID: UUID?
     var autoRefreshSeconds: Int
     var contentRulesOn = false
     var pageHandlerInstalled = false
     var refreshTask: Task<Void, Never>?
-    var webKitDownloadIDs: [ObjectIdentifier: UUID] = [:]
     var lastActiveAt = Date()
     var snapshot: SavedTab { SavedTab(id: id, url: isHome || isPrivate ? "" : address, title: pageTitle, desktop: desktop, groupID: groupID, autoRefreshSeconds: autoRefreshSeconds) }
     var userscriptsAllowed: Bool {
-        let host = webView.url?.host ?? URL(string: address)?.host
+        let host = existingWebView?.url?.host ?? URL(string: address)?.host
         return session?.profile.site(for: host)?.userScriptsEnabled ?? true
     }
 
     init(saved: SavedTab, session: BrowserSession, configuration supplied: WKWebViewConfiguration? = nil) {
         id = saved.id; self.session = session; pageTitle = saved.title; address = saved.url; isHome = saved.url.isEmpty; desktop = saved.desktop
         isPrivate = saved.isPrivate; groupID = saved.groupID; autoRefreshSeconds = saved.autoRefreshSeconds
+        super.init()
+        scriptEngine.tab = self
+        // A popup configuration must be used immediately; ordinary restored tabs
+        // stay metadata-only until selected or actually navigated.
+        if let supplied { _ = makeWebView(configuration: supplied) }
+    }
+    @discardableResult private func makeWebView(configuration supplied: WKWebViewConfiguration? = nil) -> WKWebView {
+        if let existingWebView { return existingWebView }
         let configuration = supplied ?? WKWebViewConfiguration()
-        configuration.websiteDataStore = saved.isPrivate ? session.privateStore : session.dataStore
-        configuration.webExtensionController = session.extensionController
+        configuration.websiteDataStore = isPrivate ? (session?.privateStore ?? .nonPersistent()) : (session?.dataStore ?? .nonPersistent())
+        configuration.webExtensionController = session?.extensionController
         configuration.userContentController = WKUserContentController()
         configuration.allowsInlineMediaPlayback = true
         configuration.allowsPictureInPictureMediaPlayback = true
         configuration.allowsAirPlayForMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = .audio
-        configuration.defaultWebpagePreferences.preferredContentMode = saved.desktop ? .desktop : .mobile
-        webView = WKWebView(frame: .zero, configuration: configuration)
-        super.init()
-        scriptEngine.tab = self
-        scriptEngine.configure(configuration.userContentController, scripts: session.profile.scripts)
+        configuration.defaultWebpagePreferences.preferredContentMode = desktop ? .desktop : .mobile
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        existingWebView = webView
+        scriptEngine.configure(configuration.userContentController, scripts: userscriptsAllowed ? (session?.profile.scripts ?? []) : [])
+        PageTools.install(on: configuration.userContentController, cosmeticCSS: session?.globalCosmetic ?? "")
+        ensurePageHandler(); syncContentRules()
         webView.navigationDelegate = self; webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        webView.isInspectable = session.profile.settings.inspectable
+        webView.isInspectable = session?.profile.settings.inspectable ?? true
         webView.scrollView.keyboardDismissMode = .onDrag
         observations = [
             webView.observe(\.title, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .title) } },
@@ -222,8 +256,10 @@ import WebKit
             webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: []) } },
             webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: []) } }
         ]
+        return webView
     }
     func syncState(properties: WKWebExtension.TabChangedProperties) {
+        guard let webView = existingWebView else { return }
         progress = webView.estimatedProgress; isLoading = webView.isLoading
         canGoBack = webView.canGoBack; canGoForward = webView.canGoForward
         if let url = webView.url {
@@ -236,11 +272,21 @@ import WebKit
     func restoreIfNeeded() {
         guard !restored else { return }
         restored = true
-        if !address.isEmpty, let url = URL(string: address) { navigate(url) }
+        guard !isHome else { return }
+        let view = makeWebView()
+        if let state = recoveryState {
+            recoveryState = nil
+            view.interactionState = state // WebKit restores and navigates itself.
+        } else if let url = URL(string: address), !address.isEmpty {
+            view.load(URLRequest(url: url))
+        }
+        isSuspended = false
+        if autoRefreshSeconds > 0 { setAutoRefresh(autoRefreshSeconds) }
     }
     func navigate(_ url: URL) {
         restored = true; isHome = false; pageError = nil; address = url.absoluteString
-        webView.load(URLRequest(url: url)); session?.persistTabs()
+        recoveryState = nil; isSuspended = false
+        makeWebView().load(URLRequest(url: url)); session?.persistTabs()
     }
     func loadInput(_ input: String) {
         let engine = session?.profile.searchEngine ?? "https://www.google.com/search?q="
@@ -261,7 +307,11 @@ import WebKit
         webView.reload(); session?.persistTabs()
     }
     func teardown() {
+        releaseWebView(); recoveryState = nil
+    }
+    private func releaseWebView() {
         refreshTask?.cancel(); refreshTask = nil
+        guard let webView = existingWebView else { return }
         webView.stopLoading(); observations.removeAll()
         if pageHandlerInstalled {
             webView.configuration.userContentController.removeScriptMessageHandler(forName: "rikuganPage", contentWorld: .page)
@@ -269,10 +319,35 @@ import WebKit
         }
         scriptEngine.teardown(webView.configuration.userContentController)
         webView.navigationDelegate = nil; webView.uiDelegate = nil
+        webView.removeFromSuperview()
+        existingWebView = nil; contentRulesOn = false
+    }
+    func discardRecoveryState() { recoveryState = nil }
+    func suspendIfIdle() {
+        guard let view = existingWebView else { return }
+        view.requestMediaPlaybackState { [weak self, weak view] state in
+            guard let self, let view, self.existingWebView === view,
+                  state != .playing, view.cameraCaptureState == .none, view.microphoneCaptureState == .none else { return }
+            _ = self.suspend()
+        }
+    }
+    @discardableResult func suspend() -> Bool {
+        guard session?.isActive == true, session?.selectedID != id, visiblePageCount == 0,
+              !isLoading, session?.model?.downloadCenter.hasActiveDownload(tabID: id) != true,
+              let view = existingWebView else { return false }
+        // Custom extension configurations cannot safely be reconstructed as an
+        // ordinary page. Only suspend standard HTTP(S) browsing documents.
+        guard let scheme = URL(string: address)?.scheme, ["http", "https"].contains(scheme) else { return false }
+        recoveryState = view.interactionState
+        releaseWebView()
+        restored = false; isSuspended = true
+        session?.commands.removeAll { $0.tabID == id }
+        session?.objectWillChange.send()
+        return true
     }
 }
 
-extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         isHome = false; restored = true
         pageError = nil; session?.commands.removeAll { $0.tabID == id }
@@ -327,35 +402,11 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
     }
-    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) { download.delegate = self }
-    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) { download.delegate = self }
-    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
-                  completionHandler: @escaping (URL?) -> Void) {
-        do {
-            let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Downloads", isDirectory: true)
-                .appendingPathComponent(session?.profileID.uuidString ?? "default", isDirectory: true)
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let name = (suggestedFilename as NSString).lastPathComponent
-            let safe = name.isEmpty || name == "." || name == ".." ? "download" : name
-            var url = dir.appendingPathComponent(safe)
-            if FileManager.default.fileExists(atPath: url.path) { url = dir.appendingPathComponent(UUID().uuidString.prefix(8) + "-" + safe) }
-            downloads[ObjectIdentifier(download)] = url
-            let recordID = session?.model?.downloadCenter.noteWebKit(name: safe, fileName: url.lastPathComponent, state: "running")
-            if let recordID { webKitDownloadIDs[ObjectIdentifier(download)] = recordID }
-            completionHandler(url)
-        } catch { session?.model?.message = error.localizedDescription; completionHandler(nil) }
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        session?.model?.downloadCenter.adopt(download, from: self)
     }
-    func downloadDidFinish(_ download: WKDownload) {
-        let url = downloads.removeValue(forKey: ObjectIdentifier(download))
-        if let id = webKitDownloadIDs.removeValue(forKey: ObjectIdentifier(download)) {
-            session?.model?.downloadCenter.finishWebKit(id, fileName: url?.lastPathComponent ?? "download")
-        }
-        session?.model?.message = "下载完成：\(url?.lastPathComponent ?? "文件")。可在「文件 → 我的 iPhone → Rikugan → Downloads」找到。"
-    }
-    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        if let file = downloads.removeValue(forKey: ObjectIdentifier(download)) { try? FileManager.default.removeItem(at: file) }
-        session?.model?.message = "下载失败：\(error.localizedDescription)"
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        session?.model?.downloadCenter.adopt(download, from: self)
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
@@ -365,11 +416,11 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         if popup == "block" { return nil }
         if popup == "ask" {
             BrowserPresentation.confirm(title: host.isEmpty ? "弹窗" : host, message: "这个网页想打开新标签页。") { allowed in
-                if allowed, let url = navigationAction.request.url { session.addTab(url: url, activate: true, configuration: configuration) }
+                if allowed, let url = navigationAction.request.url { session.addTab(url: url, activate: true, configuration: configuration, isPrivate: self.isPrivate, groupID: self.groupID) }
             }
             return nil
         }
-        return session.addTab(activate: true, configuration: configuration).webView
+        return session.addTab(activate: true, configuration: configuration, isPrivate: isPrivate, groupID: groupID).webView
     }
     func webViewDidClose(_ webView: WKWebView) { session?.close(self) }
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo,

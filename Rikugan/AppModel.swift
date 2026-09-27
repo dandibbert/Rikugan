@@ -16,9 +16,9 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
     let isTesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
     var profile: BrowserProfile { state.profiles.first { $0.id == state.activeProfileID } ?? state.profiles[0] }
 
-    init() {
+    init(storageRoot: URL? = nil) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        root = base.appendingPathComponent(isTesting ? "Rikugan-UITests" : "Rikugan", isDirectory: true)
+        root = storageRoot ?? base.appendingPathComponent(isTesting ? "Rikugan-UITests" : "Rikugan", isDirectory: true)
         if isTesting { try? FileManager.default.removeItem(at: root) }
         var initial = AppState.fresh(), warning: String?
         let file = root.appendingPathComponent("state.json")
@@ -75,6 +75,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
     }
     func deleteProfile(_ id: UUID) {
         guard state.profiles.count > 1 else { message = "至少保留一个身份空间。"; return }
+        downloadCenter.removeProfile(id)
         if state.activeProfileID == id, let other = state.profiles.first(where: { $0.id != id }) { activate(other.id) }
         var next = state; next.profiles.removeAll { $0.id == id }
         do { try save(next) } catch { message = error.localizedDescription; return }
@@ -194,15 +195,21 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         } catch { message = error.localizedDescription }
     }
     func checkScriptUpdate(_ script: UserScript) async -> String? {
-        let address = script.updateURL.isEmpty ? script.downloadURL : script.updateURL
-        guard let url = URL(string: address), url.scheme == "https" else { message = "这个脚本没有 HTTPS 更新地址。"; return nil }
+        let owner = profile.id
         do {
-            let text = try await ScriptNetwork.downloadText(url)
-            let remote = try UserScript.parse(text)
-            guard VersionComparator.isNewer(remote.version, than: script.version) else { message = "已是最新版本 \(script.version)。"; return nil }
-            message = "发现 \(remote.version)，请确认后保存。"
+            let text = try await ScriptUpdateResolver.source(for: script)
+            guard profile.id == owner else { throw RikuganError.message("检查更新期间身份已切换，未打开安装确认。") }
+            guard let text else { message = "已是最新版本 \(script.version)。"; return nil }
             return text
         } catch { message = error.localizedDescription; return nil }
+    }
+    func reinstallScript(_ script: UserScript) async {
+        let owner = profile.id
+        do {
+            let text = try await ScriptUpdateResolver.source(for: script, checkVersion: false)
+            guard profile.id == owner else { throw RikuganError.message("重新安装期间身份已切换，未修改脚本。") }
+            if let text { scriptDraft = ScriptDraft(source: text, existingID: script.id) }
+        } catch { message = error.localizedDescription }
     }
     func exportBackup() throws -> URL {
         let backup = PortableBackup(tabs: profile.tabs, tabGroups: profile.tabGroups, selectedTabID: profile.selectedTabID,
@@ -215,6 +222,8 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
     }
     func importBackup(_ data: Data) throws { try applyBackup(BackupImporter.decode(data), merge: false) }
     func applyBackup(_ backup: PortableBackup, merge: Bool) throws {
+        // Reject invalid direct callers too, before stopping the current session.
+        try BackupImporter.validate(backup)
         // Persist and stop the OLD session first, so shutdown cannot overwrite imported tabs.
         session?.shutdown()
         let previous = state

@@ -3,7 +3,7 @@ import Foundation
 enum StateMigration {
     static func decode(_ data: Data) throws -> AppState {
         let decoder = JSONDecoder()
-        if let state = try? decoder.decode(AppState.self, from: data), state.schema >= 2, !state.profiles.isEmpty {
+        if let state = try? decoder.decode(AppState.self, from: data), state.schema == 2, !state.profiles.isEmpty {
             return state
         }
         let legacy = try decoder.decode(LegacyAppState.self, from: data)

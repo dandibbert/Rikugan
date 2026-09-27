@@ -10,8 +10,34 @@ struct BackupPreview: Identifiable {
 enum BackupImporter {
     static func decode(_ data: Data) throws -> PortableBackup {
         guard data.count <= 8_000_000 else { throw RikuganError.message("备份超过 8 MB，未修改任何数据。") }
-        let backup = try JSONDecoder().decode(PortableBackup.self, from: data)
-        guard backup.version == 2 else { throw RikuganError.message("只支持版本 2 的 Rikugan 备份，未修改任何数据。") }
+        guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = object["version"] as? Int, [2, 3].contains(version) else {
+            throw RikuganError.message("不支持的备份版本，未修改任何数据。支持 v2 自动迁移和 v3。")
+        }
+        if version == 2 {
+            // Migrate only a recognized portable backup, never an arbitrary JSON
+            // file or an AppState containing cookies/extension state.
+            guard object["tabs"] is [[String: Any]], object["tabGroups"] is [[String: Any]],
+                  object["bookmarks"] is [[String: Any]], let settings = object["settings"] as? [String: Any] else {
+                throw RikuganError.message("v2 备份缺少必要的标签、分组、书签或设置。")
+            }
+            let defaults = try JSONSerialization.jsonObject(with: JSONEncoder().encode(PortableBackup())) as! [String: Any]
+            for (key, value) in defaults where object[key] == nil { object[key] = value }
+            var mergedSettings = defaults["settings"] as! [String: Any]
+            mergedSettings.merge(settings) { _, imported in imported }
+            object["settings"] = mergedSettings
+            object["version"] = 3
+            object["format"] = "com.dandibbert.rikugan.backup"
+        }
+        let backup = try JSONDecoder().decode(PortableBackup.self, from: JSONSerialization.data(withJSONObject: object))
+        try validate(backup)
+        return backup
+    }
+
+    static func validate(_ backup: PortableBackup) throws {
+        guard backup.version == 3, backup.format == "com.dandibbert.rikugan.backup" else {
+            throw RikuganError.message("不是支持的 Rikugan 备份格式。")
+        }
         guard backup.tabs.count <= 5000, backup.bookmarks.count <= 10000,
               backup.tabGroups.count <= 500, backup.bookmarkFolders.count <= 1000 else {
             throw RikuganError.message("备份中的标签或分组数量超过限制。")
@@ -22,6 +48,46 @@ enum BackupImporter {
         }
         let groups = Set(backup.tabGroups.map(\.id))
         let folders = Set(backup.bookmarkFolders.map(\.id))
+        guard backup.selectedTabID == nil || backup.tabs.contains(where: { $0.id == backup.selectedTabID }),
+              backup.bookmarkFolders.allSatisfy({ $0.parentID == nil || folders.contains($0.parentID!) }) else {
+            throw RikuganError.message("备份选中的标签或书签父文件夹不存在。")
+        }
+        let parents = Dictionary(uniqueKeysWithValues: backup.bookmarkFolders.map { ($0.id, $0.parentID) })
+        for folder in backup.bookmarkFolders {
+            var seen = Set<UUID>(), next: UUID? = folder.id
+            while let id = next {
+                guard seen.insert(id).inserted else { throw RikuganError.message("书签文件夹存在循环引用，未导入。") }
+                next = parents[id] ?? nil
+            }
+        }
+        guard backup.tabs.allSatisfy({ (0...86400).contains($0.autoRefreshSeconds) }),
+              backup.tabGroups.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 200 }),
+              backup.siteSettings.count <= 10000, backup.settings.customRules.count <= 10000,
+              backup.settings.subscriptions.count <= 100, backup.settings.customEngines.count <= 100,
+              backup.settings.importedFonts.count <= 500, backup.searchHistory.count <= 10000,
+              unique(backup.settings.customRules.map(\.id)), unique(backup.settings.subscriptions.map(\.id)),
+              unique(backup.settings.customEngines.map(\.id)), unique(backup.settings.importedFonts.map(\.id)) else {
+            throw RikuganError.message("备份包含重复设置标识、无效分组名称或超出范围的数量/刷新间隔。")
+        }
+        let settings = backup.settings
+        guard ["top", "bottom"].contains(settings.addressBar), ["off", "auto", "on"].contains(settings.darkMode),
+              ["favorites", "blank", "custom"].contains(settings.homepage),
+              settings.reader.fontSize.isFinite, (8...100).contains(settings.reader.fontSize),
+              settings.reader.lineHeight.isFinite, (0.5...5).contains(settings.reader.lineHeight),
+              settings.subscriptions.allSatisfy({ URL(string: $0.url)?.scheme == "https" && validURL($0.url) }) else {
+            throw RikuganError.message("备份包含不支持的设置值或订阅地址。")
+        }
+        var hosts = Set<String>()
+        for site in backup.siteSettings {
+            let host = site.host.lowercased()
+            guard !host.isEmpty, hosts.insert(host).inserted, host.count <= 253,
+                  !host.contains(where: { $0.isWhitespace }), !host.contains("/"), !host.contains("@"),
+                  site.darkMode.map({ ["off", "auto", "on"].contains($0) }) ?? true,
+                  site.externalNavigation.map({ ["ask", "allow", "block"].contains($0) }) ?? true,
+                  site.popups.map({ ["ask", "allow", "block"].contains($0) }) ?? true else {
+                throw RikuganError.message("备份包含重复或无效的站点设置。")
+            }
+        }
         guard backup.tabs.allSatisfy({ validURL($0.url) && ($0.groupID == nil || groups.contains($0.groupID!)) }),
               backup.bookmarks.allSatisfy({ validURL($0.url) && ($0.folderID == nil || folders.contains($0.folderID!)) }) else {
             throw RikuganError.message("备份含无效网址或不存在的分组。只接受普通网页和空白页。")
@@ -35,7 +101,6 @@ enum BackupImporter {
               backup.settings.homepageURL.isEmpty || validURL(backup.settings.homepageURL) else {
             throw RikuganError.message("备份的搜索引擎或首页地址无效。")
         }
-        return backup
     }
 
     static func applying(_ backup: PortableBackup, to original: BrowserProfile, merge: Bool) -> BrowserProfile {
@@ -118,7 +183,7 @@ struct BackupPreviewSheet: View {
                     LabeledContent("书签", value: "\(preview.backup.bookmarks.count)")
                 }
                 Section {
-                    Text("只影响当前身份。Cookie、历史、扩展、脚本和钥匙串不覆盖；字体文件与壁纸不包含在 JSON 中。导入前自动保存当前资料的恢复副本。").font(.footnote)
+                    Text("只影响当前身份。v2 备份会先迁移到 v3 并校验。Cookie、历史、扩展、脚本和钥匙串不覆盖；字体文件与壁纸不包含在 JSON 中。导入前自动保存当前资料的恢复副本。").font(.footnote)
                     Button("合并标签和书签，导入设置") { perform(merge: true) }
                     Button("替换标签和书签，导入设置", role: .destructive) { replace = true }
                 }

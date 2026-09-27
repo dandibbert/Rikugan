@@ -69,11 +69,11 @@ struct AddonsView: View {
                             .contextMenu {
                                 Button("编辑") { model.scriptDraft = ScriptDraft(source: script.source, existingID: script.id) }
                                 Button("检查更新") { Task { if let text = await model.checkScriptUpdate(script) { model.scriptDraft = ScriptDraft(source: text, existingID: script.id) } } }
-                                Button("重新安装") { Task { let address = script.downloadURL.isEmpty ? script.updateURL : script.downloadURL; if !address.isEmpty { await model.importScriptURL(address) } } }
+                                Button("重新安装") { Task { await model.reinstallScript(script) } }
                                 Button("导出") {
-                                    let url = FileManager.default.temporaryDirectory.appendingPathComponent(script.name + ".user.js")
-                                    try? script.source.write(to: url, atomically: true, encoding: .utf8)
-                                    BrowserPresentation.share([url])
+                                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("Rikugan-" + script.id.uuidString + ".user.js")
+                                    do { try script.source.write(to: url, atomically: true, encoding: .utf8); BrowserPresentation.share([url]) }
+                                    catch { model.message = error.localizedDescription }
                                 }
                                 Button("删除", role: .destructive) {
                                     model.updateProfile(session.profileID) { $0.scripts.removeAll { $0.id == script.id } }

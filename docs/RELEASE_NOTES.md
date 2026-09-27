@@ -1,8 +1,12 @@
-## Rikugan 0.2.0
+## Rikugan 0.3.0
+
+本轮补齐标签懒加载/内存回收与恢复、v2→v3 备份迁移及引用校验，修复无痕新标签/GM 存储隔离、脚本元数据更新和重装保留数据。导航和媒体下载统一使用发起页面的 WKDownload，增加进度、暂停、服务器支持时的续传、失败/取消和原身份归档。
+
+`tests.zip` 包含真实测试结果、日志、源码与夹具；`SHA256SUMS.txt` 同时覆盖 IPA 和 tests.zip。真实设备未测试，不把模拟器结果冒充真机验收。完整边界见 `docs/IMPLEMENTATION_STATUS.md`。
 
 原生 SwiftUI 浏览器。扩展仍由 iOS 18.4 的 WKWebExtension 运行，不是自研的完整 `chrome.*`。这一版补上接近 Teak 的浏览面：用户脚本 `@resource` 与 Partial `unsafeWindow`、CRX 与商店下载、广告规则子集、无痕标签、标签组、阅读 / 翻译 / 媒体工具、钥匙串自动填充、网页字体，以及 Share Extension。
 
-下载 `Rikugan-0.2.0-unsigned.ipa`，**先用自己的证书或侧载工具重签**。最低 iOS 18.4，arm64。`SHA256SUMS.txt` 用于文件校验。功能分支和 pull request 的同一份未签名 IPA 在 workflow artifact `Rikugan-unsigned-IPA` 里，不依赖这次 prerelease。
+下载 `Rikugan-0.3.0-unsigned.ipa`，**先用自己的证书或侧载工具重签**。最低 iOS 18.4，arm64。功能分支和 pull request 的同一份未签名 IPA 在 workflow artifact `Rikugan-unsigned-IPA` 里，不依赖 prerelease。
 
 从首页「扩展与脚本」导入 ZIP、CRX 或 `.user.js`，或安装自检示例。设置里的兼容表会标明 Supported、Partial 和 Unsupported。未实现的扩展 API 不会被记成成功。
 
