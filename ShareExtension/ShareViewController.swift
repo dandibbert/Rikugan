@@ -10,7 +10,7 @@ public final class ShareViewController: UIViewController {
     private var ready = false
     private var openButton: UIButton?
     private var searchButton: UIButton?
-    override func viewDidLoad() {
+    public override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         let title = UILabel()
