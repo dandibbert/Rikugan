@@ -15,7 +15,7 @@
         <key>NSExtensionActivationSupportsWebPageWithMaxCount</key><integer>1</integer>
         <key>NSExtensionActivationSupportsText</key><true/>
       </dict>
-    </key>
+    </dict>
     <key>NSExtensionPointIdentifier</key><string>com.apple.share-services</string>
     <key>NSExtensionPrincipalClass</key><string>ShareViewController</string>
   </dict>
