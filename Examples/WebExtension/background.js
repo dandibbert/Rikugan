@@ -36,9 +36,8 @@ try {
 
 api.runtime.onMessage.addListener((message, sender, reply) => {
   if (message && message.source === 'rikugan-bg-probe') {
-    const ready = { ready: true };
-    try { if (typeof reply === 'function') reply(ready); } catch (error) {}
-    return ready;
+    try { if (typeof reply === 'function') reply({ ready: true }); } catch (error) {}
+    return;
   }
   if (!message || message.type !== 'rikugan-probe') return;
   visits += 1;

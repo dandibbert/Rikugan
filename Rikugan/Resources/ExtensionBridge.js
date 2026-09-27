@@ -441,7 +441,8 @@
         return;
       }
       var settled = false;
-      var callbackFired = false;
+      var sawCallback = false;
+      var callbackValue;
       var fallbackTried = false;
       var timer = null;
       function finish(value) {
@@ -452,51 +453,60 @@
         if (last && last.message) reject(new Error(last.message));
         else resolve(value);
       }
-      function fromCallback(value) {
-        callbackFired = true;
-        finish(value);
+      function asBody(value) {
+        if (typeof value === 'string') {
+          try { value = JSON.parse(value); } catch (error) { return null; }
+        }
+        if (!value || typeof value !== 'object') return null;
+        for (var key in value) return value;
+        return null;
       }
-      function isBody(value) {
-        if (!value || typeof value !== 'object') return false;
-        for (var key in value) return true;
-        return false;
+      function fromCallback(value) {
+        sawCallback = true;
+        callbackValue = value;
+        var body = asBody(value);
+        if (body) finish(body);
       }
       function armFallback(weak) {
-        if (fallbackTried || timer || callbackFired || settled) return;
-        if (typeof setTimeout !== 'function') { finish(weak); return; }
+        if (fallbackTried || timer || settled) return;
+        if (typeof setTimeout !== 'function') { finish(asBody(weak) || weak); return; }
         timer = setTimeout(function () {
           timer = null;
-          if (callbackFired || settled) return;
+          if (settled) return;
+          var pendingBody = asBody(callbackValue);
+          if (pendingBody) { finish(pendingBody); return; }
           fallbackTried = true;
           var again;
           try { again = send.call(runtime, payload); }
           catch (error) { finish(weak); return; }
           if (again && typeof again.then === 'function') {
             again.then(function (value) {
-              if (callbackFired || settled) return;
-              finish(isBody(value) ? value : weak);
+              if (settled) return;
+              finish(asBody(value) || asBody(callbackValue) || weak);
             }, function (error) {
-              if (callbackFired || settled) return;
-              reject(error);
+              if (settled) return;
+              if (asBody(callbackValue)) finish(asBody(callbackValue));
+              else reject(error);
             });
             return;
           }
-          if (!callbackFired && !settled) finish(isBody(again) ? again : weak);
+          if (!settled) finish(asBody(again) || asBody(callbackValue) || weak);
         }, 100);
+      }
+      function accept(value) {
+        if (settled) return;
+        var body = asBody(value) || asBody(callbackValue);
+        if (body) { finish(body); return; }
+        armFallback(sawCallback ? callbackValue : value);
       }
       var args = options == null ? [payload, fromCallback] : [payload, options, fromCallback];
       var result;
       try { result = send.apply(runtime, args); }
       catch (error) { reject(error); return; }
-      if (callbackFired) return;
+      if (settled) return;
       if (result && typeof result.then === 'function') {
-        result.then(function (value) {
-          if (callbackFired || settled) return;
-          if (isBody(value)) finish(value);
-          else armFallback(value);
-        }, function () { if (!callbackFired && !settled) armFallback(undefined); });
-      } else if (isBody(result)) finish(result);
-      else armFallback(result);
+        result.then(function (value) { accept(value); }, function () { if (!settled) armFallback(callbackValue); });
+      } else accept(result);
     });
   }
 

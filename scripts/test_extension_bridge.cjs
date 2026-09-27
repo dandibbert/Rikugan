@@ -367,6 +367,21 @@ function load(extra) {
   assert.equal(promiseReply.ok, true);
   assert.equal(promiseReply.visits, 4);
 
+  const emptyCallbackHost = load({
+    chrome: {
+      runtime: {
+        sendMessage(message, callback) {
+          if (typeof callback === 'function') callback(undefined);
+          return Promise.resolve({ ok: true, visits: message.type === 'rikugan-probe' ? 5 : 0 });
+        },
+        onMessage: { addListener() {} }
+      }
+    }
+  });
+  const emptyCallbackReply = await emptyCallbackHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
+  assert.equal(emptyCallbackReply.ok, true);
+  assert.equal(emptyCallbackReply.visits, 5);
+
   const stressHeard = [];
   const gate = gateHost.__rikuganCreateBackgroundGate();
   const connected = [];
