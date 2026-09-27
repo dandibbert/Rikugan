@@ -287,7 +287,7 @@ function load(extra) {
   assert.equal(portLog.length, 0);
   assert.equal(earlyPort.pending, true);
   assert.equal(coldHost.__rikuganBackgroundGate.pendingCount(), 2);
-  releaseProbe();
+  releaseProbe({ ready: true });
   assert.equal((await first).from, 'listener');
   assert.equal((await first).n, 1);
   assert.equal((await popupMessage).n, 2);
@@ -298,6 +298,65 @@ function load(extra) {
   assert.equal(portLog[portLog.length - 1].n, 3);
   assert.equal(earlyPort.pending, false);
   assert.equal(coldHost.__rikuganBackgroundGate.state, 'ready');
+
+  let emptyProbes = 0;
+  const retryWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
+  retryWindow.top = retryWindow;
+  const retryHost = load({
+    window: retryWindow,
+    location: { protocol: 'http:' },
+    chrome: {
+      runtime: {
+        sendMessage(message) {
+          if (message && message.source === 'rikugan-bg-probe') {
+            emptyProbes += 1;
+            if (emptyProbes === 1) return Promise.resolve(undefined);
+            return Promise.resolve({ ready: true });
+          }
+          return Promise.resolve({ ok: true, visits: message.type === 'rikugan-probe' ? 8 : 0 });
+        },
+        onMessage: { addListener() {} }
+      }
+    }
+  });
+  assert.equal(retryHost.__rikuganBackgroundGate.state, 'starting');
+  const queuedDuringProbe = retryHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
+  const queuedReply = await queuedDuringProbe;
+  assert.ok(emptyProbes >= 2);
+  assert.equal(queuedReply.ok, true);
+  assert.equal(queuedReply.visits, 8);
+  assert.equal(retryHost.__rikuganBackgroundGate.state, 'ready');
+
+  let callbackAnswers = 0;
+  let userMessagesBeforeReady = 0;
+  const callbackWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
+  callbackWindow.top = callbackWindow;
+  const callbackProbeHost = load({
+    window: callbackWindow,
+    location: { protocol: 'http:' },
+    chrome: {
+      runtime: {
+        sendMessage(message, callback) {
+          if (message && message.source === 'rikugan-bg-probe') {
+            if (typeof callback !== 'function') return undefined;
+            callbackAnswers += 1;
+            callback(callbackAnswers === 1 ? undefined : { ready: true });
+            return undefined;
+          }
+          if (callbackAnswers < 2) userMessagesBeforeReady += 1;
+          return Promise.resolve({ ok: true, visits: 9 });
+        },
+        onMessage: { addListener() {} }
+      }
+    }
+  });
+  assert.equal(callbackProbeHost.__rikuganBackgroundGate.state, 'starting');
+  const callbackQueued = await callbackProbeHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
+  assert.ok(callbackAnswers >= 2);
+  assert.equal(userMessagesBeforeReady, 0);
+  assert.equal(callbackQueued.ok, true);
+  assert.equal(callbackQueued.visits, 9);
+  assert.equal(callbackProbeHost.__rikuganBackgroundGate.state, 'ready');
 
   const failedWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
   failedWindow.top = failedWindow;
@@ -598,6 +657,40 @@ function load(extra) {
     /Unsupported: declarativeNetRequest.redirect/
   );
   assert.equal(blockCalls, 1);
+
+  const backgroundSource = fs.readFileSync('Examples/WebExtension/background.js', 'utf8');
+  const backgroundListeners = [];
+  function webkitSend(message) {
+    let replied = false;
+    let replyValue;
+    function sendResponse(value) {
+      replied = true;
+      replyValue = value;
+    }
+    let handled = false;
+    backgroundListeners.forEach(listener => {
+      const returned = listener(message, { tab: { id: 4 } }, sendResponse);
+      if (returned === true) handled = true;
+    });
+    return Promise.resolve(handled && replied ? replyValue : undefined);
+  }
+  const browser = {
+    runtime: { onMessage: { addListener(fn) { backgroundListeners.push(fn); } }, sendMessage: webkitSend },
+    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+    scripting: { insertCSS() { return Promise.resolve(); }, executeScript() { return Promise.resolve([]); } },
+    notifications: { create() { return Promise.resolve('rikugan-demo'); }, getAll() { return Promise.resolve({ 'rikugan-demo': { title: 'Rikugan' } }); } },
+    tabs: { query() { return Promise.resolve([{ id: 4 }]); } }
+  };
+  const backgroundSandbox = { browser, chrome: browser, console, Promise, setTimeout, clearTimeout };
+  backgroundSandbox.globalThis = backgroundSandbox;
+  vm.runInNewContext(backgroundSource, backgroundSandbox, { filename: 'background.js' });
+  const ready = await webkitSend({ source: 'rikugan-bg-probe' });
+  assert.equal(ready && ready.ready, true);
+  const demoReply = await webkitSend({ type: 'rikugan-probe' });
+  assert.equal(demoReply.ok, true);
+  assert.equal(demoReply.visits, 1);
+  const ignored = await webkitSend({ type: 'other' });
+  assert.equal(ignored, undefined);
 
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

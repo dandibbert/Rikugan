@@ -656,11 +656,33 @@
       }
     } else if (typeof originalSend === 'function') {
       gate.start();
-      try {
-        var probe = originalSend({ source: 'rikugan-bg-probe' });
-        if (probe && typeof probe.then === 'function') probe.then(function () { gate.markReady(); }, function () { gate.fail('background failed'); });
-        else gate.markReady();
-      } catch (error) { gate.fail('background failed'); }
+      var attempts = 0;
+      function probeReady(value) {
+        if (typeof value === 'string') {
+          try { value = JSON.parse(value); } catch (error) { return false; }
+        }
+        return !!(value && value.ready);
+      }
+      function noteProbe(value) {
+        if (gate.state === 'failed' || gate.state === 'shutdown' || gate.state === 'ready') return;
+        if (probeReady(value)) { gate.markReady(); return; }
+        attempts += 1;
+        if (attempts >= 40 || typeof setTimeout !== 'function') { gate.markReady(); return; }
+        setTimeout(probeBackground, 50);
+      }
+      function probeBackground() {
+        var probe;
+        try { probe = originalSend.call(runtime, { source: 'rikugan-bg-probe' }); }
+        catch (error) { gate.fail('background failed'); return; }
+        if (probe && typeof probe.then === 'function') {
+          probe.then(noteProbe, function () { gate.fail('background failed'); });
+          return;
+        }
+        if (probeReady(probe)) { gate.markReady(); return; }
+        try { originalSend.call(runtime, { source: 'rikugan-bg-probe' }, noteProbe); }
+        catch (error) { gate.fail('background failed'); }
+      }
+      probeBackground();
     } else gate.start();
     return gate;
   }
