@@ -59,4 +59,11 @@
 - `chrome.userScripts` 不提供：请使用 Rikugan 内置的用户脚本管理器（支持 GM API、`unsafeWindow`、`@inject-into`）。
 - `webRequest` / `webRequestBlocking` 不可用：WKWebView 没有公开 API，Rikugan 不使用私有 API。
 - DNR `redirect` / `modifyHeaders`：WebKit 能编译 `redirect` 内容规则但**不执行**（dnr 套件实测），`modify-headers` 无法编译。这类规则会被跳过，并在诊断页中列出。
-- `offscreen` 文档不提供。
+- `offscreen` 文档、`sidePanel` 不提供；本阶段不实现 `webRequest`、`offscreen`、`sidePanel`、DNR redirect / modifyHeaders。
+- **下载与 DNR 的 WebKit 边界**（dnr 套件“下载 / 媒体”阶段实测）：
+  - 内容规则只作用于 WebKit 自己发出的加载：导航（包括转为 WKDownload 的导航）、页面的 fetch / XHR。
+    - 被 block 的下载导航不会发出请求，也不会产生下载项；
+    - 普通下载的字节不受影响。
+  - Rikugan 自己用 URLSession 发出的下载（直接下载链接、媒体嗅探、HLS 分段、`GM_download`）不经过内容规则，既不会被 DNR 拦截，也不会被改写。
+  - 被跳过的 redirect / modifyHeaders 规则不会让请求被改写、改名，也不会被报告为已拦截；`declarativeNetRequest.getMatchedRules` / `onRuleMatchedDebug` 不提供，因此不存在错误的“命中”报告。
+  - 媒体嗅探只列出实际收到响应的媒体；被 DNR 拦截的媒体请求不会出现在可下载列表中。

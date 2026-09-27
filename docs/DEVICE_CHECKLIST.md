@@ -38,7 +38,8 @@ Rikugan 版本：    （设置 → 开发者 → 诊断：版本 + Git commit）
 - [ ] 诊断中无“后台运行时启动失败”错误
 
 ## 5. 用户脚本
-- [ ] 安装一个依赖 `unsafeWindow` 的真实脚本（例如修改页面函数的脚本）并确认生效
+- [ ] 安装一个依赖 `unsafeWindow` 且只用页面安全授权（`unsafeWindow` / `GM_addStyle` / `GM_info`）的真实脚本（例如修改页面函数的脚本），确认生效（运行在页面环境）
+- [ ] 安装一个同时使用 `unsafeWindow` 与 `GM_setValue` / `GM_xmlhttpRequest` 的脚本：它运行在隔离环境，`unsafeWindow` 看不到页面 JS 变量（Partial，见 SECURITY.md）；记录该脚本是否仍可用
 - [ ] 安装一个 `@grant GM_xmlhttpRequest` 的脚本，跨域请求成功，`@connect` 限制生效
 - [ ] 单页应用（例如 GitHub、YouTube）中 pushState 跳转后脚本行为符合脚本自身设计
 
