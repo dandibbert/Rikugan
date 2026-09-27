@@ -48,7 +48,9 @@ struct BrowserView: View {
                     }
                     ZStack(alignment: .top) {
                         if let tab = manager.activeTab {
-                            TabContentView(tab: tab)
+                            // Automated suite runs only: keep web content out of the accessibility
+                            // tree so XCUITest snapshots of the native UI stay small and fast.
+                            TabContentView(tab: tab).accessibilityHidden(SelfTestRunner.autoRun)
                         } else {
                             Color(.systemBackground)
                         }

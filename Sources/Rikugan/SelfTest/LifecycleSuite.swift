@@ -85,6 +85,10 @@ import WebKit
         for other in created.filter({ $0.id != hist.id }).prefix(7) { manager.select(other) }
         let wasSuspended = await ctx.waitUntil(10) { hist.lifecycle == .suspended && !hist.isLive }
         ctx.record("标签页被挂起（WebView 释放）", wasSuspended, "lifecycle=\(hist.lifecycle) live=\(hist.isLive) suspendCount=\(hist.suspendCount)")
+        let suspendedSnapshot = hist.snapshot
+        ctx.record("挂起的标签页快照含网址、历史与滚动位置", suspendedSnapshot.url.contains("hist2") && (suspendedSnapshot.scrollY ?? 0) >= 1150 &&
+                   suspendedSnapshot.interactionState != nil,
+                   "url=\(URL(string: suspendedSnapshot.url)?.query ?? "nil") scrollY=\(suspendedSnapshot.scrollY ?? -1) history=\(suspendedSnapshot.interactionState?.count ?? 0) bytes")
         let restoresBefore = hist.restoreCount
         manager.select(hist)
         let back = await ctx.waitLoaded(hist, path: "/lifecycle/page.html", query: "n=hist2&tall=1")
@@ -156,8 +160,6 @@ import WebKit
                    decoded?.groups == manager.groups && decoded?.selectedTabID == manager.activeTabID && decoded?.selectedGroupID == g3.id &&
                    decoded.map { SessionOps.validate($0).isEmpty } == true,
                    "tabs=\(decoded?.tabs.count ?? -1) issues=\(decoded.map { SessionOps.validate($0) } ?? [])")
-        ctx.record("挂起的标签页快照含网址与滚动位置", decoded?.tabs.contains { $0.url.contains("hist2") && ($0.scrollY ?? 0) >= 1150 } == true || hist.webView != nil,
-                   "hist scrollY=\(decoded?.tabs.first { $0.url.contains("hist2") }?.scrollY ?? -1)")
 
         // 8. Memory warning suspends every background tab.
         NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
