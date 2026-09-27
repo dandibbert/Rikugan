@@ -692,6 +692,7 @@ enum BackgroundState: String {
     private var navigationStarted = false
     private var recoveredThisAttempt = false
     private var startWatchdog: Task<Void, Never>?
+    private var parkedWebView: WKWebView?
     /// Normal starts reach didStartProvisionalNavigation in 0.7–2.2 s (CI, cold simulator
     /// included); 5 s is > 2× the worst observed normal start.
     static let navigationStartTimeout: TimeInterval = 5
@@ -733,17 +734,30 @@ enum BackgroundState: String {
         launchedAt = Date()
         timeline.removeAll()
         note("launch \(newState.rawValue)")
-        let configuration = runtime.extensionPageConfiguration(for: ext, kind: "background")
-        let webView = RikuganWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration, purpose: "background")
-        webView.navigationDelegate = self
-        webView.isInspectable = true
+        // Wake reuses the parked web view (see `suspend`); only a cold start creates one.
+        let webView: WKWebView
+        if let parked = parkedWebView {
+            parkedWebView = nil
+            webView = parked
+            note("reusing parked web view")
+        } else {
+            webView = makeWebView()
+        }
         self.webView = webView
         runtime.registerPage(webView, extID: ext.id, kind: "background")
-        BackgroundHostContainer.shared.attach(webView)
+        if webView.superview == nil { BackgroundHostContainer.shared.attach(webView) }
         guard let url = URL(string: ext.baseURL + ExtensionSchemeHandler.backgroundPagePath) else { fail("invalid background URL"); return }
         recoveredThisAttempt = false
         loadPage(webView, url: url)
         armDeadline(Self.commitTimeout, phase: "page did not commit (WebContent process launch / main thread busy)")
+    }
+
+    private func makeWebView() -> WKWebView {
+        let configuration = runtime.extensionPageConfiguration(for: ext, kind: "background")
+        let webView = RikuganWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration, purpose: "background")
+        webView.navigationDelegate = self
+        webView.isInspectable = true
+        return webView
     }
 
     private func loadPage(_ webView: WKWebView, url: URL) {
@@ -769,10 +783,7 @@ enum BackgroundState: String {
         note("navigation not started after \(Int(Self.navigationStartTimeout)) s → fresh web view (recovery #\(stuckStartRecoveries))")
         ErrorLog.shared.record("background navigation did not start; replaced the web view (recovery #\(stuckStartRecoveries))", source: ext.displayName)
         tearDownWebView()
-        let configuration = runtime.extensionPageConfiguration(for: ext, kind: "background")
-        let webView = RikuganWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration, purpose: "background")
-        webView.navigationDelegate = self
-        webView.isInspectable = true
+        let webView = makeWebView()
         self.webView = webView
         runtime.registerPage(webView, extID: ext.id, kind: "background")
         BackgroundHostContainer.shared.attach(webView)
@@ -832,8 +843,24 @@ enum BackgroundState: String {
         guard isReady else { return }
         webView?.rkEval("globalThis.__rikuganChrome && globalThis.__rikuganChrome.dispatch('runtime.onSuspend', [])", world: .page)
         idleTimer?.invalidate()
-        tearDownWebView()
+        parkWebView()
         state = .suspended
+    }
+
+    /// Suspension destroys the JS context (navigates to about:blank, like a terminated MV3 service
+    /// worker: all in-memory state is gone, listeners re-register on wake) but keeps the WKWebView.
+    /// Creating a fresh background WKWebView right after tearing one down intermittently left its
+    /// navigation unstarted (CI evidence); reusing the parked view avoids that churn. Cost: one idle
+    /// WebContent process per suspended extension.
+    private func parkWebView() {
+        guard let webView else { return }
+        runtime.unregisterPage(webView)
+        runtime.bridge.endpointsGone(webView: webView)
+        startWatchdog?.cancel()
+        webView.stopLoading()
+        if let blank = URL(string: "about:blank") { webView.load(URLRequest(url: blank)) }
+        parkedWebView = webView
+        self.webView = nil
     }
 
     func stop() {
@@ -849,6 +876,13 @@ enum BackgroundState: String {
     }
 
     private func tearDownWebView() {
+        if let parked = parkedWebView {
+            parked.navigationDelegate = nil
+            parked.stopLoading()
+            parked.configuration.userContentController.removeAllScriptMessageHandlers()
+            parked.removeFromSuperview()
+            parkedWebView = nil
+        }
         if let webView {
             runtime.unregisterPage(webView)
             runtime.bridge.endpointsGone(webView: webView)
@@ -936,6 +970,8 @@ enum BackgroundState: String {
         note("didFinish")
         // Second ready signal: once the page and its scripts finished loading and the chrome shim exists.
         Task {
+            // Only the background page counts (not the about:blank a parked view navigates to).
+            guard webView.url?.path == "/" + ExtensionSchemeHandler.backgroundPagePath else { return }
             let present = (try? await webView.rkCall("return typeof globalThis.__rikuganChrome === 'object' && document.readyState === 'complete';", world: .page)) as? Bool ?? false
             if present, self.webView === webView { markReady() }
         }
@@ -950,6 +986,14 @@ enum BackgroundState: String {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if parkedWebView === webView {
+            note("parked web view's process terminated → released")
+            parkedWebView?.navigationDelegate = nil
+            parkedWebView?.configuration.userContentController.removeAllScriptMessageHandlers()
+            parkedWebView?.removeFromSuperview()
+            parkedWebView = nil
+            return
+        }
         guard self.webView === webView else { return }
         ErrorLog.shared.record("background WebContent process terminated", source: ext.displayName)
         tearDownWebView()
