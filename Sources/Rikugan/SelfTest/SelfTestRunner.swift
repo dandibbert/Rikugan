@@ -189,7 +189,8 @@ final class LocalHTTPServer: @unchecked Sendable {
 
     private func finish() {
         let passed = results.filter(\.passed).count
-        summary = "SELFTEST \(passed == results.count ? "PASS" : "FAIL") \(passed)/\(results.count)"
+        let failures = results.filter { !$0.passed }.map { "\($0.name)（\($0.detail)）" }.joined(separator: "；")
+        summary = "SELFTEST \(passed == results.count ? "PASS" : "FAIL") \(passed)/\(results.count)" + (failures.isEmpty ? "" : " — " + failures)
         for result in results where !result.passed { print("SELFTEST FAILED: \(result.name) – \(result.detail)") }
         print(summary ?? "")
         server?.stop()
