@@ -35,6 +35,8 @@ Rikugan 的验证分三级。**每一级只证明它能证明的东西**：CI �
 
 **测试原则**：等待一律是“轮询一个具体条件直到固定期限，失败时报告观察到的状态”，不使用固定 sleep 掩盖竞态，不重试被测操作，不因为超时而加长期限。
 
+**XCUITest 快照超时**：App 忙时（套件跑在主线程上），XCUITest 自己的无障碍快照可能超时。UI 测试只记录并计数这类超时，然后继续等待；是否通过只看套件的 `SELFTEST … PASS n/n` 结果。stress 套件每轮结束都写一次报告，即使 App 被结束也能留下证据。
+
 **WebContent 终止说明**：iOS 没有公开 API 可以杀死 WebContent 进程，lifecycle 套件直接调用 Rikugan 的终止处理函数（与 `webViewWebContentProcessDidTerminate` 调用的是同一函数），验证状态迁移与恢复路径；系统真实杀进程只能在真机上验证（见真机清单）。
 
 ### 已知的间歇性问题（如实记录）

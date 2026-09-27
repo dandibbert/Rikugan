@@ -63,6 +63,7 @@ import WebKit
                     failures.append("\(name): \(failure) [mainThreadMaxGap=\(String(format: "%.2f", watch.maxGap))s webViews=\(RikuganWebView.liveByPurpose) bgTimeline=\(bg.timeline.suffix(6).joined(separator: "; "))]")
                 }
                 timings[name] = (Date().timeIntervalSince(t) * 1000).rounded() / 1000
+                timings["mainThreadMaxGap " + name] = (watch.maxGap * 1000).rounded() / 1000
             }
 
             var firstWake = ""
@@ -155,6 +156,9 @@ import WebKit
             if !failures.isEmpty { failedRounds += 1 }
             log.append(["round": round, "failures": failures, "timings": timings])
             ctx.record("第 \(round + 1)/\(total) 轮", failures.isEmpty, failures.joined(separator: " | "))
+            // Partial report after every round: evidence survives even if the app is killed.
+            ctx.extras["rounds"] = log
+            ctx.writeReport(summary: "SELFTEST stress IN PROGRESS \(round + 1)/\(total)")
         }
         ctx.extras["rounds"] = log
         ctx.extras["webViewsAtEnd"] = RikuganWebView.liveByPurpose
