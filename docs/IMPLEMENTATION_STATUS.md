@@ -1,7 +1,7 @@
 # Rikugan 实现规格对照 · 2026-09-27
 
 以用户在 2026-09-27 上传的《Rikugan - Teak-like iOS Browser 功能规格》及随后修订为准。
-保留现有 iOS 18.4 WKWebExtension 架构，不另造一套伪 chrome.*。
+main 目前沿用 iOS 18.4 的公开 WKWebExtension 宿主与普通签名后台适配。它不等价于基线规格中的完整自研 Chrome MV3 兼容运行时；该架构差异不能标成已经完全达标。本轮在现有 main 上继续补齐可交付功能，不混入另一分支。
 
 ## 0.4.0 续做
 
@@ -11,7 +11,7 @@
 
 GM XHR 新增原生 URLSessionDataTask 取消、总超时、下载进度与 readyState、text/URLSearchParams/FormData/Blob/ArrayBuffer 正文、JSON/blob/arraybuffer/document 响应。请求正文最多 2 MB、响应最多 8 MB、每页最多 16 个在途请求；导航/关闭/禁用脚本清理请求；@connect self 精确比较 scheme/host/port，逐跳验证重定向。仍不自动附带浏览器登录 Cookie；stream、同步请求、cookiePartition/proxy 等不支持选项明确报错。ScriptNetworkTests 和 ScriptEventTests 验证真实服务器、桥接与页面，Node 验证序列化和回调。
 
-扩展增加独立可横向滚动的工具栏动作条（图标/标题/徽标/启用状态），点击直接打开原生 popup；无痕不展示。固定测试扩展增加 document_start/end + CSS、background messaging/Port、storage、popup 当前标签、scripting.executeScript、host permissions、DNR 实际阻断；UI 验证实际效果。后台沿用普通证书非持久页面，不宣称完整 Worker 生命周期。
+扩展增加独立可横向滚动的工具栏动作条（图标/标题/徽标/启用状态），点击直接打开原生 popup；无痕不展示。详情页可查看运行时与原始 manifest.json。固定测试扩展增加 document_start/end + CSS、background messaging/Port、storage、popup 当前标签、scripting.executeScript、host permissions、DNR 实际阻断；UI 验证实际效果。后台沿用普通证书非持久页面，不宣称完整 Worker 生命周期。
 
 ## 0.3.0 已交付
 

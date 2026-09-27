@@ -48,6 +48,14 @@ struct ScriptDraft: Identifiable {
         downloadCenter.activate(self)
         registerFonts()
         pendingShareCount = (try? shareInbox.items().count) ?? 0
+        #if DEBUG
+        if isTesting && ProcessInfo.processInfo.arguments.contains("--share-queue-fixture") {
+            let items = (1...2).map { index in
+                SharedItem(kind: .script, value: "// ==UserScript==\n// @name Share queued \(index)\n// @match https://example.com/*\n// @grant none\n// ==/UserScript==\ndocument.body.dataset.shared = '\(index)';")
+            }
+            try? shareInbox.enqueue(SharedBatch(items: items)); refreshShareCount()
+        }
+        #endif
     }
 
     func start() {
@@ -106,7 +114,7 @@ struct ScriptDraft: Identifiable {
                 var item = try ShareInputReader.text(value)
                 if action == "search" { item.kind = .search }
                 try shareInbox.enqueue(SharedBatch(items: [item]))
-                refreshShareCount(); applyPendingShare()
+                refreshShareCount(); presentPendingShares()
             } catch { message = error.localizedDescription }
             return
         }
@@ -129,7 +137,7 @@ struct ScriptDraft: Identifiable {
                     try FileManager.default.removeItem(at: legacy)
                 }
             }
-            refreshShareCount(); applyPendingShare()
+            refreshShareCount(); presentPendingShares()
         } catch { message = "接收分享失败，原内容保留：\(error.localizedDescription)" }
     }
     func applyPendingShare() {
@@ -167,12 +175,20 @@ struct ScriptDraft: Identifiable {
             self?.applyPendingShare()
         }
     }
-    func resumeShareQueue() { shareQueuePaused = false; applyPendingShare() }
+    func presentPendingShares() {
+        guard pendingShareCount > 0, !shareQueuePaused, scriptDraft == nil else { return }
+        session?.requestedPanel = "dismiss"
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            self?.applyPendingShare()
+        }
+    }
+    func resumeShareQueue() { shareQueuePaused = false; presentPendingShares() }
     func discardShare(_ id: UUID) throws { try shareInbox.acknowledge(id); refreshShareCount() }
     func refreshShareCount() { pendingShareCount = (try? shareInbox.items().count) ?? 0 }
     func handleFile(_ url: URL) {
         Task {
-            working = true; defer { working = false; applyPendingShare() }
+            working = true; defer { working = false; presentPendingShares() }
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             do {
@@ -196,7 +212,7 @@ struct ScriptDraft: Identifiable {
         guard let url = URL(string: value), url.scheme?.lowercased() == "https" || (isTesting && url.scheme == "http") else {
             message = "请输入 HTTPS 用户脚本直链。"; return
         }
-        working = true; defer { working = false; applyPendingShare() }
+        working = true; defer { working = false; presentPendingShares() }
         do {
             let text = try await ScriptNetwork.downloadText(url)
             _ = try UserScript.parse(text)

@@ -52,11 +52,22 @@ enum ShareInputReader {
                 provider.loadFileRepresentation(forTypeIdentifier: scriptType) { url, error in
                     // NSItemProvider removes temporary files after this callback.
                     // Read bytes INSIDE it, never pass the temporary URL onward.
-                    do {
-                        if let error { throw error }
-                        guard let url else { throw ShareInboxError.invalid("分享没有提供脚本文件。") }
-                        continuation.resume(returning: try scriptFile(url, name: name))
-                    } catch { continuation.resume(throwing: error) }
+                    if let url {
+                        do { continuation.resume(returning: try scriptFile(url, name: name)) }
+                        catch { continuation.resume(throwing: error) }
+                    } else {
+                        // Some providers export data but cannot vend a temporary
+                        // file. Keep the same UTF-8, metadata and size checks.
+                        provider.loadDataRepresentation(forTypeIdentifier: scriptType) { data, dataError in
+                            do {
+                                guard let data, data.count <= 2_000_000, let value = String(data: data, encoding: .utf8) else {
+                                    throw dataError ?? error ?? ShareInboxError.invalid("分享没有提供有效脚本正文。")
+                                }
+                                let item = SharedItem(kind: .script, value: value, name: String(name.prefix(120)))
+                                try item.validate(); continuation.resume(returning: item)
+                            } catch { continuation.resume(throwing: error) }
+                        }
+                    }
                 }
             }
         }

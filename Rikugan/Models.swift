@@ -266,8 +266,9 @@ enum URLRules {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host?.lowercased(), url.user == nil, url.password == nil else { return false }
         return rules.contains { rule in
             let r = rule.lowercased()
-            let sameOrigin = host == origin.host?.lowercased() && url.scheme?.lowercased() == origin.scheme?.lowercased()
-                && (url.port ?? (url.scheme == "https" ? 443 : 80)) == (origin.port ?? (origin.scheme == "https" ? 443 : 80))
+            let scheme = url.scheme?.lowercased(), originScheme = origin.scheme?.lowercased()
+            let sameOrigin = host == origin.host?.lowercased() && scheme == originScheme
+                && (url.port ?? (scheme == "https" ? 443 : 80)) == (origin.port ?? (originScheme == "https" ? 443 : 80))
             return r == "*" || (r == "self" && sameOrigin) || (r != "self" && (host == r || host.hasSuffix("." + r)))
         }
     }

@@ -33,10 +33,16 @@ if (location.hostname === '127.0.0.1') {
         port.onMessage.addListener(message => { clearTimeout(timer); port.disconnect(); message.echo === 'hello' ? resolve() : reject(new Error('Port reply')); });
         port.postMessage({value: 'hello'});
       });
-      const control = await fetch('/__echo');
-      if (!control.ok) throw new Error('DNR control resource');
-      const blocked = await fetch('/extension-blocked').then(() => false, () => true);
-      if (!blocked) throw new Error('DNR did not block the test request');
+      const dnr = await new Promise((resolve, reject) => {
+        const observer = new MutationObserver(() => {
+          const value = document.documentElement.dataset.dnrProbe;
+          if (value) { clearTimeout(timer); observer.disconnect(); resolve(value); }
+        });
+        const timer = setTimeout(() => { observer.disconnect(); reject(new Error('page DNR probe timed out')); }, 10000);
+        observer.observe(document.documentElement, {attributes: true, attributeFilter: ['data-dnr-probe']});
+        document.dispatchEvent(new Event('rikugan-dnr-probe'));
+      });
+      if (dnr !== 'blocked') throw new Error('DNR page request: ' + dnr);
       status.textContent = '扩展完整自检通过';
     } catch (error) { status.textContent = '扩展完整自检失败：' + String(error); }
   })();

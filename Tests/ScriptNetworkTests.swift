@@ -10,6 +10,9 @@ final class ScriptNetworkTests: XCTestCase {
         XCTAssertEqual(value.timeout, 1)
         XCTAssertThrowsError(try ScriptRequest.build(["url": "file:///tmp/private"], origin: origin))
         XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "headers": ["X-Test": "ok\r\nInjected: yes"]], origin: origin))
+        for invalid in ["ok\rno", "ok\nno", "bad\0value", "line\u{2028}break"] {
+            XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "headers": ["X-Test": invalid]], origin: origin))
+        }
         XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "headers": ["Host": "evil.test"]], origin: origin))
         XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "timeout": -1], origin: origin))
         XCTAssertTrue(URLRules.connectionAllowed(origin, origin: origin, rules: ["self"]))

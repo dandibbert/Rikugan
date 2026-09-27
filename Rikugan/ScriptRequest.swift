@@ -26,7 +26,7 @@ enum ScriptRequest {
         guard headers.count <= 64 else { throw RikuganError.message("请求头超过限制。") }
         for (key, value) in headers {
             guard key.range(of: #"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"#, options: .regularExpression) != nil,
-                  value.utf8.count <= 8192, !value.contains("\r"), !value.contains("\n"),
+                  value.utf8.count <= 8192, value.unicodeScalars.allSatisfy({ $0.value == 9 || ($0.value >= 32 && $0.value != 127 && !CharacterSet.newlines.contains($0)) }),
                   !["host", "content-length", "connection", "transfer-encoding"].contains(key.lowercased()) else {
                 throw RikuganError.message("不支持或不安全的请求头：\(key)")
             }

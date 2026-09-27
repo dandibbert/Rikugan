@@ -1,6 +1,20 @@
 import XCTest
 
 final class BrowserUITests: XCTestCase {
+    @MainActor func testSharedScriptsRequireIndividualConfirmation() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--uitesting", "--share-queue-fixture"]; app.launch()
+        XCTAssertTrue(app.staticTexts["Share queued 1"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["script.confirm"].exists)
+        app.buttons["script.cancel"].tap()
+        XCTAssertTrue(app.staticTexts["Share queued 2"].waitForExistence(timeout: 15))
+        app.buttons["script.confirm"].tap()
+        XCTAssertTrue(app.buttons["home.addons"].waitForExistence(timeout: 15))
+        app.buttons["home.addons"].tap()
+        app.segmentedControls.buttons["用户脚本"].tap()
+        XCTAssertTrue(app.staticTexts["Share queued 2"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Share queued 1"].exists)
+    }
     @MainActor func testExtensionUserscriptAndProfileIsolation() throws {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--uitesting"]; app.launch()

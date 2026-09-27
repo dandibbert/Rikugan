@@ -39,6 +39,7 @@ struct BrowserShell: View {
         .overlay { if !session.ready { ZStack { Color(uiColor: .systemBackground).opacity(0.93); ProgressView("正在载入身份与扩展…") } } }
         .onChange(of: session.requestedPanel) { _, value in
             guard let value else { return }
+            if value == "dismiss" { panel = nil; session.requestedPanel = nil; return }
             panel = value == "settings" ? .settings : .addons
             session.requestedPanel = nil
         }

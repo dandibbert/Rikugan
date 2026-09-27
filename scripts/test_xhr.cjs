@@ -35,6 +35,8 @@ function runtime(transport) {
   assert.ok(bytes.includes(Buffer.from('name="field"\r\n\r\nhello'))); assert.ok(bytes.includes(Buffer.from([0, 1, 255])));
   await page.xhr({url: '/echo', data: Uint8Array.of(3, 2, 1)});
   assert.deepEqual(Buffer.from(calls.at(-1).args.dataBase64, 'base64'), Buffer.from([3, 2, 1]));
+  await page.xhr({url: '/echo', headers: {'X-Count': 42}});
+  assert.equal(calls.at(-1).args.headers['X-Count'], '42');
 
   let finishNative, aborts = 0, loads = 0, callbackAborts = 0;
   const abortPage = runtime(body => {

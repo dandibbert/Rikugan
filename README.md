@@ -8,13 +8,13 @@
 
 本轮加入标签按需创建/内存压力挂起与 WebKit 状态恢复、v2→v3 备份迁移和引用校验、无痕新标签及 GM 存储隔离；修复脚本元数据更新和重复重装；下载统一使用带当前身份 Cookie 的 WKDownload，支持进度、暂停、服务器支持时的续传、取消与失败记录。具体实现、自动化测试入口和未完成项见 `docs/IMPLEMENTATION_STATUS.md`。
 
-本版本文件名为 `Rikugan-0.3.0-unsigned.ipa`。成功主分支构建同时发布 `tests.zip` 与 `SHA256SUMS.txt`；测试包 manifest 会记录真实结果，真机验证不会冒充已完成。
+0.3.0 的能力已沿用至当前版本。成功主分支构建同时发布 IPA、`tests.zip` 与 `SHA256SUMS.txt`；测试包 manifest 记录真实结果，不把模拟器当作真机验证。
 
 自用 iOS 浏览器：**WebExtension + 用户脚本 + 多身份**。SwiftUI / WKWebView 原生实现，无内购、无账号服务、无遥测。不使用 Teak 的二进制、代码或购买信息。
 
 ## 安装
 
-GitHub Actions 在功能分支推送、针对 `main` 的 pull request，以及 `main` 推送时，用 macOS 上的 `xcodebuild` 编译 **未签名** IPA，并上传名为 `Rikugan-unsigned-IPA` 的 artifact，其中包含 `Rikugan-0.3.0-unsigned.ipa`。`main` 上测试成功后，同一份 IPA 也会出现在 prerelease。没有签名证书或描述文件，不能直接点开安装，需要用自己的证书或侧载工具重签。最低 iOS / iPadOS **18.4**，设备产物为 arm64。
+GitHub Actions 在功能分支推送、针对 `main` 的 pull request，以及 `main` 推送时，用 macOS 上的 `xcodebuild` 编译 **未签名** IPA，并上传名为 `Rikugan-unsigned-IPA` 的 artifact，其中包含 `Rikugan-0.4.0-unsigned.ipa`。`main` 上测试成功后，同一份 IPA 也会出现在 prerelease。没有签名证书或描述文件，不能直接点开安装，需要用自己的证书或侧载工具重签。最低 iOS / iPadOS **18.4**，设备产物为 arm64。
 
 默认 Bundle ID：`com.dandibbert.Rikugan`。工程带有 App Group `group.com.dandibbert.Rikugan`，供分享扩展和主 App 交换待打开的链接；未签名包不会激活这个 group，重签时描述文件需要包含同一个 group。没有默认浏览器 entitlement，设置页也不会把它说成可用。一个 App 内可建立多个身份，不必多开 IPA。
 
@@ -90,7 +90,7 @@ xcodebuild -project Rikugan.xcodeproj -scheme Rikugan \
   CODE_SIGN_IDENTITY='' ARCHS=arm64 build
 mkdir -p dist/Payload
 cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
-( cd dist && zip -qry Rikugan-0.3.0-unsigned.ipa Payload )
+( cd dist && zip -qry Rikugan-0.4.0-unsigned.ipa Payload )
 ```
 
 自动化 UI 测试使用 CI 上 `127.0.0.1:8765` 的测试网页，不依赖公共网站：安装内置示例 → 验证脚本/扩展注入 → 检查 GM 存储 → 检查扩展后台通信和 popup → 写入 Cookie/localStorage → 新身份确认无数据且无扩展/脚本 → 切回验证数据保留。

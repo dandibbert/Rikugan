@@ -5,5 +5,15 @@
 function show(){document.querySelector('#state').textContent = localStorage.getItem('rikugan-profile') === 'saved' && document.cookie.includes('rikugan=saved') ? '本身份已保存' : '本身份是空的';}
 function store(){localStorage.setItem('rikugan-profile','saved');document.cookie='rikugan=saved;path=/;SameSite=Lax';show();}
 show();
+// DNR is a page-network test. An extension's own fetch is not an ordinary
+// website request; dispatch a DOM event to let this MAIN-world fixture fetch.
+document.addEventListener('rikugan-dnr-probe', async () => {
+  try {
+    const control = await fetch('/__echo');
+    if (!control.ok) throw new Error('control HTTP ' + control.status);
+    const blocked = await fetch('/extension-blocked').then(() => false, () => true);
+    document.documentElement.dataset.dnrProbe = blocked ? 'blocked' : 'not-blocked';
+  } catch (error) { document.documentElement.dataset.dnrProbe = 'error:' + String(error); }
+});
 </script></body></html>
 

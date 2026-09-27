@@ -184,7 +184,9 @@
       const error = new Error(String(message)); error.name = kind === 'abort' ? 'AbortError' : kind === 'timeout' ? 'TimeoutError' : 'Error';
       reject(error);
     };
-    const abortNative = () => { if (dispatched) void call('abortRequest', {id}).catch(console.error); };
+    const abortNative = () => {
+      if (dispatched) { try { void call('abortRequest', {id}).catch(console.error); } catch (error) { console.error(error); } }
+    };
     promise.abort = () => { if (!finished) { abortNative(); fail('abort', 'Request aborted'); } };
     activeXHR.set(id, value => { if (!finished) { state(value); if (value.readyState === 3) callback('onprogress', value); } });
     Promise.resolve().then(async () => {
@@ -199,12 +201,13 @@
       if (!Number.isFinite(timeout) || timeout < 0 || timeout > 120000) throw new Error('timeout must be 0–120000 milliseconds');
       if (finished) return;
       if (timeout > 0) timer = setTimeout(() => { abortNative(); fail('timeout', 'Request timed out'); }, timeout);
-      const headers = {...details.headers};
+      if (details.headers != null && typeof details.headers !== 'object') throw new TypeError('headers must be an object');
+      const headers = Object.fromEntries(Object.entries(details.headers || {}).map(([key, value]) => [key, String(value)]));
       const body = await encodeBody(details, headers);
       if (finished) return;
       state({readyState: 1, status: 0}); callback('onloadstart', {readyState: 1, status: 0});
       dispatched = true;
-      const response = await call('xmlHttpRequest', {id, url: String(details.url), method: details.method || 'GET', headers, timeout, ...body});
+      const response = await call('xmlHttpRequest', {id, url: String(details.url), method: String(details.method || 'GET'), headers, timeout, ...body});
       if (finished) return;
       if (response.error) { fail(response.kind || 'error', response.error); return; }
       response.readyState = 4; response.response = response.responseText;

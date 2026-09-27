@@ -150,6 +150,7 @@ struct ExtensionDetails: View {
                     if record.backgroundMode == "document" { Section("后台兼容模式") { Text(ExtensionCompatibility.notice).font(.footnote) } }
                     Section("身份") { LabeledContent("扩展 ID", value: record.storeID.isEmpty ? record.id.uuidString : record.storeID); if !record.updateURL.isEmpty { Text(record.updateURL).font(.caption2) } }
                     NavigationLink("API 兼容矩阵") { CapabilityView() }
+                    NavigationLink("查看 manifest.json") { ExtensionManifestView(record: record, session: session) }
                     Button("检查更新") { Task { await session.updateExtension(record) } }
                     if let context = session.contexts[record.id], !context.errors.isEmpty { Section("运行时诊断") { Text(context.errors.map(\.localizedDescription).joined(separator: "\n")).font(.footnote).textSelection(.enabled) } }
                     if let error = session.extensionErrors[record.id] { Section("加载错误") { Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled) } }
@@ -242,11 +243,11 @@ struct ScriptEditor: View {
                 }
             }.navigationTitle(draft.existingID == nil ? "安装用户脚本" : "编辑用户脚本").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(saving).accessibilityIdentifier("script.cancel") }
                     ToolbarItem(placement: .confirmationAction) { Button(saving ? "保存中…" : (draft.existingID == nil ? "保存并启用" : "保存")) {
                         saving = true
                         Task { do { try await model.installScript(source, existingID: draft.existingID, expectedProfileID: draft.profileID); dismiss() } catch { self.error = error.localizedDescription }; saving = false }
-                    }.bold().disabled(saving) }
+                    }.bold().disabled(saving).accessibilityIdentifier("script.confirm") }
                 }
                 .interactiveDismissDisabled(saving)
                 .alert("未能保存脚本", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("好") { error = nil } } message: { Text(error ?? "") }
