@@ -30,6 +30,14 @@ struct BrowserProfile: Codable, Identifiable, Equatable {
     }
 }
 
+enum WebPermissionPolicy {
+    static func aggregate(_ decisions: [String]) -> String {
+        if decisions.contains("block") { return "block" }
+        if !decisions.isEmpty && decisions.allSatisfy({ $0 == "allow" }) { return "allow" }
+        return "ask"
+    }
+}
+
 struct SavedTab: Codable, Identifiable, Equatable {
     var id = UUID()
     var url = ""

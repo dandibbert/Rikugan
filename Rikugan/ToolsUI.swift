@@ -317,7 +317,7 @@ struct SiteSettingsSheet: View {
             Form {
                 if host.isEmpty { Text("打开网页后才能保存站点设置。") }
                 else {
-                    override("桌面版", key: \.desktopMode, bool: true)
+                    override("桌面版", key: \.desktopMode, reload: true)
                     Picker("暗黑模式", selection: optional(\.darkMode)) {
                         Text("跟随全局").tag(String?.none); Text("关闭").tag(String?("off")); Text("自动").tag(String?("auto")); Text("始终").tag(String?("on"))
                     }
@@ -328,9 +328,9 @@ struct SiteSettingsSheet: View {
                         ForEach(FontLibrary.families(), id: \.self) { Text($0).tag(Optional($0)) }
                     }
                     Picker("外部 App", selection: optional(\.externalNavigation)) { Text("跟随全局").tag(Optional<String>.none); Text("询问").tag(Optional("ask")); Text("允许").tag(Optional("allow")); Text("禁止").tag(Optional("block")) }
-                    toggle("用户脚本", key: \.userScriptsEnabled)
-                    toggle("JavaScript", key: \.javascriptEnabled)
-                    Picker("弹窗", selection: optional(\.popups)) { Text("允许").tag(Optional("allow")); Text("询问").tag(Optional("ask")); Text("禁止").tag(Optional("block")) }
+                    toggle("用户脚本", key: \.userScriptsEnabled, reload: true)
+                    toggle("JavaScript", key: \.javascriptEnabled, reload: true)
+                    Picker("弹窗", selection: optional(\.popups)) { Text("跟随").tag(String?.none); Text("允许").tag(Optional("allow")); Text("询问").tag(Optional("ask")); Text("禁止").tag(Optional("block")) }
                     Section("网页权限") {
                         ForEach(["camera", "microphone", "location", "clipboard"], id: \.self) { kind in
                             Picker(kind, selection: permission(kind)) { Text("询问").tag("ask"); Text("允许").tag("allow"); Text("禁止").tag("block") }
@@ -341,27 +341,30 @@ struct SiteSettingsSheet: View {
         }
     }
     private func snapshot() -> SiteSettings { model.profile.site(for: host) ?? SiteSettings(host: host) }
-    private func save(_ site: SiteSettings) {
+    private func save(_ site: SiteSettings, reload: Bool = false) {
+        var normalized = site; normalized.host = host.lowercased()
         model.updateProfile(model.profile.id) { profile in
-            if let index = profile.siteSettings.firstIndex(where: { $0.host == host }) { profile.siteSettings[index] = site }
-            else { profile.siteSettings.append(site) }
+            if let index = profile.siteSettings.firstIndex(where: { $0.host.lowercased() == normalized.host }) { profile.siteSettings[index] = normalized }
+            else { profile.siteSettings.append(normalized) }
         }
         tab.applyDecorations(); tab.syncContentRules(); tab.session?.refreshScripts()
+        if reload { tab.webView.reload() }
     }
     private func optional(_ key: WritableKeyPath<SiteSettings, String?>) -> Binding<String?> {
         Binding(get: { snapshot()[keyPath: key] }, set: { value in var site = snapshot(); site[keyPath: key] = value; save(site) })
     }
-    private func toggle(_ title: String, key: WritableKeyPath<SiteSettings, Bool?>) -> some View {
-        Picker(title, selection: Binding(get: { snapshot()[keyPath: key] }, set: { value in var site = snapshot(); site[keyPath: key] = value; save(site) })) {
+    private func toggle(_ title: String, key: WritableKeyPath<SiteSettings, Bool?>, reload: Bool = false) -> some View {
+        Picker(title, selection: Binding(get: { snapshot()[keyPath: key] }, set: { value in var site = snapshot(); site[keyPath: key] = value; save(site, reload: reload) })) {
             Text("跟随").tag(Optional<Bool>.none); Text("开").tag(Optional(true)); Text("关").tag(Optional(false))
         }
     }
-    private func override(_ title: String, key: WritableKeyPath<SiteSettings, Bool?>, bool: Bool) -> some View { toggle(title, key: key) }
+    private func override(_ title: String, key: WritableKeyPath<SiteSettings, Bool?>, reload: Bool = false) -> some View { toggle(title, key: key, reload: reload) }
     private func permission(_ kind: String) -> Binding<String> {
         Binding(get: { model.profile.permission(host: host, kind: kind) }, set: { value in
             model.updateProfile(model.profile.id) { profile in
-                profile.webPermissions.removeAll { $0.host == host && $0.kind == kind }
-                if value != "ask" { profile.webPermissions.append(WebPermission(host: host, kind: kind, decision: value)) }
+                let normalizedHost = host.lowercased()
+                profile.webPermissions.removeAll { $0.host.lowercased() == normalizedHost && $0.kind == kind }
+                if value != "ask" { profile.webPermissions.append(WebPermission(host: normalizedHost, kind: kind, decision: value)) }
             }
         })
     }
@@ -594,6 +597,9 @@ struct DownloadList: View {
                     Text(record.state == "finished" ? "已完成 · \(ByteFormat.bytes(record.total))" : record.state).font(.caption).foregroundStyle(.secondary)
                     HStack {
                         if record.state == "failed" && record.resumable { Button("重试续传") { center.resume(record.id) } }
+                        if ["failed", "cancelled"].contains(record.state), !record.resumable, DownloadPolicy.restartURL(record) != nil {
+                            Button("重新下载") { center.restart(record.id) }
+                        }
                         if record.state == "finished" {
                             ShareLink(item: center.fileURL(record, profile: model.profile.id)) { Image(systemName: "square.and.arrow.up") }
                             NavigationLink("打开") { QuickLookView(url: center.fileURL(record, profile: model.profile.id)) }

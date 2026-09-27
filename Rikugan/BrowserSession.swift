@@ -430,7 +430,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let session else { return nil }
         let host = webView.url?.host ?? ""
-        let popup = session.profile.site(for: host)?.popups ?? "allow"
+        let popup = session.profile.site(for: host)?.popups ?? "ask"
         if popup == "block" { return nil }
         if popup == "ask" {
             BrowserPresentation.confirm(title: host.isEmpty ? "弹窗" : host, message: "这个网页想打开新标签页。") { allowed in
@@ -455,23 +455,26 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
     }
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
                  type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        let kind = type == .camera ? "camera" : type == .microphone ? "microphone" : "camera-microphone"
-        decide(kind, host: origin.host, decisionHandler: decisionHandler)
+        if type == .camera { decide(["camera"], host: origin.host, title: "相机", decisionHandler: decisionHandler) }
+        else if type == .microphone { decide(["microphone"], host: origin.host, title: "麦克风", decisionHandler: decisionHandler) }
+        else { decide(["camera", "microphone"], host: origin.host, title: "相机和麦克风", decisionHandler: decisionHandler) }
     }
     func webView(_ webView: WKWebView, requestGeolocationPermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        decide("location", host: origin.host, decisionHandler: decisionHandler)
+        decide(["location"], host: origin.host, title: "位置", decisionHandler: decisionHandler)
     }
-    private func decide(_ kind: String, host: String, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        let current = session?.profile.permission(host: host, kind: kind) ?? "ask"
+    private func decide(_ kinds: [String], host: String, title: String, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        let current = WebPermissionPolicy.aggregate(kinds.map { session?.profile.permission(host: host, kind: $0) ?? "ask" })
         if current == "allow" { decisionHandler(.grant); return }
         if current == "block" { decisionHandler(.deny); return }
-        let title = ["camera": "相机", "microphone": "麦克风", "camera-microphone": "相机和麦克风", "location": "位置"][kind] ?? kind
         BrowserPresentation.choice(title: host, message: "\(title)权限") { [weak self] choice in
             if choice != "ask" {
                 self?.session?.model?.updateProfile(self?.session?.profileID ?? UUID()) { profile in
-                    profile.webPermissions.removeAll { $0.host == host && $0.kind == kind }
-                    if choice != "ask" { profile.webPermissions.append(WebPermission(host: host, kind: kind, decision: choice)) }
+                    let normalizedHost = host.lowercased()
+                    for kind in kinds {
+                        profile.webPermissions.removeAll { $0.host.lowercased() == normalizedHost && $0.kind == kind }
+                        profile.webPermissions.append(WebPermission(host: normalizedHost, kind: kind, decision: choice))
+                    }
                 }
             }
             decisionHandler(choice == "allow" ? .grant : choice == "block" ? .deny : .prompt)

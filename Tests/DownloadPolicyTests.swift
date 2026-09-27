@@ -17,4 +17,14 @@ final class DownloadPolicyTests: XCTestCase {
         XCTAssertEqual(DownloadPolicy.recoveredState("finished", hasResumeData: false), "finished")
         XCTAssertEqual(DownloadPolicy.recoveredState("cancelled", hasResumeData: true), "cancelled")
     }
+    func testRestartOnlyUsesPersistentHTTPSourceWithoutCredentials() {
+        var record = DownloadRecord(name: "file", fileName: "file", state: "failed", source: "https://example.com/file")
+        XCTAssertEqual(DownloadPolicy.restartURL(record)?.host, "example.com")
+        record.source = "https://user:pass@example.com/file"
+        XCTAssertNil(DownloadPolicy.restartURL(record))
+        record.source = "blob:https://example.com/uuid"
+        XCTAssertNil(DownloadPolicy.restartURL(record))
+        record.source = ""
+        XCTAssertNil(DownloadPolicy.restartURL(record))
+    }
 }

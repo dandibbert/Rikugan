@@ -18,6 +18,12 @@ enum DownloadPolicy {
     static func recoveredState(_ state: String, hasResumeData: Bool) -> String {
         ["running", "pausing", "paused"].contains(state) ? (hasResumeData ? "paused" : "failed") : state
     }
+    static func restartURL(_ record: DownloadRecord) -> URL? {
+        guard !record.source.isEmpty, let url = URL(string: record.source),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil,
+              url.user == nil, url.password == nil else { return nil }
+        return url
+    }
 }
 
 /// A single WKDownload path for navigation and media downloads. It preserves the
@@ -146,6 +152,24 @@ enum DownloadPolicy {
         view.resumeDownload(fromResumeData: data) { [weak self] download in
             guard let self, self.record(id)?.state == "running" else { download.cancel(nil); return }
             self.attach(download, id: id)
+        }
+    }
+    func restart(_ id: UUID) {
+        guard let record = record(id), let owner = owners[id], let url = DownloadPolicy.restartURL(record), let model else { return }
+        guard model.state.activeProfileID == owner else { model.message = "请先切回这个下载所属的身份。"; return }
+        let view: WKWebView
+        let tabID: UUID
+        if let tab = model.session?.activeTab, tab.session?.profileID == owner, !tab.isPrivate {
+            view = tab.webView; tabID = tab.id
+        } else {
+            let configuration = WKWebViewConfiguration(); configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: owner)
+            view = WKWebView(frame: .zero, configuration: configuration); tabID = UUID()
+        }
+        let name = record.name
+        view.startDownload(using: URLRequest(url: url)) { [weak self, weak view] download in
+            guard let self, let view else { download.cancel(nil); return }
+            self.delete(id)
+            self.adopt(download, view: view, profile: owner, tabID: tabID, isPrivate: false, suggested: name)
         }
     }
     func cancel(_ id: UUID) {

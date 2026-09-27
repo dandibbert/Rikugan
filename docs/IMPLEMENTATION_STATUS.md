@@ -27,6 +27,12 @@ Element Picker 修正 iPhone 触摸选择：不再依赖 mousemove，pointer/tou
 
 图片保存改用当前 WKWebsiteDataStore 的 Cookie 进行用户主动资源获取，逐跳重建目标 Cookie header，支持登录态图片且避免把旧站凭证带到重定向域；单图 25 MB 上限。相册保存改走 Photos add-only 权限和 PHPhotoLibrary 完成回调，权限拒绝或系统保存失败不再误报“已保存”。
 
+站点相机/麦克风权限修正组合请求：同时请求相机+麦克风时，任一明确禁止都会拒绝，只有两项都已允许才无提示放行，其余情况再次询问；保存结果拆回 camera/microphone 两个 UI 可管理的权限，不再产生不可编辑的合并权限键。
+
+站点 Desktop/JavaScript/Userscripts 改动后会重新载入当前页使设置立即生效；站点记录统一小写 host，避免大小写重复。Popup 新增“跟随”，未配置站点默认采用询问而非无提示允许新窗口。
+
+普通下载失败且没有服务器续传数据时，只要记录保留了无凭证的 HTTP(S) source，就提供“重新下载”，继续使用该身份的 WKWebsiteDataStore Cookie；旧记录直到 WebKit 成功创建替代下载后才删除。无痕下载从不持久化 source，因此不会跨无痕会话出现重新下载入口。
+
 ## 0.3.0 已交付
 
 | 规格/缺口 | 实现 | 验证入口 |
