@@ -111,10 +111,12 @@ import WebKit
     }
     func runCommand(_ command: ScriptCommand) {
         guard let tab = activeTab, tab.id == command.tabID else { return }
-        tab.webView.callAsyncJavaScript("globalThis.__rikuganCommands?.[id]?.()", arguments: ["id": command.id], in: nil,
-            contentWorld: .world(name: "rikugan.script." + command.scriptID.uuidString)) { [weak self] result in
-                if case .failure(let error) = result { self?.model?.message = error.localizedDescription }
-            }
+        Task { [weak self] in
+            do {
+                _ = try await tab.webView.callAsyncJavaScript("globalThis.__rikuganCommands?.[id]?.()", arguments: ["id": command.id], in: nil,
+                    contentWorld: .world(name: "rikugan.script." + command.scriptID.uuidString))
+            } catch { self?.model?.message = error.localizedDescription }
+        }
     }
     func clearWebsiteData() async {
         for tab in tabs { tab.webView.stopLoading() }
@@ -162,7 +164,7 @@ import WebKit
         webView.scrollView.keyboardDismissMode = .onDrag
         observations = [
             webView.observe(\.title, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .title) } },
-            webView.observe(\.url, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .url) } },
+            webView.observe(\.url, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .URL) } },
             webView.observe(\.estimatedProgress, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .loading) } },
             webView.observe(\.isLoading, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .loading) } },
             webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: []) } },
@@ -202,9 +204,10 @@ import WebKit
 
 extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        isHome = false; restored = true
         pageError = nil; session?.commands.removeAll { $0.tabID == id }
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { syncState(properties: [.loading, .url, .title]); session?.recordVisit(self) }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { syncState(properties: [.loading, .URL, .title]); session?.recordVisit(self) }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         if (error as NSError).code != NSURLErrorCancelled { pageError = error.localizedDescription }
     }
