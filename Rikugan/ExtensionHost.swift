@@ -169,8 +169,10 @@ extension BrowserSession {
             if let tab = activeTab { context.didActivateTab(tab, previousActiveTab: nil) }
         }
     }
-    /// Starts the MV3 service worker before a content script can call `runtime.sendMessage`.
-    /// On Xcode 16.4 that first message is dropped while the listener set is still empty.
+    /// Waits until background content has loaded, without parking the install alert forever.
+    /// Xcode 16.4 does not call `loadBackgroundContent`'s completion when a service worker
+    /// fails to register. A non-persistent `scripts` background finishes through the document
+    /// load path, which does call that completion after `background.js` has run.
     @available(iOS 18.4, *)
     @discardableResult
     func warmExtensionBackground(id: UUID) async -> Bool {
@@ -178,18 +180,31 @@ extension BrowserSession {
         guard ExtensionRuntime.mustWarmBackground(hasBackgroundContent: context.webExtension.hasBackgroundContent) else { return true }
         let gate = BackgroundWarmGate()
         return await withCheckedContinuation { continuation in
-            context.loadBackgroundContent { [weak self] error in
-                Task { @MainActor in
-                    guard gate.claim() else { return }
-                    if let error {
-                        self?.extensionErrors[id] = error.localizedDescription
-                        self?.extensionPhaseError = error.localizedDescription
-                        self?.model?.noteRuntime("extension background failed: \(error.localizedDescription)")
-                        continuation.resume(returning: false)
-                    } else {
-                        continuation.resume(returning: true)
+            let finish: @MainActor (Bool, String?) -> Void = { [weak self] ok, message in
+                guard gate.claim() else { return }
+                if let message {
+                    self?.extensionErrors[id] = message
+                    self?.extensionPhaseError = message
+                    self?.model?.noteRuntime("extension background failed: \(message)")
+                }
+                continuation.resume(returning: ok)
+            }
+            context.loadBackgroundContent { error in
+                let message = error?.localizedDescription
+                Task { @MainActor in finish(error == nil, message) }
+            }
+            Task { @MainActor in
+                let deadline = Date().addingTimeInterval(12)
+                while Date() < deadline {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    if gate.claimed { return }
+                    let notes = context.errors.map { $0.localizedDescription }
+                    if let message = notes.first(where: { $0.localizedCaseInsensitiveContains("background") }) {
+                        finish(false, message)
+                        return
                     }
                 }
+                finish(false, "扩展后台没有在时限内载入。")
             }
         }
     }
@@ -472,6 +487,11 @@ extension BrowserTab: WKWebExtensionTab {
 private final class BackgroundWarmGate: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false
+    var claimed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return done
+    }
     func claim() -> Bool {
         lock.lock()
         defer { lock.unlock() }

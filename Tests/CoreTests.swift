@@ -98,6 +98,13 @@ final class CoreTests: XCTestCase {
     func testBundledResourcesAndArchive() throws {
         let zip = try XCTUnwrap(Bundle.main.url(forResource: "DemoExtension", withExtension: "zip"))
         XCTAssertNoThrow(try ArchiveValidator.validate(Data(contentsOf: zip)))
+        let manifestData = try XCTUnwrap(ZipArchive.extract(data: Data(contentsOf: zip), path: "manifest.json"))
+        let manifest = try XCTUnwrap(try JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let background = try XCTUnwrap(manifest["background"] as? [String: Any])
+        XCTAssertEqual(background["scripts"] as? [String], ["background.js"])
+        XCTAssertEqual(background["persistent"] as? Bool, false)
+        XCTAssertEqual(background["preferred_environment"] as? [String], ["document"])
+        XCTAssertEqual(background["service_worker"] as? String, "background.js")
         XCTAssertNotNil(Bundle.main.url(forResource: "UserscriptRuntime", withExtension: "js"))
         let script = try XCTUnwrap(Bundle.main.url(forResource: "Demo", withExtension: "user.js"))
         XCTAssertEqual(try UserScript.parse(String(contentsOf: script)).name, "Rikugan Demo Script")

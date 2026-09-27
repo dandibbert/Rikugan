@@ -334,8 +334,11 @@ enum ExtensionBridge {
         }
         if !scripts.isEmpty { json["content_scripts"] = scripts }
         var prepend: [String] = []
-        if let background = json["background"] as? [String: Any], let worker = safeRelative(background["service_worker"] as? String) {
-            prepend.append(worker)
+        if let background = json["background"] as? [String: Any] {
+            if let worker = safeRelative(background["service_worker"] as? String) { prepend.append(worker) }
+            for file in stringList(background["scripts"]) {
+                if let relative = safeRelative(file), !prepend.contains(relative) { prepend.append(relative) }
+            }
         }
         for script in scripts {
             for file in stringList(script["js"]) where file != fileName {
