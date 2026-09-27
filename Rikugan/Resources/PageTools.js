@@ -133,12 +133,6 @@
     if (body) lines.push('html,body,button,input,textarea,select{font-family:' + stack(body) + '}');
     if (heading) lines.push('h1,h2,h3,h4,h5,h6{font-family:' + stack(heading) + '}');
     if (mono) lines.push('pre,code,kbd,samp{font-family:' + JSON.stringify(String(mono)) + ', ui-monospace, SFMono-Regular, Menlo, monospace}');
-    lines.push('.material-icons,.material-icons-outlined,.material-icons-round,.material-icons-sharp,.material-icons-two-tone{font-family:"Material Icons"!important}');
-    lines.push('.material-symbols-outlined,.material-symbols-rounded,.material-symbols-sharp{font-family:"Material Symbols Outlined"!important}');
-    lines.push('.fa,.fas,.far,.fal,.fad{font-family:"Font Awesome 6 Free","Font Awesome 5 Free"!important}');
-    lines.push('.fab{font-family:"Font Awesome 6 Brands","Font Awesome 5 Brands"!important}');
-    lines.push('.glyphicon{font-family:"Glyphicons Halflings"!important}');
-    lines.push('.iconfont,[class*="iconfont"]{font-family:"iconfont"!important}');
     return lines.join('');
   }
   function setFont(body, faceCSS, heading, mono) {

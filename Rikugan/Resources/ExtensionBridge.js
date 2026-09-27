@@ -394,7 +394,11 @@
     var queue = [];
     var ports = [];
     var listeners = [];
+    var storage = Object.create(null);
+    var originalSend = null;
     var seq = 1;
+    function closed(message) { return state === 'failed' || state === 'shutdown'; }
+    function closedError() { return new Error(state === 'shutdown' ? 'background shutdown' : 'background failed'); }
     function emit(port, name) {
       (port[name] || []).forEach(function (fn) { try { fn(port); } catch (error) {} });
     }
@@ -404,35 +408,67 @@
       listeners.forEach(function (fn) { try { fn(port); } catch (error) {} });
     }
     function deliver(item) {
-      var value = { queued: false, message: item.payload };
-      item.resolve(value);
-      return value;
+      if (typeof originalSend !== 'function') {
+        item.reject(new Error('background failed'));
+        return;
+      }
+      try {
+        var result = originalSend(item.payload);
+        if (result && typeof result.then === 'function') result.then(item.resolve, item.reject);
+        else item.resolve(result);
+      } catch (error) {
+        item.reject(error);
+      }
     }
     return {
       get state() { return state; },
       onConnect: function (fn) { listeners.push(fn); },
-      start: function () { state = (state === 'ready' || state === 'idle' || state === 'suspended') ? 'waking' : 'starting'; },
+      setTransport: function (transport) {
+        originalSend = transport && transport.sendMessage;
+      },
+      coldStart: function () { state = 'starting'; },
+      start: function () {
+        if (closed()) return;
+        state = (state === 'ready' || state === 'idle' || state === 'suspended') ? 'waking' : 'starting';
+      },
       markReady: function () {
+        if (closed()) return;
         state = 'ready';
         var pending = queue.splice(0);
         pending.forEach(deliver);
         ports.forEach(openPort);
       },
       idle: function () { if (state === 'ready') state = 'idle'; },
-      suspend: function () { state = 'suspended'; },
-      wake: function () { state = 'waking'; },
+      suspend: function () { if (!closed()) state = 'suspended'; },
+      wake: function () { if (!closed()) state = 'waking'; },
+      shutdown: function () {
+        state = 'shutdown';
+        var error = new Error('background shutdown');
+        queue.splice(0).forEach(function (item) { item.reject(error); });
+        ports.splice(0).forEach(function (port) { port.disconnected = true; port.pending = false; emit(port, 'onDisconnect'); });
+      },
       fail: function (message) {
         state = 'failed';
         var error = new Error(message || 'background failed');
         queue.splice(0).forEach(function (item) { item.reject(error); });
-        ports.splice(0).forEach(function (port) { port.disconnected = true; emit(port, 'onDisconnect'); });
+        ports.splice(0).forEach(function (port) { port.disconnected = true; port.pending = false; emit(port, 'onDisconnect'); });
       },
       enqueueMessage: function (payload) {
-        if (state === 'failed') return Promise.reject(new Error('background failed'));
-        if (state === 'ready' || state === 'idle') return Promise.resolve({ queued: false, message: payload });
+        if (closed()) return Promise.reject(closedError());
+        if (state === 'ready' || state === 'idle') return new Promise(function (resolve, reject) { deliver({ payload: payload, resolve: resolve, reject: reject }); });
         return new Promise(function (resolve, reject) { queue.push({ payload: payload, resolve: resolve, reject: reject }); });
       },
+      storageSet: function (key, value) {
+        if (closed()) return Promise.reject(closedError());
+        storage[String(key)] = value;
+        return Promise.resolve(true);
+      },
+      storageGet: function (key) {
+        if (closed()) return Promise.reject(closedError());
+        return Promise.resolve(storage[String(key)]);
+      },
       connect: function (info) {
+        if (closed()) throw closedError();
         var port = { id: seq++, name: info && info.name || '', tabId: info && info.tabId, pending: state !== 'ready' && state !== 'idle', disconnected: false, onDisconnect: [], onMessage: [] };
         ports.push(port);
         if (!port.pending) listeners.forEach(function (fn) { try { fn(port); } catch (error) {} });
@@ -462,13 +498,13 @@
     if (!runtime) return gate;
     var originalSend = runtime.sendMessage;
     var originalConnect = runtime.connect;
-    if (typeof window === 'undefined') gate.markReady();
-    else gate.start();
+    if (typeof originalSend === 'function') gate.setTransport({ sendMessage: originalSend });
     runtime.sendMessage = function (message, options, callback) {
       var responseCallback = typeof options === 'function' ? options : callback;
-      var task = (gate.state === 'ready' || gate.state === 'idle') && typeof originalSend === 'function'
-        ? Promise.resolve(originalSend.apply(runtime, arguments))
-        : gate.enqueueMessage(message);
+      var task;
+      if (gate.state === 'failed' || gate.state === 'shutdown') task = gate.enqueueMessage(message);
+      else if ((gate.state === 'ready' || gate.state === 'idle') && typeof originalSend === 'function') task = Promise.resolve(originalSend.apply(runtime, arguments));
+      else task = gate.enqueueMessage(message);
       if (typeof responseCallback === 'function') {
         task.then(function (value) { responseCallback(value); }, function (error) {
           runtime.lastError = { message: error && error.message || String(error) };
@@ -479,17 +515,23 @@
       return task;
     };
     runtime.connect = function (info) {
+      if (gate.state === 'failed' || gate.state === 'shutdown') throw new Error(gate.state === 'shutdown' ? 'background shutdown' : 'background failed');
       if ((gate.state === 'ready' || gate.state === 'idle') && typeof originalConnect === 'function') return originalConnect.apply(runtime, arguments);
       return gate.connect(info || {});
     };
-    if (typeof window === 'undefined' && typeof originalSend === 'function') {
-      try { originalSend({ source: 'rikugan-bg-ready' }); } catch (error) {}
+    if (typeof window === 'undefined') {
+      gate.markReady();
+      if (typeof originalSend === 'function') {
+        try { originalSend({ source: 'rikugan-bg-ready' }); } catch (error) {}
+      }
     } else if (typeof originalSend === 'function') {
+      gate.start();
       try {
         var probe = originalSend({ source: 'rikugan-bg-probe' });
-        if (probe && typeof probe.then === 'function') probe.then(function () { gate.markReady(); }, function () {});
-      } catch (error) {}
-    }
+        if (probe && typeof probe.then === 'function') probe.then(function () { gate.markReady(); }, function () { gate.fail('background failed'); });
+        else gate.markReady();
+      } catch (error) { gate.fail('background failed'); }
+    } else gate.start();
     return gate;
   }
 

@@ -3,13 +3,20 @@
 <head><meta charset="utf-8"><title>Page world</title></head>
 <body>
 <p id="status">waiting</p>
+<iframe id="child" src="page-world.html?frame=1"></iframe>
 <script>
-window.pageValue = 1;
-window.pageObject = { n: 1 };
-window.pageFunction = function (value) { return value + 1; };
-window.addEventListener('ping', function (event) {
-  document.getElementById('status').textContent = 'event ' + event.detail;
-});
+(function () {
+  var params = new URLSearchParams(location.search || '');
+  var popup = params.get('popup');
+  var tab = params.get('tab');
+  window.pageValue = popup ? 'popup' : tab === 'newtab' ? 'newtab' : 1;
+  window.pageObject = { n: 1 };
+  window.pageFunction = function (value) { return value + 1; };
+  window.addEventListener('ping', function (event) {
+    var node = document.getElementById('status');
+    if (node) node.textContent = 'event ' + event.detail;
+  });
+})();
 </script>
 </body>
 </html>

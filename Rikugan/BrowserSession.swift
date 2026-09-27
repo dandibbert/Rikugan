@@ -142,14 +142,21 @@ import WebKit
         let plan = TabResidence.assign(slots: tabs.map {
             TabResidence.Slot(id: $0.id, lastActiveAt: $0.lastActiveAt, terminated: $0.phase == .terminated)
         }, activeID: selectedID)
+        let live = Set(tabs.compactMap { $0.webViewIfLive() == nil ? nil : $0.id })
+        let actions = TabWebViewBudget.actions(liveIDs: live, plan: plan)
         for tab in tabs {
             let next = plan[tab.id] ?? .suspended
-            if next == .suspended {
-                tab.suspend()
-            } else if next == .terminated {
-                tab.phase = .terminated
-            } else {
+            switch actions[tab.id] ?? .release {
+            case .keep:
+                if next == .terminated || tab.phase == .terminated {
+                    tab.phase = .terminated
+                } else {
+                    tab.phase = next
+                }
+            case .mount:
                 tab.wake(as: next)
+            case .release:
+                tab.suspend()
             }
         }
     }
@@ -481,6 +488,7 @@ extension BrowserSession {
     var phase: TabPhase = .suspended
     var scrollX = 0.0
     var scrollY = 0.0
+    var interactionState: Data?
     var webView: WKWebView {
         if let heldWebView { return heldWebView }
         mountWebView()
@@ -517,7 +525,7 @@ extension BrowserSession {
     @Published var liveTexts: [[String: String]] = []
     var webKitDownloadIDs: [ObjectIdentifier: UUID] = [:]
     var lastActiveAt = Date()
-    var snapshot: SavedTab { SavedTab(id: id, url: isHome || isPrivate ? "" : address, title: pageTitle, desktop: desktop, groupID: groupID, autoRefreshSeconds: autoRefreshSeconds, scrollX: scrollX, scrollY: scrollY) }
+    var snapshot: SavedTab { SavedTab(id: id, url: isHome || isPrivate ? "" : address, title: pageTitle, desktop: desktop, groupID: groupID, autoRefreshSeconds: autoRefreshSeconds, scrollX: scrollX, scrollY: scrollY, interactionState: isHome || isPrivate ? nil : interactionState) }
     var userscriptsAllowed: Bool {
         let host = webViewIfLive()?.url?.host ?? URL(string: address)?.host
         return session?.profile.site(for: host)?.userScriptsEnabled ?? true
@@ -526,7 +534,7 @@ extension BrowserSession {
     init(saved: SavedTab, session: BrowserSession, configuration supplied: WKWebViewConfiguration? = nil, mount: Bool = true) {
         id = saved.id; self.session = session; pageTitle = saved.title; address = saved.url; isHome = saved.url.isEmpty; desktop = saved.desktop
         isPrivate = saved.isPrivate; groupID = saved.groupID; autoRefreshSeconds = saved.autoRefreshSeconds
-        scrollX = saved.scrollX; scrollY = saved.scrollY
+        scrollX = saved.scrollX; scrollY = saved.scrollY; interactionState = saved.interactionState
         pendingConfiguration = supplied
         if let supplied {
             if #available(iOS 18.4, *) {
@@ -573,18 +581,28 @@ extension BrowserSession {
         guard let view = heldWebView else { if phase != .terminated { phase = .suspended }; return }
         scrollX = view.scrollView.contentOffset.x
         scrollY = view.scrollView.contentOffset.y
+        if #available(iOS 15, *) {
+            interactionState = TabInteraction.encode(view.interactionState)
+        }
         releaseView()
         restored = false
         phase = .suspended
     }
     func wake(as next: TabPhase) {
+        let reload = phase == .terminated
         if heldWebView == nil {
             phase = .restoring
             mountWebView()
             session?.installPageTools(on: self)
-            phase = next
+            phase = reload ? .terminated : next
             restoreIfNeeded()
-        } else if phase != .terminated {
+            if phase == .restoring || phase == .terminated { phase = next }
+        } else if reload {
+            phase = .terminated
+            restored = false
+            restoreIfNeeded()
+            phase = next
+        } else {
             phase = next
         }
     }
@@ -620,8 +638,27 @@ extension BrowserSession {
     }
     func restoreIfNeeded() {
         guard !restored else { return }
+        let url = address.isEmpty ? nil : URL(string: address)
+        let action = TabRestore.plan(url: url, interaction: interactionState, terminated: phase == .terminated)
         restored = true
-        if !address.isEmpty, let url = URL(string: address) { navigate(url) }
+        switch action {
+        case .restoreInteraction:
+            if applyInteraction() { return }
+            if let url { navigate(url) }
+        case .reload, .load:
+            if let url { navigate(url) }
+        case .idle:
+            break
+        }
+    }
+    private func applyInteraction() -> Bool {
+        guard let blob = interactionState, !blob.isEmpty else { return false }
+        if #available(iOS 15, *) {
+            guard let value = TabInteraction.decode(blob) else { return false }
+            webView.interactionState = value
+            return true
+        }
+        return false
     }
     func navigate(_ url: URL) {
         restored = true; isHome = false; pageError = nil; address = url.absoluteString
@@ -677,7 +714,8 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         if (error as NSError).code != NSURLErrorCancelled { pageError = error.localizedDescription }
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        phase = .terminated
+        phase = TabRestore.afterProcessTermination()
+        restored = false
         pageError = "页面进程已被系统回收。JavaScript 堆、WebSocket 和未保存的页面状态无法恢复，重新载入会重新请求当前 URL。"
         session?.model?.noteRuntime("WebContent terminated \(address)")
     }

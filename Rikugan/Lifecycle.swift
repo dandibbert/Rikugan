@@ -18,17 +18,26 @@ enum TabResidence {
     }
 
     /// Active tab stays resident. The newest background tabs fill the remaining budget.
-    /// Older tabs become suspended. A suspended tab reloads its URL later; its JS heap does not survive.
+    /// Older tabs become suspended. Terminated tabs stay terminated and do not take a live slot.
     static func assign(slots: [Slot], activeID: UUID?, budget: Int = liveBudget) -> [UUID: TabPhase] {
         let limit = max(1, budget)
         var result: [UUID: TabPhase] = [:]
         let active = slots.first { $0.id == activeID } ?? slots.max { $0.lastActiveAt < $1.lastActiveAt }
+        var live = 0
         if let active {
-            result[active.id] = active.terminated ? .terminated : .active
+            if active.terminated {
+                result[active.id] = .terminated
+            } else {
+                result[active.id] = .active
+                live = 1
+            }
         }
         let rest = slots.filter { $0.id != active?.id }.sorted { $0.lastActiveAt > $1.lastActiveAt }
-        var live = result.isEmpty ? 0 : 1
         for slot in rest {
+            if slot.terminated {
+                result[slot.id] = .terminated
+                continue
+            }
             if live < limit {
                 result[slot.id] = .liveBackground
                 live += 1
@@ -37,6 +46,84 @@ enum TabResidence {
             }
         }
         return result
+    }
+}
+
+enum TabWebViewBudget {
+    enum Action: Equatable { case keep, mount, release }
+
+    /// A tab that already has a web view keeps that same slot. Suspended tabs release it.
+    /// Terminated tabs are not given a second view here; the next open reloads the one they have.
+    static func actions(liveIDs: Set<UUID>, plan: [UUID: TabPhase]) -> [UUID: Action] {
+        var result: [UUID: Action] = [:]
+        for (id, phase) in plan {
+            switch phase {
+            case .suspended:
+                result[id] = .release
+            case .terminated:
+                result[id] = .keep
+            case .active, .liveBackground, .restoring:
+                result[id] = liveIDs.contains(id) ? .keep : .mount
+            }
+        }
+        return result
+    }
+}
+
+enum TabRestore {
+    enum Action: Equatable { case restoreInteraction, reload, load, idle }
+
+    static func afterProcessTermination() -> TabPhase { .terminated }
+
+    /// interactionState comes back when the blob is present. A terminated process reloads.
+    /// Nil blob falls back to load(url).
+    static func plan(url: URL?, interaction: Data?, terminated: Bool) -> Action {
+        if terminated { return url == nil ? .idle : .reload }
+        if let interaction, !interaction.isEmpty { return .restoreInteraction }
+        if url != nil { return .load }
+        return .idle
+    }
+
+    static func reopen(_ closed: ClosedTab) -> SavedTab? {
+        guard let url = URL(string: closed.url), ["http", "https"].contains(url.scheme ?? "") else { return nil }
+        return SavedTab(url: closed.url, title: closed.title, groupID: closed.groupID)
+    }
+}
+
+enum TabInteraction {
+    static func encode(_ value: Any?) -> Data? {
+        guard let value else { return nil }
+        let kind: String
+        let blob: Data
+        if let data = value as? Data, !data.isEmpty {
+            kind = "data"
+            blob = data
+        } else if PropertyListSerialization.propertyList(value, isValidFor: .binary),
+                  let data = try? PropertyListSerialization.data(fromPropertyList: value, format: .binary, options: 0) {
+            kind = "plist"
+            blob = data
+        } else if let data = try? NSKeyedArchiver.archivedData(withRootObject: value, requiringSecureCoding: false), !data.isEmpty {
+            kind = "keyed"
+            blob = data
+        } else {
+            return nil
+        }
+        return try? PropertyListSerialization.data(fromPropertyList: ["kind": kind, "blob": blob], format: .binary, options: 0)
+    }
+
+    static func decode(_ data: Data?) -> Any? {
+        guard let data, !data.isEmpty,
+              let envelope = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+              let kind = envelope["kind"] as? String,
+              let blob = envelope["blob"] as? Data else { return nil }
+        switch kind {
+        case "data":
+            return blob
+        case "keyed":
+            return try? NSKeyedUnarchiver.unarchivedObject(ofClasses: [NSDictionary.self, NSArray.self, NSString.self, NSNumber.self, NSData.self, NSDate.self], from: blob)
+        default:
+            return try? PropertyListSerialization.propertyList(from: blob, options: [], format: nil)
+        }
     }
 }
 

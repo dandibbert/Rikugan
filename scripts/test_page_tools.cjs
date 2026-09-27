@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('Rikugan/Resources/PageTools.js', 'utf8');
-const { classify, options, redirectScriptlets } = require('./adblock_subset.cjs');
+const { classify, options, redirectScriptlets, resourceVerdict } = require('./adblock_subset.cjs');
 
 function element(tag, props = {}) {
   return {
@@ -46,9 +46,54 @@ assert.ok(fontCSS.includes('pre,code,kbd,samp'));
 assert.ok(fontCSS.includes('Source Han Sans'));
 assert.ok(fontCSS.includes('Source Han Serif'));
 assert.ok(fontCSS.includes('Source Han Mono'));
-assert.ok(fontCSS.includes('"Material Icons"!important'));
-assert.ok(fontCSS.includes('Font Awesome 6 Free'));
 assert.ok(fontCSS.includes('Apple Color Emoji'));
+assert.equal(fontCSS.includes('.material-icons'), false);
+assert.equal(fontCSS.includes('.fa'), false);
+assert.equal(/iconfont|glyphicon|Font Awesome/.test(fontCSS), false);
+const fontHTML = fs.readFileSync('Tests/Fixtures/font-override.html', 'utf8');
+for (const needle of ['Body text', '<h1', '<code', '😀', 'material-icons', 'class="fa"', 'iconfont', '@font-face', 'Fixture Face']) {
+  assert.ok(fontHTML.includes(needle), needle);
+}
+const face = fontHTML.match(/@font-face\s*\{[^}]+\}/);
+assert.ok(face);
+const fixtureCSS = sandbox.RikuganPageTools.fontOverrideCSS('Source Han Sans', 'Source Han Serif', 'Source Han Mono', face[0]);
+assert.ok(fixtureCSS.includes('Fixture Face'));
+assert.equal(fixtureCSS.includes('.material-icons'), false);
+assert.equal(/\.fa[,{]|\.fab|\.iconfont|\.glyphicon/.test(fixtureCSS), false);
+function fontRules(css) {
+  const rules = [];
+  const re = /([^{}@]+)\{([^{}]*)\}/g;
+  let match;
+  while ((match = re.exec(css))) {
+    const family = (match[2].match(/font-family\s*:\s*([^;}]+)/) || [])[1];
+    if (!family) continue;
+    rules.push({ selectors: match[1].split(',').map(part => part.trim()), family: family.trim() });
+  }
+  return rules;
+}
+function ruleHits(selector, el) {
+  if (selector.startsWith('.')) return el.classes.includes(selector.slice(1).split(/[^A-Za-z0-9_-]/)[0]);
+  const tag = selector.split(/[^A-Za-z0-9]/)[0].toUpperCase();
+  return Boolean(tag) && el.tag === tag;
+}
+function applyFont(css, el) {
+  for (const rule of fontRules(css)) {
+    if (rule.selectors.some(selector => ruleHits(selector, el))) el.fontFamily = rule.family;
+  }
+}
+const icon = { tag: 'I', classes: ['material-icons'], fontFamily: 'Material Icons' };
+const awesome = { tag: 'I', classes: ['fa'], fontFamily: 'Font Awesome 6 Free' };
+const iconFont = { tag: 'SPAN', classes: ['iconfont'], fontFamily: 'iconfont' };
+const bodyEl = { tag: 'BODY', classes: [], fontFamily: 'serif' };
+const headingEl = { tag: 'H1', classes: [], fontFamily: 'serif' };
+const codeEl = { tag: 'CODE', classes: [], fontFamily: 'serif' };
+for (const el of [icon, awesome, iconFont, bodyEl, headingEl, codeEl]) applyFont(fixtureCSS, el);
+assert.equal(icon.fontFamily, 'Material Icons');
+assert.equal(awesome.fontFamily, 'Font Awesome 6 Free');
+assert.equal(iconFont.fontFamily, 'iconfont');
+assert.match(bodyEl.fontFamily, /Source Han Sans/);
+assert.match(headingEl.fontFamily, /Source Han Serif/);
+assert.match(codeEl.fontFamily, /Source Han Mono/);
 assert.equal(fontCSS.split('html,body')[1].split('}')[0].includes('!important'), false);
 assert.equal(sandbox.RikuganPageTools.extractArticle(), null);
 const found = sandbox.RikuganPageTools.collectMedia();
@@ -267,5 +312,32 @@ const xhrMiss = new sandbox.XMLHttpRequest();
 xhrMiss.open('GET', 'https://api.example/other');
 xhrMiss.send();
 assert.equal(JSON.parse(xhrMiss.responseText).ad, 1);
+
+const block = '||cdn.example^';
+const kinds = [
+  ['https://cdn.example/page', 'navigation'],
+  ['https://cdn.example/api', 'xhr'],
+  ['https://cdn.example/a.png', 'image'],
+  ['https://cdn.example/a.js', 'script'],
+  ['https://cdn.example/a.css', 'css'],
+  ['https://cdn.example/a.mp4', 'media'],
+  ['https://cdn.example/video/index.m3u8', 'hls'],
+  ['https://cdn.example/files/app.zip', 'download']
+];
+for (const [url, kind] of kinds) {
+  assert.equal(classify(block), 'block');
+  assert.equal(resourceVerdict(url, [block], kind), 'block', kind);
+}
+assert.equal(resourceVerdict('https://cdn.example/a.png', ['||cdn.example^$script'], 'image'), 'none');
+assert.equal(resourceVerdict('https://cdn.example/a.js', ['||cdn.example^$script'], 'script'), 'block');
+assert.equal(resourceVerdict('https://cdn.example/a.css', ['||cdn.example^$stylesheet'], 'css'), 'block');
+assert.equal(resourceVerdict('https://cdn.example/api', ['||cdn.example^$xmlhttprequest'], 'xhr'), 'block');
+assert.equal(resourceVerdict('https://cdn.example/page', ['||cdn.example^$document'], 'navigation'), 'block');
+assert.equal(resourceVerdict('https://cdn.example/video/index.m3u8', ['||cdn.example^$media'], 'hls'), 'block');
+assert.equal(resourceVerdict('https://cdn.example/video/index.m3u8', ['||cdn.example^$script'], 'hls'), 'none');
+assert.equal(resourceVerdict('https://cdn.example/files/app.zip', ['||cdn.example^$image'], 'download'), 'none');
+assert.equal(resourceVerdict('https://cdn.example/a.mp4', ['||cdn.example^$media'], 'media'), 'block');
+assert.equal(resourceVerdict('https://news.example/', [block], 'navigation'), 'none');
+assert.equal(resourceVerdict('https://cdn.example/a.js', ['@@||cdn.example^', '||cdn.example^'], 'script'), 'allow');
 
 console.log('PASS: page tools selector, dark CSS, playlists, find count, adblock subset');

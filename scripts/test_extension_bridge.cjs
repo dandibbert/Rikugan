@@ -251,41 +251,119 @@ function load(extra) {
 
   const gateHost = load({ chrome: { runtime: {} } });
   assert.equal(typeof gateHost.__rikuganCreateBackgroundGate, 'function');
-  for (let round = 0; round < 12; round += 1) {
-    const gate = gateHost.__rikuganCreateBackgroundGate();
-    gate.start();
+
+  let releaseProbe;
+  const probe = new Promise(resolve => { releaseProbe = resolve; });
+  const heard = [];
+  function backgroundListener(message) {
+    heard.push(message);
+    return { from: 'listener', n: message.n };
+  }
+  function originalSend(message) {
+    if (message && message.source === 'rikugan-bg-probe') return probe;
+    return Promise.resolve(backgroundListener(message));
+  }
+  const coldWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
+  coldWindow.top = coldWindow;
+  const coldHost = load({
+    window: coldWindow,
+    location: { protocol: 'http:' },
+    chrome: { runtime: { sendMessage: originalSend, onMessage: { addListener() {} } } }
+  });
+  assert.equal(coldHost.__rikuganBackgroundGate.state, 'starting');
+  const first = coldHost.chrome.runtime.sendMessage({ n: 1 });
+  const second = coldHost.chrome.runtime.sendMessage({ n: 2 });
+  const earlyPort = coldHost.chrome.runtime.connect({ name: 'early', tabId: 3 });
+  assert.equal(heard.length, 0);
+  assert.equal(earlyPort.pending, true);
+  assert.equal(coldHost.__rikuganBackgroundGate.pendingCount(), 2);
+  releaseProbe();
+  assert.equal((await first).from, 'listener');
+  assert.equal((await first).n, 1);
+  assert.equal((await second).n, 2);
+  assert.deepEqual(heard.map(message => message.n), [1, 2]);
+  assert.equal(earlyPort.pending, false);
+  assert.equal(coldHost.__rikuganBackgroundGate.state, 'ready');
+
+  const failedWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
+  failedWindow.top = failedWindow;
+  const failedHost = load({
+    window: failedWindow,
+    location: { protocol: 'http:' },
+    chrome: {
+      runtime: {
+        sendMessage(message) {
+          if (message && message.source === 'rikugan-bg-probe') return Promise.reject(new Error('worker missing'));
+          return Promise.resolve({ unexpected: true });
+        },
+        onMessage: { addListener() {} }
+      }
+    }
+  });
+  const rejected = failedHost.chrome.runtime.sendMessage({ n: 9 });
+  const rejectedPort = failedHost.chrome.runtime.connect({ name: 'queued' });
+  await assert.rejects(rejected, /background failed/);
+  assert.equal(failedHost.__rikuganBackgroundGate.state, 'failed');
+  assert.equal(rejectedPort.disconnected, true);
+  await assert.rejects(failedHost.chrome.runtime.sendMessage({ n: 10 }), /background failed/);
+  assert.throws(() => failedHost.chrome.runtime.connect({ name: 'later' }), /background failed/);
+
+  const stressHeard = [];
+  const gate = gateHost.__rikuganCreateBackgroundGate();
+  const connected = [];
+  gate.onConnect(port => connected.push(port.name));
+  gate.setTransport({
+    sendMessage(message) {
+      stressHeard.push(message);
+      return { from: 'listener', n: message.n, step: message.step };
+    }
+  });
+  for (let round = 0; round < 24; round += 1) {
+    gate.coldStart();
     assert.equal(gate.state, 'starting');
-    const cold = gate.enqueueMessage({ from: 'content', round });
-    const popup = gate.enqueueMessage({ from: 'popup', round });
-    const early = gate.connect({ name: 'early', tabId: 7 });
-    const extra = gate.connect({ name: 'extra', tabId: 8 });
+    const cold = gate.enqueueMessage({ n: round, step: 'cold' });
+    const early = gate.connect({ name: 'early-' + round, tabId: round });
     assert.equal(early.pending, true);
-    assert.equal(gate.pendingCount(), 2);
+    gate.wake();
+    assert.equal(gate.state, 'waking');
+    assert.equal(gate.pendingCount(), 1);
     gate.markReady();
     assert.equal(gate.state, 'ready');
-    assert.equal((await cold).message.from, 'content');
-    assert.equal((await popup).message.round, round);
+    assert.equal((await cold).from, 'listener');
+    assert.equal((await cold).step, 'cold');
     assert.equal(early.pending, false);
-    assert.equal(extra.pending, false);
-    const live = gate.connect({ name: 'live', tabId: 7 });
-    assert.equal(live.pending, false);
-    live.disconnect();
-    gate.closeTab(7);
-    assert.equal(early.disconnected, true);
-    const againPort = gate.connect({ name: 'reconnect', tabId: 9 });
-    againPort.disconnect();
-    assert.equal(againPort.disconnected, true);
+    const live = gate.enqueueMessage({ n: round, step: 'live' });
+    assert.equal((await live).step, 'live');
+    const livePort = gate.connect({ name: 'live-' + round, tabId: round });
+    assert.equal(livePort.pending, false);
+    livePort.disconnect();
+    assert.equal(livePort.disconnected, true);
+    await gate.storageSet('round', round);
+    assert.equal(await gate.storageGet('round'), round);
     gate.idle();
     assert.equal(gate.state, 'idle');
+    const idle = gate.enqueueMessage({ n: round, step: 'idle' });
+    assert.equal((await idle).step, 'idle');
     gate.suspend();
-    assert.equal(gate.state, 'suspended');
-    gate.start();
+    gate.wake();
     assert.equal(gate.state, 'waking');
+    const again = gate.enqueueMessage({ n: round, step: 'wake2' });
     gate.markReady();
-    gate.fail('background failed');
-    await assert.rejects(gate.enqueueMessage({ from: 'after-fail' }), /background failed/);
-    assert.equal(gate.state, 'failed');
+    assert.equal((await again).step, 'wake2');
+    gate.closeTab(round);
+    assert.equal(early.disconnected, true);
+    gate.shutdown();
+    assert.equal(gate.state, 'shutdown');
+    await assert.rejects(gate.enqueueMessage({ n: round, step: 'after' }), /background shutdown/);
+    assert.throws(() => gate.connect({ name: 'closed' }), /background shutdown/);
+    await assert.rejects(gate.storageSet('round', -1), /background shutdown/);
+    gate.start();
+    assert.equal(gate.state, 'shutdown');
+    await assert.rejects(gate.enqueueMessage({ n: round, step: 'still' }), /background shutdown/);
+    assert.equal(stressHeard.filter(message => message.n === round).map(message => message.step).join(','), 'cold,live,idle,wake2');
+    assert.ok(connected.includes('early-' + round));
   }
+  assert.equal(stressHeard.length, 24 * 4);
 
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

@@ -26,10 +26,11 @@ extension BrowserSession {
         for tab in Array(tabs) where tab.windowID == windowID { close(tab) }
     }
     func reopenClosed() {
-        guard let closed = profile.closedTabs.first, let url = URL(string: closed.url) else { return }
+        guard let closed = profile.closedTabs.first, let saved = TabRestore.reopen(closed), let url = URL(string: saved.url) else { return }
         model?.updateProfile(profileID) { if !$0.closedTabs.isEmpty { $0.closedTabs.removeFirst() } }
-        let tab = addTab(url: url, groupID: closed.groupID)
-        tab.groupID = closed.groupID
+        let tab = addTab(url: url, groupID: saved.groupID)
+        tab.groupID = saved.groupID
+        tab.pageTitle = saved.title
     }
     func addGroup(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

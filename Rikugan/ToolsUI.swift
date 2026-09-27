@@ -800,7 +800,7 @@ struct FontSettingsView: View {
                 ForEach(FontLibrary.families(), id: \.self) { Text($0).tag($0) }
             }
             Button("安装字体文件") { importing = true }
-            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf、otf、ttc 会注册到本进程，并用 data URL 注入网页。woff / woff2 Core Text 不能注册，导入会被拒绝。正文、标题和等宽分开设置，不使用全页 * 选择器。Material Icons、Font Awesome 和 iconfont 会写回原来的字体家族。站点可以选择不覆盖。").font(.footnote).foregroundStyle(.secondary)
+            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf、otf、ttc 会注册到本进程，并用 data URL 注入网页。woff / woff2 Core Text 不能注册，导入会被拒绝。正文、标题和等宽分开设置，不使用全页 * 选择器。不会给 Material Icons、Font Awesome、glyphicon 和 iconfont 设置 font-family，图标继续用页面自己的字体。站点可以选择不覆盖。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("网页字体")
             .fileImporter(isPresented: $importing, allowedContentTypes: [.font, .data], allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first { do { try model.importFont(url) } catch { model.message = error.localizedDescription } }
@@ -843,6 +843,20 @@ struct DiagnosticsView: View {
             LabeledContent("Suspended", value: "\(session.tabs.filter { $0.phase == .suspended }.count)")
             LabeledContent("Terminated", value: "\(session.tabs.filter { $0.phase == .terminated }.count)")
             LabeledContent("Userscripts", value: model.profile.scripts.filter(\.enabled).map(\.name).joined(separator: ", ").ifEmpty("none"))
+            Section("Userscript runtime") {
+                LabeledContent("Enabled", value: "\(enabledScripts.count)")
+                LabeledContent("Isolated", value: "\(isolatedScripts)")
+                LabeledContent("Page world", value: "\(pageScripts)")
+                LabeledContent("Last error", value: model.runtimeLog.last ?? "none")
+            }
+            Section("Chrome API") {
+                LabeledContent("Supported", value: "\(apiCount("Supported"))")
+                LabeledContent("Partial", value: "\(apiCount("Partial"))")
+                LabeledContent("Unsupported", value: "\(apiCount("Unsupported"))")
+                ForEach(ChromeAPIMatrix.entries, id: \.api) { entry in
+                    LabeledContent(entry.api, value: entry.level)
+                }
+            }
             LabeledContent("Extensions", value: model.profile.extensions.map(\.name).joined(separator: ", ").ifEmpty("none"))
             LabeledContent("Background", value: session.extensionPhase.rawValue)
             if !session.extensionPhaseError.isEmpty { Text(session.extensionPhaseError).font(.caption).foregroundStyle(.red) }
@@ -859,6 +873,10 @@ struct DiagnosticsView: View {
             Text("诊断文件不含历史、Cookie、密码或页面正文。PlayCover 上的结果不能写成 iPhone 通过。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("诊断")
     }
+    private var enabledScripts: [UserScript] { model.profile.scripts.filter(\.enabled) }
+    private var isolatedScripts: Int { enabledScripts.filter(\.isolated).count }
+    private var pageScripts: Int { enabledScripts.filter { !$0.isolated }.count }
+    private func apiCount(_ level: String) -> Int { ChromeAPIMatrix.entries.filter { $0.level == level }.count }
     private var appVersion: String {
         let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"

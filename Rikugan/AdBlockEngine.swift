@@ -225,22 +225,42 @@ enum AdBlockEngine {
         return components.url
     }
 
-    static func verdict(url: URL, lines: [String]) -> Verdict {
+    static func verdict(url: URL, lines: [String], kind: String = "") -> Verdict {
         guard let host = url.host?.lowercased() else { return .none }
         let absolute = url.absoluteString.lowercased()
+        let wanted = canonicalResource(kind)
         var blocked = false
         for raw in lines {
             guard let rule = parse(raw) else { continue }
             switch rule {
-            case .allow(let filter, _):
-                if matches(filter, host: host, absolute: absolute) { return .allow }
-            case .block(let filter, _):
-                if matches(filter, host: host, absolute: absolute) { blocked = true }
+            case .allow(let filter, let options):
+                if matches(filter, host: host, absolute: absolute), resourceAllows(options, kind: wanted) { return .allow }
+            case .block(let filter, let options):
+                if matches(filter, host: host, absolute: absolute), resourceAllows(options, kind: wanted) { blocked = true }
             default:
                 break
             }
         }
         return blocked ? .block : .none
+    }
+
+    static func canonicalResource(_ kind: String) -> String {
+        switch kind.lowercased() {
+        case "": return ""
+        case "navigation", "document", "main_frame", "main-frame", "sub_frame", "subframe": return "document"
+        case "fetch", "xhr", "xmlhttprequest": return "raw"
+        case "image": return "image"
+        case "script": return "script"
+        case "css", "stylesheet", "style-sheet": return "style-sheet"
+        case "media", "hls", "m3u8": return "media"
+        case "download": return "download"
+        default: return kind.lowercased()
+        }
+    }
+
+    private static func resourceAllows(_ options: Options, kind: String) -> Bool {
+        guard !kind.isEmpty, let types = options.resourceTypes, !types.isEmpty else { return true }
+        return types.contains(kind)
     }
 
     private enum Rule {

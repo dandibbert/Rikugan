@@ -39,12 +39,13 @@ struct SavedTab: Codable, Identifiable, Equatable {
     var autoRefreshSeconds = 0
     var scrollX = 0.0
     var scrollY = 0.0
+    var interactionState: Data? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, url, title, desktop, groupID, isPrivate, autoRefreshSeconds, scrollX, scrollY
+        case id, url, title, desktop, groupID, isPrivate, autoRefreshSeconds, scrollX, scrollY, interactionState
     }
 
-    init(id: UUID = UUID(), url: String = "", title: String = "新标签页", desktop: Bool = false, groupID: UUID? = nil, isPrivate: Bool = false, autoRefreshSeconds: Int = 0, scrollX: Double = 0, scrollY: Double = 0) {
+    init(id: UUID = UUID(), url: String = "", title: String = "新标签页", desktop: Bool = false, groupID: UUID? = nil, isPrivate: Bool = false, autoRefreshSeconds: Int = 0, scrollX: Double = 0, scrollY: Double = 0, interactionState: Data? = nil) {
         self.id = id
         self.url = url
         self.title = title
@@ -54,6 +55,7 @@ struct SavedTab: Codable, Identifiable, Equatable {
         self.autoRefreshSeconds = autoRefreshSeconds
         self.scrollX = scrollX
         self.scrollY = scrollY
+        self.interactionState = interactionState
     }
 
     init(from decoder: Decoder) throws {
@@ -67,6 +69,7 @@ struct SavedTab: Codable, Identifiable, Equatable {
         autoRefreshSeconds = try container.decodeIfPresent(Int.self, forKey: .autoRefreshSeconds) ?? 0
         scrollX = try container.decodeIfPresent(Double.self, forKey: .scrollX) ?? 0
         scrollY = try container.decodeIfPresent(Double.self, forKey: .scrollY) ?? 0
+        interactionState = try container.decodeIfPresent(Data.self, forKey: .interactionState)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -80,6 +83,7 @@ struct SavedTab: Codable, Identifiable, Equatable {
         try container.encode(autoRefreshSeconds, forKey: .autoRefreshSeconds)
         try container.encode(scrollX, forKey: .scrollX)
         try container.encode(scrollY, forKey: .scrollY)
+        try container.encodeIfPresent(interactionState, forKey: .interactionState)
     }
 }
 

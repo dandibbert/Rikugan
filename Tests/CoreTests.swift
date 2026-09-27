@@ -625,5 +625,85 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(kept.scripts.count, profile.scripts.count)
         XCTAssertEqual(kept.tabGroups.map(\.id), [groupA.id, groupB.id])
     }
+
+    func testSuspendInteractionLifecycleAndResourceKinds() throws {
+        let kept = UUID()
+        let switched = UUID()
+        let dropped = UUID()
+        let dead = UUID()
+        let staying = TabWebViewBudget.actions(liveIDs: [kept, switched], plan: [kept: .liveBackground, switched: .active])
+        XCTAssertEqual(staying[kept], .keep)
+        XCTAssertEqual(staying[switched], .keep)
+        let mounted = TabWebViewBudget.actions(liveIDs: [kept], plan: [kept: .active, switched: .liveBackground, dropped: .suspended])
+        XCTAssertEqual(mounted[kept], .keep)
+        XCTAssertEqual(mounted[switched], .mount)
+        XCTAssertEqual(mounted[dropped], .release)
+        let terminatedPlan = [dead: TabPhase.terminated]
+        XCTAssertEqual(TabWebViewBudget.actions(liveIDs: [], plan: terminatedPlan)[dead], .keep)
+        XCTAssertEqual(TabWebViewBudget.actions(liveIDs: [dead], plan: terminatedPlan)[dead], .keep)
+        let now = Date()
+        let mixed = TabResidence.assign(slots: [
+            TabResidence.Slot(id: kept, lastActiveAt: now),
+            TabResidence.Slot(id: dead, lastActiveAt: now.addingTimeInterval(10), terminated: true)
+        ], activeID: kept, budget: 8)
+        XCTAssertEqual(mixed[kept], .active)
+        XCTAssertEqual(mixed[dead], .terminated)
+
+        let group = TabGroup(name: "Saved")
+        let blob = try XCTUnwrap(TabInteraction.encode(["url": "https://example.com/a", "index": 2]))
+        let saved = SavedTab(url: "https://example.com/a", title: "A", groupID: group.id, scrollX: 3, scrollY: 9, interactionState: blob)
+        let round = try JSONDecoder().decode(SavedTab.self, from: JSONEncoder().encode(saved))
+        XCTAssertEqual(round.url, saved.url)
+        XCTAssertEqual(round.title, "A")
+        XCTAssertEqual(round.groupID, group.id)
+        XCTAssertEqual(round.scrollX, 3)
+        XCTAssertEqual(round.scrollY, 9)
+        XCTAssertEqual(round.interactionState, blob)
+        let back = try XCTUnwrap(TabInteraction.decode(round.interactionState) as? [String: Any])
+        XCTAssertEqual(back["url"] as? String, "https://example.com/a")
+        let index = (back["index"] as? Int) ?? (back["index"] as? NSNumber)?.intValue
+        XCTAssertEqual(index, 2)
+        XCTAssertEqual(TabRestore.plan(url: URL(string: round.url), interaction: round.interactionState, terminated: false), .restoreInteraction)
+        let fallback = SavedTab(url: "https://example.com/b", title: "B", groupID: group.id, scrollX: 1, scrollY: 4)
+        XCTAssertNil(fallback.interactionState)
+        XCTAssertEqual(TabRestore.plan(url: URL(string: fallback.url), interaction: fallback.interactionState, terminated: false), .load)
+        XCTAssertNil(TabInteraction.encode(nil))
+        XCTAssertNil(TabInteraction.decode(nil))
+
+        XCTAssertEqual(TabRestore.afterProcessTermination(), .terminated)
+        XCTAssertEqual(TabRestore.plan(url: URL(string: saved.url), interaction: blob, terminated: true), .reload)
+        let closed = ClosedTab(url: "https://example.com/z", title: "Z", groupID: group.id)
+        let reopened = try XCTUnwrap(TabRestore.reopen(closed))
+        XCTAssertEqual(reopened.url, closed.url)
+        XCTAssertEqual(reopened.title, closed.title)
+        XCTAssertEqual(reopened.groupID, group.id)
+        XCTAssertNil(TabRestore.reopen(ClosedTab(url: "file:///tmp/x", title: "no", groupID: nil)))
+
+        let lines = ["||cdn.example^"]
+        let samples: [(String, String)] = [
+            ("https://cdn.example/page", "navigation"),
+            ("https://cdn.example/api", "xhr"),
+            ("https://cdn.example/a.png", "image"),
+            ("https://cdn.example/a.js", "script"),
+            ("https://cdn.example/a.css", "css"),
+            ("https://cdn.example/a.mp4", "media"),
+            ("https://cdn.example/video/index.m3u8", "hls"),
+            ("https://cdn.example/files/app.zip", "download")
+        ]
+        for sample in samples {
+            XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: sample.0)!, lines: lines, kind: sample.1), .block, sample.1)
+        }
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/a.png")!, lines: ["||cdn.example^$script"], kind: "image"), .none)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/a.js")!, lines: ["||cdn.example^$script"], kind: "script"), .block)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/a.css")!, lines: ["||cdn.example^$stylesheet"], kind: "css"), .block)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/api")!, lines: ["||cdn.example^$xmlhttprequest"], kind: "xhr"), .block)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/page")!, lines: ["||cdn.example^$document"], kind: "navigation"), .block)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/video/index.m3u8")!, lines: ["||cdn.example^$media"], kind: "hls"), .block)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/video/index.m3u8")!, lines: ["||cdn.example^$script"], kind: "hls"), .none)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://cdn.example/files/app.zip")!, lines: ["||cdn.example^$image"], kind: "download"), .none)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://news.example/")!, lines: lines, kind: "navigation"), .none)
+        XCTAssertEqual(AdBlockEngine.canonicalResource("hls"), "media")
+        XCTAssertEqual(AdBlockEngine.canonicalResource("download"), "download")
+    }
 }
 

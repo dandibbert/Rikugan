@@ -100,4 +100,88 @@ function redirectScriptlets(raw) {
   return rows;
 }
 
-module.exports = { classify, options, redirectScriptlets };
+function filterBody(raw) {
+  let body = String(raw || '').trim();
+  if (body.startsWith('@@')) body = body.slice(2);
+  const tokens = modifierTokens(body);
+  if (!tokens) return body;
+  const tail = '$' + tokens.join(',');
+  const index = body.lastIndexOf(tail);
+  return index > 0 ? body.slice(0, index) : body;
+}
+
+function typeName(token) {
+  switch (token) {
+    case 'script': return 'script';
+    case 'image': return 'image';
+    case 'stylesheet': return 'style-sheet';
+    case 'xmlhttprequest':
+    case 'xhr':
+    case 'other':
+    case 'ping':
+    case 'websocket': return 'raw';
+    case 'media': return 'media';
+    case 'font': return 'font';
+    case 'document':
+    case 'subdocument': return 'document';
+    default: return '';
+  }
+}
+
+function canonicalKind(kind) {
+  switch (String(kind || '').toLowerCase()) {
+    case 'navigation':
+    case 'document':
+    case 'main_frame':
+    case 'main-frame':
+    case 'sub_frame':
+    case 'subframe': return 'document';
+    case 'fetch':
+    case 'xhr':
+    case 'xmlhttprequest': return 'raw';
+    case 'image': return 'image';
+    case 'script': return 'script';
+    case 'css':
+    case 'stylesheet':
+    case 'style-sheet': return 'style-sheet';
+    case 'media':
+    case 'hls':
+    case 'm3u8': return 'media';
+    case 'download': return 'download';
+    default: return String(kind || '').toLowerCase();
+  }
+}
+
+function hostMatch(filter, host, absolute) {
+  if (filter.startsWith('||')) {
+    const domain = filter.slice(2).split(/[\/^]/)[0].toLowerCase();
+    if (!domain) return false;
+    const hostOK = host === domain || host.endsWith('.' + domain);
+    if (!hostOK) return false;
+    const path = filter.slice(2 + domain.length).replace(/^\^/, '');
+    if (path.startsWith('/')) return absolute.includes(path.toLowerCase());
+    return true;
+  }
+  return absolute.includes(filter.toLowerCase());
+}
+
+function resourceVerdict(urlString, lines, kind) {
+  const url = new URL(urlString);
+  const host = url.hostname.toLowerCase();
+  const absolute = url.toString().toLowerCase();
+  const wanted = canonicalKind(kind);
+  let blocked = false;
+  for (const raw of lines) {
+    const name = classify(raw);
+    if (name !== 'block' && name !== 'allow') continue;
+    const body = String(raw || '').trim().replace(/^@@/, '');
+    const types = (modifierTokens(body) || []).map(typeName).filter(Boolean);
+    if (wanted && types.length && !types.includes(wanted)) continue;
+    if (!hostMatch(filterBody(raw), host, absolute)) continue;
+    if (name === 'allow') return 'allow';
+    blocked = true;
+  }
+  return blocked ? 'block' : 'none';
+}
+
+module.exports = { classify, options, redirectScriptlets, resourceVerdict };
