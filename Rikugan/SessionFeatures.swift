@@ -118,10 +118,12 @@ extension BrowserTab: WKScriptMessageHandler {
         let procedural = session?.proceduralJSON ?? "[]"
         let scriptlets = session?.scriptletJSON ?? "[]"
         let policies = session?.cspJSON ?? "[]"
+        let replacements = session?.replaceJSON ?? "[]"
+        let href = PageTools.jsString(webView.url?.absoluteString ?? address) ?? "\"\""
         let css = PageTools.jsString(session?.globalCosmetic ?? "") ?? "\"\""
         Task { [weak self] in
             guard let self else { return }
-            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installConsole(),\(blockClipboard)true", in: self.webView)
+            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.applyReplace(\(replacements), \(href)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installConsole(),\(blockClipboard)true", in: self.webView)
         }
     }
     func captureThumbnail() {

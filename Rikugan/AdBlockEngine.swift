@@ -4,7 +4,8 @@ import Foundation
 /// Network and cosmetic rules become WKContentRuleList chunks installed by `BrowserTab.syncContentRules`.
 /// `#%#` / `##+js` scriptlets in the built-in set run from `PageTools.applyScriptlets`.
 /// `$redirect` and `$redirect-rule` compile as `block` because content rules cannot redirect.
-/// `$removeparam` is applied to main-frame navigations. `$replace` is not compiled.
+/// `$removeparam` is applied to main-frame navigations. `$replace` rewrites text in the page
+/// after load and in fetch/XHR bodies; binary responses are left alone.
 /// This is not a bundled EasyList.
 ///
 /// WebKit does not publish a hard WKContentRuleList cap. Safari's older content-blocker
@@ -26,8 +27,16 @@ enum AdBlockEngine {
         var proceduralJSON: String
         var scriptletJSON: String
         var cspJSON: String
+        var replaceJSON: String
         var removeParams: [QueryStrip]
         var blockedSamples: [String]
+    }
+
+    struct BodyReplace: Equatable {
+        var needle: String
+        var regex: String
+        var replacement: String
+        var flags: String
     }
 
     struct QueryStrip: Equatable {
@@ -94,6 +103,7 @@ enum AdBlockEngine {
         var scriptlets: [[String: Any]] = []
         var policies: [[String: Any]] = []
         var strips: [QueryStrip] = []
+        var replacements: [[String: String]] = []
         var exceptions = Set<String>()
         for raw in input.prefix(maxLines) {
             guard let rule = parse(raw) else { continue }
@@ -110,7 +120,13 @@ enum AdBlockEngine {
                 if let policy = options.csp {
                     policies.append(["domains": hosts(of: filter), "policy": policy])
                 }
-                let network = options.redirect || (options.removeParams.isEmpty && options.csp == nil)
+                if !options.replaces.isEmpty {
+                    let needle = hosts(of: filter).first ?? ""
+                    for item in options.replaces {
+                        replacements.append(["needle": needle, "regex": item.regex, "replacement": item.replacement, "flags": item.flags])
+                    }
+                }
+                let network = options.redirect || (options.removeParams.isEmpty && options.csp == nil && options.replaces.isEmpty)
                 if network, var trigger = trigger(filter) {
                     apply(options, to: &trigger)
                     blocks.append(["trigger": trigger, "action": ["type": "block"]])
@@ -164,6 +180,7 @@ enum AdBlockEngine {
         let proceduralData = (try? JSONSerialization.data(withJSONObject: procedural)) ?? Data("[]".utf8)
         let scriptletData = (try? JSONSerialization.data(withJSONObject: scriptlets)) ?? Data("[]".utf8)
         let cspData = (try? JSONSerialization.data(withJSONObject: policies)) ?? Data("[]".utf8)
+        let replaceData = (try? JSONSerialization.data(withJSONObject: replacements)) ?? Data("[]".utf8)
         return Compiled(
             chunks: pack(full, size: chunk),
             networkChunks: pack(network, size: chunk),
@@ -175,6 +192,7 @@ enum AdBlockEngine {
             proceduralJSON: String(data: proceduralData, encoding: .utf8) ?? "[]",
             scriptletJSON: String(data: scriptletData, encoding: .utf8) ?? "[]",
             cspJSON: String(data: cspData, encoding: .utf8) ?? "[]",
+            replaceJSON: String(data: replaceData, encoding: .utf8) ?? "[]",
             removeParams: strips,
             blockedSamples: []
         )
@@ -238,6 +256,7 @@ enum AdBlockEngine {
         var redirect = false
         var removeParams: [ParamRule] = []
         var csp: String?
+        var replaces: [(regex: String, replacement: String, flags: String)] = []
     }
 
     private static func parse(_ raw: String) -> Rule? {
@@ -313,6 +332,23 @@ enum AdBlockEngine {
         return (name, args.dropFirst().map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
     }
 
+    private static func parseReplace(_ raw: String) -> (regex: String, replacement: String, flags: String)? {
+        guard raw.hasPrefix("/") else { return nil }
+        var parts: [String] = []
+        var current = ""
+        var escaped = false
+        for character in raw.dropFirst() {
+            if escaped { current.append(character); escaped = false; continue }
+            if character == "\\" { current.append(character); escaped = true; continue }
+            if character == "/" { parts.append(current); current = ""; if parts.count == 3 { break }; continue }
+            current.append(character)
+        }
+        if parts.count == 2 { parts.append(current) }
+        guard parts.count >= 2, !parts[0].isEmpty, parts[0].count < 300, parts[1].count < 300 else { return nil }
+        let flags = parts.count > 2 ? String(parts[2].prefix(8).filter { "gimsuy".contains($0) }) : ""
+        return (parts[0], parts[1], flags)
+    }
+
     private static func hosts(of filter: String) -> [String] {
         var pattern = filter
         guard pattern.hasPrefix("||") else { return [] }
@@ -355,7 +391,7 @@ enum AdBlockEngine {
             case "popup": types.append("popup")
             case "all", "important", "match-case": break
             case "redirect", "redirect-rule": options.redirect = true
-            case "replace", "jsonprune": return false
+            case "jsonprune": return false
             default:
                 if token.hasPrefix("redirect=") || token.hasPrefix("redirect-rule=") { options.redirect = true; continue }
                 if token == "removeparam" || token.hasPrefix("removeparam=") {
@@ -372,7 +408,10 @@ enum AdBlockEngine {
                     if !policy.isEmpty, policy.count < 500, !policy.lowercased().contains("javascript:") { options.csp = policy }
                     continue
                 }
-                if token.hasPrefix("replace=") { return false }
+                if token.hasPrefix("replace=") {
+                    if let parsed = Self.parseReplace(String(token.dropFirst("replace=".count))) { options.replaces.append(parsed) }
+                    continue
+                }
                 if token.hasPrefix("domain=") {
                     for domain in token.dropFirst(7).split(separator: "|") {
                         let value = String(domain)

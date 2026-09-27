@@ -214,6 +214,77 @@
       if (parent && parent.appendChild && meta) parent.appendChild(meta);
     });
   }
+  function rewriteText(text, rules, url) {
+    let output = String(text == null ? '' : text);
+    (rules || []).forEach(rule => {
+      if (!rule || !rule.regex) return;
+      if (rule.needle && String(url || '').indexOf(rule.needle) < 0) return;
+      try { output = output.replace(new RegExp(rule.regex, rule.flags || 'g'), rule.replacement == null ? '' : String(rule.replacement)); } catch (error) {}
+    });
+    return output;
+  }
+  function installReplaceHook(rules) {
+    const targets = [root];
+    if (root.window && root.window !== root) targets.push(root.window);
+    targets.forEach(win => installReplaceOn(win, rules));
+  }
+  function installReplaceOn(win, rules) {
+    if (!win) return;
+    win.__rgReplaceRules = rules || [];
+    if (win.__rgReplaceHook) return;
+    win.__rgReplaceHook = true;
+    if (typeof win.fetch === 'function') {
+      const original = win.fetch;
+      win.fetch = function (input) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const pending = original.apply(this, arguments);
+        if (!pending || typeof pending.then !== 'function') return pending;
+        return pending.then(response => {
+          const type = response && response.headers && response.headers.get && response.headers.get('content-type') || '';
+          if (/^(image|audio|video|font)\//i.test(type) || /octet-stream/i.test(type)) return response;
+          if (!response || typeof response.text !== 'function' || typeof root.Response !== 'function') {
+            if (response && typeof response.text === 'function') {
+              return response.text().then(text => ({ status: response.status || 200, headers: response.headers, text: () => Promise.resolve(rewriteText(text, win.__rgReplaceRules, url)) }));
+            }
+            return response;
+          }
+          return response.text().then(text => new root.Response(rewriteText(text, win.__rgReplaceRules, url), { status: response.status || 200, headers: response.headers }));
+        });
+      };
+    }
+    const XHR = win.XMLHttpRequest;
+    if (XHR && XHR.prototype && XHR.prototype.send && XHR.prototype.open) {
+      const open = XHR.prototype.open;
+      const send = XHR.prototype.send;
+      XHR.prototype.open = function (method, url) { this.__rgURL = url; return open.apply(this, arguments); };
+      XHR.prototype.send = function () {
+        this.addEventListener && this.addEventListener('readystatechange', () => {
+          if (this.readyState !== 4 || this.__rgRewritten) return;
+          const type = this.getResponseHeader ? (this.getResponseHeader('content-type') || '') : '';
+          if (/^(image|audio|video|font)\//i.test(type)) return;
+          const raw = this.responseText;
+          if (typeof raw !== 'string') return;
+          const next = rewriteText(raw, win.__rgReplaceRules, this.__rgURL || '');
+          if (next === raw) return;
+          this.__rgRewritten = true;
+          try { Object.defineProperty(this, 'responseText', { configurable: true, get() { return next; } }); } catch (error) {}
+        });
+        return send.apply(this, arguments);
+      };
+    }
+  }
+  function applyReplace(rules, href) {
+    installReplaceHook(rules);
+    const list = rules || [];
+    const doc = root.document;
+    if (!doc || !doc.documentElement || !list.length) return false;
+    const current = doc.documentElement.outerHTML;
+    if (typeof current !== 'string') return false;
+    const next = rewriteText(current, list, href || (root.location && root.location.href) || '');
+    if (next === current) return false;
+    doc.documentElement.outerHTML = next;
+    return true;
+  }
   function applyBlocking(globalCSS, hostMap, procedural) {
     const host = (root.location && root.location.hostname) || '';
     let extra = '';
@@ -625,7 +696,7 @@
     };
   }
   const api = {
-    selector, setAppearance, setFont, darkCSS: darkRules, applyBlocking, applyScriptlets, applyCSP, collectTexts, applyTexts, restoreTexts,
+    selector, setAppearance, setFont, darkCSS: darkRules, applyBlocking, applyScriptlets, applyCSP, applyReplace, collectTexts, applyTexts, restoreTexts,
     watchNewText, stopWatch, extractArticle, collectMedia, parseM3U8, parseMPD, installNetHook, installConsole, installNotifications,
     startPicker, countMatches, clearFind, videoAction, fill, ensureStyle
   };

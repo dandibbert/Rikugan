@@ -671,7 +671,7 @@ struct ContentBlockingView: View {
                     Task { await addSubscription() }
                 }
             }
-            Text("内置规则、自定义规则和第三方列表都会编译并安装到网页。订阅按原文件下载，单次上限 8 MB，不把 EasyList 打进安装包。网络规则和元素隐藏进 WKContentRuleList。#%# 和 ##+js 里的 abort-on-property-read、abort-on-property-write、json-prune、set-constant、prevent-fetch、prevent-xhr 会在页面开始时执行。$redirect 和 $redirect-rule 因为内容规则不能改成空响应，所以按拦截处理。$removeparam 会在主框架跳转前去掉对应查询参数。$csp 会插入 meta 策略。$replace 没有可用的响应改写接口。").font(.footnote).foregroundStyle(.secondary)
+            Text("内置规则、自定义规则和第三方列表都会编译并安装到网页。订阅按原文件下载，单次上限 8 MB，不把 EasyList 打进安装包。网络规则和元素隐藏进 WKContentRuleList。#%# 和 ##+js 里的 abort-on-property-read、abort-on-property-write、json-prune、set-constant、prevent-fetch、prevent-xhr 会在页面开始时执行。$redirect 和 $redirect-rule（含 noopjs、empty、1x1）是拦截，不是重定向，也不会返回空的 2xx。$removeparam 会在主框架跳转前去掉对应查询参数。$csp 会插入 meta 策略。$replace 会改主框架 HTML，以及之后 fetch/XHR 读到的文本；图片、音视频和二进制响应跳过。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("内容拦截")
     }
     private func setting(_ key: WritableKeyPath<BrowserSettings, Bool>) -> Binding<Bool> {

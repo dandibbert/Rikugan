@@ -212,6 +212,8 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(compiled.networkJSON.contains("redirect"))
         XCTAssertEqual(compiled.removeParams.first?.key, "utm_source")
         XCTAssertTrue(compiled.cspJSON.contains("script-src 'none'"))
+        XCTAssertTrue(compiled.replaceJSON.contains("\"regex\":\"a\""))
+        XCTAssertTrue(compiled.replaceJSON.contains("news.example"))
         let stripped = AdBlockEngine.urlByStripping(URL(string: "https://www.news.example/a?utm_source=x&id=1")!, rules: compiled.removeParams)
         XCTAssertEqual(stripped?.absoluteString, "https://www.news.example/a?id=1")
         XCTAssertNil(AdBlockEngine.urlByStripping(URL(string: "https://other.example/a?utm_source=x")!, rules: compiled.removeParams))

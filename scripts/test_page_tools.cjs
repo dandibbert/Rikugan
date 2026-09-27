@@ -107,7 +107,22 @@ assert.equal(classify('example.com##+js(set-constant, canRunAds, false)'), 'scri
 assert.equal(classify('||ads.example^$redirect=noopjs'), 'block');
 assert.equal(classify('||news.example^$removeparam=utm_source'), 'removeparam');
 assert.equal(classify("||news.example^$csp=script-src 'none'"), 'csp');
-assert.equal(classify('||news.example^$replace=/a/b/'), 'drop');
+assert.equal(classify('||news.example^$replace=/a/b/'), 'replace');
+const html = { outerHTML: '<html><body>hello ad</body></html>' };
+sandbox.document = { documentElement: html };
+sandbox.RikuganPageTools.applyReplace([{ needle: 'news.example', regex: 'hello ad', replacement: 'hello', flags: '' }], 'https://news.example/a');
+assert.equal(html.outerHTML, '<html><body>hello</body></html>');
+sandbox.RikuganPageTools.applyReplace([{ needle: 'other.test', regex: 'hello', replacement: 'nope', flags: '' }], 'https://news.example/a');
+assert.equal(html.outerHTML, '<html><body>hello</body></html>');
+function box(value) { return { then(onOk) { return onOk(value); } }; }
+sandbox.__rgReplaceHook = undefined;
+sandbox.window.__rgReplaceHook = undefined;
+sandbox.fetch = () => box({ status: 200, headers: { get() { return 'text/plain'; } }, text: () => box('ad-code https://cdn.example/ad.js') });
+sandbox.window.fetch = sandbox.fetch;
+sandbox.Response = function Response(body) { this.body = body; };
+sandbox.window.Response = sandbox.Response;
+sandbox.RikuganPageTools.applyReplace([{ needle: 'cdn.example', regex: 'ad-code', replacement: 'clean', flags: 'g' }], 'https://cdn.example/ad.js');
+assert.equal(sandbox.fetch('https://cdn.example/ad.js').body, 'clean https://cdn.example/ad.js');
 sandbox.location = { hostname: 'news.example' };
 sandbox.JSON = { parse: JSON.parse, stringify: JSON.stringify };
 sandbox.Promise = Promise;

@@ -24,6 +24,7 @@ import WebKit
     var proceduralJSON = "[]"
     var scriptletJSON = "[]"
     var cspJSON = "[]"
+    var replaceJSON = "[]"
     var removeParams: [AdBlockEngine.QueryStrip] = []
     var privateScriptValues: [UUID: [String: Any]] = [:]
     var popupPresenter: PopupPresenter?
@@ -184,7 +185,7 @@ import WebKit
     }
     func installPageTools(on tab: BrowserTab) {
         let hostJSON = (try? JSONSerialization.data(withJSONObject: hostCSS)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic, hostCSS: hostJSON, procedural: proceduralJSON, scriptlets: scriptletJSON, csp: cspJSON)
+        PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic, hostCSS: hostJSON, procedural: proceduralJSON, scriptlets: scriptletJSON, csp: cspJSON, replacements: replaceJSON)
         tab.ensurePageHandler()
         tab.syncContentRules()
     }
@@ -226,6 +227,7 @@ import WebKit
     weak var session: BrowserSession?
     let webView: WKWebView
     let scriptEngine = UserScriptEngine()
+    private var scriptBridge: ScriptBridge?
     @Published var pageTitle: String
     @Published var address: String
     @Published var progress: Double = 0
@@ -262,6 +264,8 @@ import WebKit
         id = saved.id; self.session = session; pageTitle = saved.title; address = saved.url; isHome = saved.url.isEmpty; desktop = saved.desktop
         isPrivate = saved.isPrivate; groupID = saved.groupID; autoRefreshSeconds = saved.autoRefreshSeconds
         let configuration = supplied ?? WKWebViewConfiguration()
+        let bridge = supplied == nil ? ScriptBridge() : nil
+        if let bridge { configuration.setURLSchemeHandler(bridge, forURLScheme: "rikugan-bridge") }
         configuration.websiteDataStore = saved.isPrivate ? session.privateStore : session.dataStore
         configuration.webExtensionController = session.extensionController
         configuration.userContentController = WKUserContentController()
@@ -271,7 +275,9 @@ import WebKit
         configuration.mediaTypesRequiringUserActionForPlayback = .audio
         configuration.defaultWebpagePreferences.preferredContentMode = saved.desktop ? .desktop : .mobile
         webView = WKWebView(frame: .zero, configuration: configuration)
+        scriptBridge = bridge
         super.init()
+        bridge?.tab = self
         scriptEngine.tab = self
         scriptEngine.configure(configuration.userContentController, scripts: session.profile.scripts)
         webView.navigationDelegate = self; webView.uiDelegate = self

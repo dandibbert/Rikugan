@@ -26,7 +26,8 @@ function classify(raw) {
   const dollar = line.lastIndexOf('$');
   if (dollar > 0) {
     const mods = line.slice(dollar + 1).split(',');
-    if (mods.some(token => token === 'replace' || token.startsWith('replace=') || token === 'jsonprune')) return 'drop';
+    if (mods.some(token => token === 'jsonprune')) return 'drop';
+    if (mods.some(token => token === 'replace' || token.startsWith('replace='))) return 'replace';
     if (mods.some(token => token === 'removeparam' || token.startsWith('removeparam='))) return 'removeparam';
     if (mods.some(token => token === 'csp' || token.startsWith('csp='))) return 'csp';
     if (mods.some(token => token === 'redirect' || token.startsWith('redirect=') || token === 'redirect-rule' || token.startsWith('redirect-rule='))) return 'block';
