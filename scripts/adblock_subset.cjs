@@ -9,6 +9,33 @@ function scriptletName(line) {
   return scriptlets.has(name) ? name : '';
 }
 
+function modifierTokens(line) {
+  const dollars = [];
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] !== '$') continue;
+    let slashes = 0;
+    for (let j = i - 1; j >= 0 && line[j] === '\\'; j--) slashes++;
+    if (slashes % 2 === 0) dollars.push(i);
+  }
+  const known = ['redirect', 'redirect-rule', 'removeparam', 'csp', 'replace', 'jsonprune'];
+  for (let n = dollars.length - 1; n >= 0; n--) {
+    const index = dollars[n];
+    if (index <= 0) continue;
+    const head = line.slice(0, index);
+    const mods = line.slice(index + 1);
+    if (head.startsWith('/') && head.endsWith('/')) return null;
+    if (!mods) continue;
+    const tokens = mods.split(',');
+    const plausible = tokens.every(token => {
+      if (known.some(name => token === name || token.startsWith(name + '='))) return true;
+      if (!token || token.includes(' ') || token.includes('$') || !/^[A-Za-z~]/.test(token)) return false;
+      return /^[A-Za-z0-9~_.=|*-]+$/.test(token);
+    });
+    if (plausible) return tokens;
+  }
+  return null;
+}
+
 function classify(raw) {
   const line = String(raw || '').trim();
   if (!line || line.startsWith('!') || line.startsWith('[')) return 'drop';
@@ -23,10 +50,9 @@ function classify(raw) {
   if (line.includes('#$#')) return /\{/.test(line) && !/url\(|@import|javascript:/i.test(line) ? 'css' : 'drop';
   if (line.includes('##')) return 'cosmetic';
   if (line.startsWith('@@')) return 'allow';
-  const dollar = line.lastIndexOf('$');
-  if (dollar > 0) {
-    const mods = line.slice(dollar + 1).split(',');
-    if (mods.some(token => token === 'jsonprune')) return 'drop';
+  const mods = modifierTokens(line);
+  if (mods) {
+    if (mods.some(token => token === 'jsonprune' || token.startsWith('jsonprune='))) return 'jsonprune';
     if (mods.some(token => token === 'replace' || token.startsWith('replace='))) return 'replace';
     if (mods.some(token => token === 'removeparam' || token.startsWith('removeparam='))) return 'removeparam';
     if (mods.some(token => token === 'csp' || token.startsWith('csp='))) return 'csp';

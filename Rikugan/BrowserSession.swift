@@ -464,6 +464,7 @@ extension BrowserSession {
     var pageHandlerInstalled = false
     var isExtensionPage = false
     var bridgeTabID = 0
+    var scriptState: [String: Any] = [:]
     var refreshTask: Task<Void, Never>?
     var findNeedle = ""
     var findCursor = 0

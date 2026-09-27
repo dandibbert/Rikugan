@@ -194,6 +194,74 @@ assert.match(query.calls[0].args.headers['Content-Type'], /application\/x-www-fo
   assert.equal(streamed.sandbox.states.at(-1), 4);
   assert.equal(streamed.sandbox.texts.at(-1), 'abcd');
   assert.equal(streamed.sandbox.progress.length, 2);
+  const closing = run('https://example.com/', { grants: ['none'] }, 'window.close();');
+  assert.equal(closing.calls.some(call => call.operation === 'closeTab'), true);
+  const denied = run('https://example.com/', {}, 'globalThis.note = typeof GM_notification; globalThis.closer = typeof window.close;');
+  assert.equal(denied.sandbox.note, 'undefined');
+  assert.equal(denied.sandbox.closer, 'function');
+  const note = run('https://example.com/', { grants: ['GM_notification'] }, "globalThis.id = GM_notification({ title: 'Hi', text: 'Body', onclick() { globalThis.clicked = true; } });");
+  const noticeCall = note.calls.find(call => call.operation === 'notification');
+  assert.equal(noticeCall.args.title, 'Hi');
+  assert.equal(noticeCall.args.text, 'Body');
+  assert.equal(noticeCall.args.id, note.sandbox.id);
+  note.sandbox.__rikuganNotify(note.sandbox.id);
+  assert.equal(note.sandbox.clicked, true);
+  const download = run('https://example.com/', { grants: ['GM_download'] }, "GM_download({ url: 'https://example.com/a.bin', name: 'a.bin' });");
+  const saved = download.calls.find(call => call.operation === 'download');
+  assert.equal(saved.args.url, 'https://example.com/a.bin');
+  assert.equal(saved.args.name, 'a.bin');
+  const cookies = run('https://example.com/', { grants: ['GM_cookie'] }, 'GM_cookie.list({}); GM_cookie.set({ name: "sid", value: "1" }); GM_cookie.delete({ name: "sid" });');
+  assert.equal(JSON.stringify(cookies.calls.map(call => call.operation)), JSON.stringify(['cookieList', 'cookieSet', 'cookieDelete']));
+  const tabs = run('https://example.com/', { grants: ['GM_getTab', 'GM_saveTab', 'GM_getTabs'] }, 'GM_getTab(); GM_saveTab({ n: 1 }); GM_getTabs();');
+  assert.equal(JSON.stringify(tabs.calls.map(call => call.operation)), JSON.stringify(['getTab', 'saveTab', 'getTabs']));
+  assert.equal(JSON.stringify(tabs.calls[1].args.data), JSON.stringify({ n: 1 }));
+  const doc = {
+    body: { kids: [], appendChild(el) { this.kids.push(el); } },
+    createElement(tag) { return { tagName: tag, attrs: {}, textContent: '', setAttribute(name, value) { this.attrs[name] = value; } }; }
+  };
+  const added = run('https://example.com/', { grants: ['GM_addElement'], isolated: false }, "globalThis.el = GM_addElement('div', { id: 'n', textContent: 'hi' });", { document: doc });
+  assert.equal(added.sandbox.el.tagName, 'div');
+  assert.equal(added.sandbox.el.textContent, 'hi');
+  assert.equal(added.sandbox.el.attrs.id, 'n');
+  assert.equal(doc.body.kids.length, 1);
+  const pageDocument = {
+    body: { children: [], appendChild(el) { this.children.push(el); } },
+    createElement(tag) {
+      return { tagName: String(tag).toUpperCase(), id: '', textContent: '', attrs: {}, setAttribute(name, value) { this.attrs[name] = value; if (name === 'id') this.id = value; } };
+    }
+  };
+  const hostNode = {
+    attrs: {},
+    scripts: [],
+    appendChild(el) { this.scripts.push(el.textContent); vm.runInNewContext(el.textContent, { document: pageDocument, JSON }); },
+    setAttribute(name, value) { this.attrs[name] = value; },
+    getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+    removeAttribute(name) { delete this.attrs[name]; }
+  };
+  pageDocument.documentElement = hostNode;
+  const isolatedElement = run('https://example.com/', { isolated: true, grants: ['GM_addElement'] }, "globalThis.made = GM_addElement('span', { id: 'n', textContent: 'hi' });", {
+    document: { createElement() { return { textContent: '', remove() {} }; }, documentElement: hostNode }
+  });
+  assert.equal(isolatedElement.sandbox.made.id, 'n');
+  assert.equal(isolatedElement.sandbox.made.tag, 'SPAN');
+  assert.equal(isolatedElement.sandbox.made.text, 'hi');
+  assert.equal(pageDocument.body.children.length, 1);
+  assert.match(hostNode.scripts[0], /createElement/);
+  const moved = run('https://example.com/a', {}, 'globalThis.runs = (globalThis.runs || 0) + 1; window.onurlchange = info => { globalThis.changes = (globalThis.changes || 0) + 1; globalThis.seen = info.url; globalThis.oldURL = info.oldURL; };');
+  assert.equal(moved.sandbox.changes, undefined);
+  moved.sandbox.__rikuganOnURLChange();
+  assert.equal(moved.sandbox.changes, 1);
+  assert.equal(moved.sandbox.seen, 'https://example.com/a');
+  assert.equal(moved.sandbox.runs, 1);
+  moved.sandbox.location = new URL('https://example.com/b');
+  moved.sandbox.__rikuganOnURLChange();
+  assert.equal(moved.sandbox.changes, 2);
+  assert.equal(moved.sandbox.seen, 'https://example.com/b');
+  assert.equal(moved.sandbox.oldURL, 'https://example.com/a');
+  assert.equal(moved.sandbox.runs, 2);
+  moved.sandbox.__rikuganOnURLChange();
+  assert.equal(moved.sandbox.changes, 2);
+  assert.equal(moved.sandbox.runs, 2);
   console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow get/set/call, page-world window, menu, xhr and listeners');
 })().catch(error => { console.error(error); process.exit(1); });
 

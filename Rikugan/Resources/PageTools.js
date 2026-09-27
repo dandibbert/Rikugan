@@ -210,6 +210,62 @@
     keys.forEach(key => { if (Object.prototype.hasOwnProperty.call(value, key)) delete value[key]; });
     Object.keys(value).forEach(key => pruneKeys(value[key], keys));
   }
+  function pruneJSONText(text, keys) {
+    try {
+      const value = JSON.parse(text);
+      pruneKeys(value, keys);
+      return JSON.stringify(value);
+    } catch (error) { return text; }
+  }
+  function installJSONPrune(win, keys, needle) {
+    if (!win || !keys.length) return;
+    win.__rgPruneRules = win.__rgPruneRules || [];
+    win.__rgPruneRules.push({ keys: keys, needle: needle || '' });
+    if (win.__rgPruneHook) return;
+    win.__rgPruneHook = true;
+    const rewrite = (text, url) => {
+      let output = String(text == null ? '' : text);
+      (win.__rgPruneRules || []).forEach(rule => {
+        if (rule.needle && String(url || '').indexOf(rule.needle) < 0) return;
+        output = pruneJSONText(output, rule.keys);
+      });
+      return output;
+    };
+    if (typeof win.fetch === 'function') {
+      const original = win.fetch;
+      win.fetch = function (input) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const pending = original.apply(this, arguments);
+        if (!pending || typeof pending.then !== 'function') return pending;
+        return pending.then(response => {
+          if (!response || typeof response.text !== 'function') return response;
+          return response.text().then(text => {
+            const next = rewrite(text, url);
+            if (typeof win.Response === 'function') return new win.Response(next, { status: response.status || 200, headers: response.headers });
+            return { status: response.status || 200, headers: response.headers, text: () => Promise.resolve(next) };
+          });
+        });
+      };
+    }
+    const XHR = win.XMLHttpRequest;
+    if (XHR && XHR.prototype && XHR.prototype.send && XHR.prototype.open) {
+      const open = XHR.prototype.open;
+      const send = XHR.prototype.send;
+      XHR.prototype.open = function (method, url) { this.__rgPruneURL = url; return open.apply(this, arguments); };
+      XHR.prototype.send = function () {
+        this.addEventListener && this.addEventListener('readystatechange', () => {
+          if (this.readyState !== 4 || this.__rgPruned) return;
+          const raw = this.responseText;
+          if (typeof raw !== 'string') return;
+          const next = rewrite(raw, this.__rgPruneURL || '');
+          if (next === raw) return;
+          this.__rgPruned = true;
+          try { Object.defineProperty(this, 'responseText', { configurable: true, get() { return next; } }); } catch (error) {}
+        });
+        return send.apply(this, arguments);
+      };
+    }
+  }
   function applyScriptlets(rules) {
     const key = JSON.stringify(rules || []);
     if (root.__rgScriptletKey === key) return;
@@ -253,8 +309,11 @@
         if (send) XHR.prototype.send = function () { if (this.__rgBlocked) return; return send.apply(this, arguments); };
       } else if (name === 'json-prune') {
         const keys = String(args[0] || '').split(/[ |]/).filter(Boolean);
+        const needle = args[1] || '';
+        if (!keys.length) return;
+        if (needle) { installJSONPrune(root, keys, needle); return; }
         const json = root.JSON;
-        if (!json || typeof json.parse !== 'function' || !keys.length) return;
+        if (!json || typeof json.parse !== 'function') return;
         const original = json.parse;
         json.parse = function () {
           const value = original.apply(this, arguments);

@@ -486,5 +486,69 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(reply.contains("通知已创建"))
         XCTAssertTrue(reply.contains("__rgExtHostDone"))
     }
+    func testUserscriptHostGrants() throws {
+        let source = """
+        // ==UserScript==
+        // @name Host
+        // @match https://example.com/*
+        // @grant GM_notification
+        // @grant GM_download
+        // @grant GM_cookie
+        // @grant GM_addElement
+        // @grant GM_getTab
+        // @grant GM_saveTab
+        // @grant GM_getTabs
+        // ==/UserScript==
+        """
+        let script = try UserScript.parse(source)
+        XCTAssertTrue(script.permits("notification"))
+        XCTAssertTrue(script.permits("download"))
+        XCTAssertTrue(script.permits("cookie"))
+        XCTAssertTrue(script.permits("cookieList"))
+        XCTAssertTrue(script.permits("cookieSet"))
+        XCTAssertTrue(script.permits("cookieDelete"))
+        XCTAssertTrue(script.permits("addElement"))
+        XCTAssertTrue(script.permits("getTab"))
+        XCTAssertTrue(script.permits("saveTab"))
+        XCTAssertTrue(script.permits("getTabs"))
+        XCTAssertTrue(script.permits("closeTab"))
+        let plain = """
+        // ==UserScript==
+        // @name Plain
+        // @match https://example.com/*
+        // @grant none
+        // ==/UserScript==
+        """
+        let bare = try UserScript.parse(plain)
+        XCTAssertTrue(bare.permits("closeTab"))
+        XCTAssertFalse(bare.permits("notification"))
+        XCTAssertThrowsError(try UserScript.parse(source.replacingOccurrences(of: "GM_notification", with: "GM_openInTab2")))
+        let page = try XCTUnwrap(HTTPCookie(properties: [.name: "sid", .value: "1", .domain: ".example.com", .path: "/"]))
+        let other = try XCTUnwrap(HTTPCookie(properties: [.name: "sid", .value: "2", .domain: ".other.com", .path: "/"]))
+        let listed = ScriptCookies.listing([page, other], host: "www.example.com")
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertEqual(listed.first?["name"], "sid")
+        XCTAssertEqual(listed.first?["value"], "1")
+        XCTAssertFalse(ScriptCookies.hostAllowed("other.com", page: "example.com"))
+        XCTAssertTrue(ScriptCookies.hostAllowed(".example.com", page: "www.example.com"))
+        let tabs = ScriptTabs.visible(tabs: [
+            (id: "a", url: "https://example.com", title: "A", isPrivate: false),
+            (id: "b", url: "https://example.com/p", title: "B", isPrivate: true)
+        ], currentPrivate: false)
+        XCTAssertEqual(tabs.count, 1)
+        XCTAssertEqual(tabs.first?["id"], "a")
+        XCTAssertEqual(tabs.first?["title"], "A")
+        XCTAssertNil(tabs.first?["data"])
+    }
+    func testJSONPruneCompilesWithoutBlocking() {
+        let compiled = AdBlockEngine.compile(lines: ["||api.example/feed^$jsonprune=ad|$.promo", #"||api.example/item^$jsonprune=\$.data.ad"#])
+        XCTAssertTrue(compiled.scriptletJSON.contains("json-prune"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("ad|promo"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("api.example/feed"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("api.example/item"))
+        XCTAssertFalse(compiled.networkJSON.contains("block"))
+        XCTAssertEqual(AdBlockEngine.pruneKeys(#"ad|$.promo"#), ["ad", "promo"])
+        XCTAssertEqual(AdBlockEngine.pruneKeys(#"\$.data.ad"#), ["ad"])
+    }
 }
 

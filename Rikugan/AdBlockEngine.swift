@@ -128,10 +128,13 @@ enum AdBlockEngine {
                         replacements.append(["needle": needle, "regex": item.regex, "replacement": item.replacement, "flags": item.flags])
                     }
                 }
+                if options.prunesJSON, !options.jsonPrunes.isEmpty {
+                    scriptlets.append(["domains": hosts(of: filter), "name": "json-prune", "args": [options.jsonPrunes.joined(separator: "|"), needle(of: filter)]])
+                }
                 if let resource = options.redirectResource {
                     scriptlets.append(contentsOf: redirectStubs(resource: resource, filter: filter))
                 }
-                let network = options.redirect || (options.removeParams.isEmpty && options.csp == nil && options.replaces.isEmpty)
+                let network = options.redirect || (options.removeParams.isEmpty && options.csp == nil && options.replaces.isEmpty && !options.prunesJSON)
                 if network, var trigger = trigger(filter) {
                     apply(options, to: &trigger)
                     blocks.append(["trigger": trigger, "action": ["type": "block"]])
@@ -263,6 +266,8 @@ enum AdBlockEngine {
         var removeParams: [ParamRule] = []
         var csp: String?
         var replaces: [(regex: String, replacement: String, flags: String)] = []
+        var prunesJSON = false
+        var jsonPrunes: [String] = []
     }
 
     private static func parse(_ raw: String) -> Rule? {
@@ -372,6 +377,24 @@ enum AdBlockEngine {
         return rows
     }
 
+    static func pruneKeys(_ raw: String) -> [String] {
+        raw.split(separator: "|").compactMap { part in
+            var token = String(part).replacingOccurrences(of: "\\", with: "")
+            token = token.trimmingCharacters(in: .whitespaces)
+            if token.hasPrefix("$") { token.removeFirst() }
+            let pieces = token.split(whereSeparator: { ".$[]*".contains($0) }).map(String.init).filter { !$0.isEmpty }
+            return pieces.last
+        }
+    }
+
+    private static func needle(of filter: String) -> String {
+        var pattern = filter.trimmingCharacters(in: .whitespaces)
+        if pattern.hasPrefix("@@") { pattern.removeFirst(2) }
+        if pattern.hasPrefix("||") { pattern.removeFirst(2) }
+        else if pattern.hasPrefix("|") { pattern.removeFirst() }
+        return pattern.replacingOccurrences(of: "^", with: "").replacingOccurrences(of: "*", with: "")
+    }
+
     private static func hosts(of filter: String) -> [String] {
         var pattern = filter
         guard pattern.hasPrefix("||") else { return [] }
@@ -382,19 +405,45 @@ enum AdBlockEngine {
         return [domain.replacingOccurrences(of: "*.", with: "")]
     }
 
-    private static func splitOptions(_ body: String) -> (pattern: String, modifiers: String?) {
-        guard let dollar = body.lastIndex(of: "$") else { return (body, nil) }
-        let head = String(body[..<dollar])
-        let mods = String(body[body.index(after: dollar)...])
-        if head.hasPrefix("/"), head.hasSuffix("/") { return (body, nil) }
-        let tokens = mods.split(separator: ",")
-        let known = ["redirect", "redirect-rule", "removeparam", "csp", "replace"]
-        let plausible = !mods.isEmpty && tokens.allSatisfy { token in
+    private static func unescapedDollars(_ body: String) -> [String.Index] {
+        var indexes: [String.Index] = []
+        var index = body.startIndex
+        while index < body.endIndex {
+            if body[index] == "$" {
+                var slashes = 0
+                var cursor = index
+                while cursor > body.startIndex {
+                    let previous = body.index(before: cursor)
+                    if body[previous] != "\\" { break }
+                    slashes += 1
+                    cursor = previous
+                }
+                if slashes % 2 == 0 { indexes.append(index) }
+            }
+            index = body.index(after: index)
+        }
+        return indexes
+    }
+
+    private static func plausibleModifiers(_ mods: String) -> Bool {
+        guard !mods.isEmpty else { return false }
+        let known = ["redirect", "redirect-rule", "removeparam", "csp", "replace", "jsonprune"]
+        return mods.split(separator: ",").allSatisfy { token in
             let value = String(token)
             if known.contains(where: { value == $0 || value.hasPrefix($0 + "=") }) { return true }
-            return !value.isEmpty && !value.contains(" ") && value.unicodeScalars.allSatisfy { CharacterSet.modifierChars.contains($0) || $0 == "=" || $0 == "|" || $0 == "." || $0 == "*" }
+            guard !value.isEmpty, !value.contains(" "), !value.contains("$"), let first = value.first, first.isLetter || first == "~" else { return false }
+            return value.unicodeScalars.allSatisfy { CharacterSet.modifierChars.contains($0) || $0 == "=" || $0 == "|" || $0 == "." || $0 == "*" }
         }
-        return plausible ? (head, mods) : (body, nil)
+    }
+
+    private static func splitOptions(_ body: String) -> (pattern: String, modifiers: String?) {
+        for dollar in unescapedDollars(body).reversed() {
+            let head = String(body[..<dollar])
+            let mods = String(body[body.index(after: dollar)...])
+            if head.hasPrefix("/"), head.hasSuffix("/") { return (body, nil) }
+            if plausibleModifiers(mods) { return (head, mods) }
+        }
+        return (body, nil)
     }
 
     private static func apply(_ options: inout Options, modifiers: String) -> Bool {
@@ -416,7 +465,6 @@ enum AdBlockEngine {
             case "redirect", "redirect-rule":
                 options.redirect = true
                 if options.redirectResource == nil { options.redirectResource = "empty" }
-            case "jsonprune": return false
             default:
                 if token.hasPrefix("redirect=") || token.hasPrefix("redirect-rule=") {
                     options.redirect = true
@@ -440,6 +488,12 @@ enum AdBlockEngine {
                 }
                 if token.hasPrefix("replace=") {
                     if let parsed = Self.parseReplace(String(token.dropFirst("replace=".count))) { options.replaces.append(parsed) }
+                    continue
+                }
+                if token == "jsonprune" || token.hasPrefix("jsonprune=") {
+                    options.prunesJSON = true
+                    let raw = token.hasPrefix("jsonprune=") ? String(token.dropFirst("jsonprune=".count)) : ""
+                    options.jsonPrunes.append(contentsOf: pruneKeys(raw))
                     continue
                 }
                 if token.hasPrefix("domain=") {

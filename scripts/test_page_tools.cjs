@@ -116,6 +116,9 @@ assert.deepEqual(redirectScriptlets('||ads.example^$redirect=googletag'), []);
 assert.equal(classify('||news.example^$removeparam=utm_source'), 'removeparam');
 assert.equal(classify("||news.example^$csp=script-src 'none'"), 'csp');
 assert.equal(classify('||news.example^$replace=/a/b/'), 'replace');
+assert.equal(classify('||api.example/feed^$jsonprune=ad|$.promo'), 'jsonprune');
+assert.equal(classify('||api.example/feed^$jsonprune=\\$.data.ad'), 'jsonprune');
+assert.equal(classify('||api.example/feed^$jsonprune'), 'jsonprune');
 const html = { outerHTML: '<html><body>hello ad</body></html>' };
 sandbox.document = { documentElement: html };
 sandbox.RikuganPageTools.applyReplace([{ needle: 'news.example', regex: 'hello ad', replacement: 'hello', flags: '' }], 'https://news.example/a');
@@ -216,5 +219,40 @@ assert.equal(sandbox.__host.details.css, 'body{color:red}');
 sandbox.__rgExtHostDone({ id: 'rg1', result: null, error: null });
 assert.equal(relayed[0].source, 'rikugan-extension-host-result');
 assert.equal(relayed[0].id, 'rg1');
+
+sandbox.location = { hostname: 'api.example' };
+sandbox.__rgPruneHook = undefined;
+sandbox.__rgPruneRules = undefined;
+sandbox.Response = function Response(body) { this.body = body; };
+const feed = '{"ad":1,"promo":2,"title":"keep"}';
+sandbox.fetch = () => box({ status: 200, headers: {}, text: () => box(feed) });
+function PruneXHR() { this.listeners = {}; }
+PruneXHR.prototype.open = function (method, url) { this.url = url; };
+PruneXHR.prototype.addEventListener = function (type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); };
+PruneXHR.prototype.send = function () {
+  this.readyState = 4;
+  this.responseText = feed;
+  (this.listeners.readystatechange || []).forEach(fn => fn());
+};
+sandbox.XMLHttpRequest = PruneXHR;
+sandbox.RikuganPageTools.applyScriptlets([
+  { domains: ['api.example'], name: 'json-prune', args: ['ad|promo', 'api.example/feed'] }
+]);
+const prunedFeed = JSON.parse(sandbox.fetch('https://api.example/feed').body);
+assert.equal(prunedFeed.ad, undefined);
+assert.equal(prunedFeed.promo, undefined);
+assert.equal(prunedFeed.title, 'keep');
+const otherFeed = JSON.parse(sandbox.fetch('https://api.example/other').body);
+assert.equal(otherFeed.ad, 1);
+assert.equal(otherFeed.promo, 2);
+const xhrHit = new sandbox.XMLHttpRequest();
+xhrHit.open('GET', 'https://api.example/feed');
+xhrHit.send();
+assert.equal(JSON.parse(xhrHit.responseText).promo, undefined);
+assert.equal(JSON.parse(xhrHit.responseText).title, 'keep');
+const xhrMiss = new sandbox.XMLHttpRequest();
+xhrMiss.open('GET', 'https://api.example/other');
+xhrMiss.send();
+assert.equal(JSON.parse(xhrMiss.responseText).ad, 1);
 
 console.log('PASS: page tools selector, dark CSS, playlists, find count, adblock subset');

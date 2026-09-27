@@ -6,6 +6,31 @@ import WebKit
 /// result onto `window.__rgResults` in the page. There is no synchronous custom-scheme
 /// request, because that request deadlocks `evaluateJavaScript` in the same web view.
 
+enum ScriptCookies {
+    static func hostAllowed(_ domain: String, page host: String) -> Bool {
+        let page = host.lowercased()
+        var value = domain.lowercased()
+        if value.hasPrefix(".") { value.removeFirst() }
+        return !page.isEmpty && !value.isEmpty && (value == page || page.hasSuffix("." + value))
+    }
+
+    static func matches(_ cookie: HTTPCookie, host: String) -> Bool {
+        hostAllowed(cookie.domain, page: host)
+    }
+
+    static func listing(_ cookies: [HTTPCookie], host: String) -> [[String: String]] {
+        cookies.filter { matches($0, host: host) }.map {
+            ["name": $0.name, "value": $0.value, "domain": $0.domain, "path": $0.path]
+        }
+    }
+}
+
+enum ScriptTabs {
+    static func visible(tabs: [(id: String, url: String, title: String, isPrivate: Bool)], currentPrivate: Bool) -> [[String: String]] {
+        tabs.filter { $0.isPrivate == currentPrivate }.map { ["id": $0.id, "url": $0.url, "title": $0.title] }
+    }
+}
+
 struct ScriptCommand: Identifiable {
     var id: String
     var title: String
@@ -160,6 +185,68 @@ struct ScriptCommand: Identifiable {
         case "abortRequest":
             if let id = args["id"] as? String { exchanges.removeValue(forKey: id)?.cancel() }
             replyHandler(true, nil)
+        case "notification":
+            let title = String((args["title"] as? String ?? "通知").prefix(120))
+            let text = String((args["text"] as? String ?? "").prefix(500))
+            let id = (args["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString
+            session.model?.deliverNotice(host: origin.host ?? "userscript", title: title, body: text, extensionNotificationID: "gm:" + id, extensionRuntimeID: script.id.uuidString)
+            replyHandler(id, nil)
+        case "download":
+            guard let raw = args["url"] as? String, let url = URL(string: raw, relativeTo: origin)?.absoluteURL,
+                  ["http", "https"].contains(url.scheme ?? "") else { replyHandler(nil, "只能下载 HTTP(S) 资源。"); return }
+            let fileName = (args["name"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(180)) }
+            let store = tab.isPrivate ? session.privateStore : session.dataStore
+            Task { @MainActor [weak self] in
+                guard let self else { replyHandler(nil, "脚本已关闭。"); return }
+                var cookies: [HTTPCookie] = []
+                if ScriptRequestCookies.shouldAttach(page: origin, request: url, permitted: true) {
+                    cookies = await withCheckedContinuation { continuation in store.httpCookieStore.getAllCookies { continuation.resume(returning: $0) } }
+                }
+                session.model?.downloadCenter.start(url: url, suggested: fileName, cookies: cookies, referer: origin.absoluteString)
+                replyHandler(true, nil)
+            }
+        case "cookieList":
+            let host = origin.host ?? ""
+            let store = tab.isPrivate ? session.privateStore : session.dataStore
+            store.httpCookieStore.getAllCookies { cookies in
+                DispatchQueue.main.async { replyHandler(ScriptCookies.listing(cookies, host: host), nil) }
+            }
+        case "cookieSet":
+            let host = origin.host ?? ""
+            let name = String((args["name"] as? String ?? "").prefix(180))
+            let value = String((args["value"] as? String ?? "").prefix(4096))
+            let domain = (args["domain"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? host
+            guard !name.isEmpty, ScriptCookies.hostAllowed(domain, page: host) else { replyHandler(nil, "只能写入当前网站的 cookie。"); return }
+            let path = (args["path"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "/"
+            guard let cookie = HTTPCookie(properties: [.name: name, .value: value, .domain: domain, .path: path]) else { replyHandler(nil, "无法创建 cookie。"); return }
+            let store = tab.isPrivate ? session.privateStore : session.dataStore
+            store.httpCookieStore.setCookie(cookie) { DispatchQueue.main.async { replyHandler(true, nil) } }
+        case "cookieDelete":
+            let host = origin.host ?? ""
+            let name = args["name"] as? String ?? ""
+            let store = tab.isPrivate ? session.privateStore : session.dataStore
+            store.httpCookieStore.getAllCookies { cookies in
+                let matched = cookies.filter { $0.name == name && ScriptCookies.matches($0, host: host) }
+                let group = DispatchGroup()
+                for cookie in matched {
+                    group.enter()
+                    store.httpCookieStore.delete(cookie) { group.leave() }
+                }
+                group.notify(queue: .main) { replyHandler(true, nil) }
+            }
+        case "getTab":
+            replyHandler(Self.tabRecord(tab), nil)
+        case "saveTab":
+            let data = args["data"] ?? [:]
+            guard let object = data as? [String: Any], JSONSerialization.isValidJSONObject(object) else { replyHandler(nil, "标签数据必须是 JSON 对象。"); return }
+            tab.scriptState = object
+            replyHandler(true, nil)
+        case "getTabs":
+            let rows = ScriptTabs.visible(tabs: session.tabs.map { (id: $0.id.uuidString, url: $0.address, title: $0.pageTitle, isPrivate: $0.isPrivate) }, currentPrivate: tab.isPrivate)
+            replyHandler(rows, nil)
+        case "closeTab":
+            session.close(tab)
+            replyHandler(true, nil)
         default: replyHandler(nil, "尚未支持此 API。")
         }
     }
@@ -189,6 +276,11 @@ struct ScriptCommand: Identifiable {
               let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return }
         tab.webView.evaluateJavaScript("globalThis.__rikuganXHREvent && globalThis.__rikuganXHREvent(\(json))", in: nil, in: world) { _, _ in }
+    }
+    static func tabRecord(_ tab: BrowserTab) -> [String: Any] {
+        var item: [String: Any] = ["id": tab.id.uuidString, "url": tab.address, "title": tab.pageTitle]
+        if !tab.scriptState.isEmpty { item["data"] = tab.scriptState }
+        return item
     }
     static func values(_ script: UserScript) -> [String: Any] {
         guard let data = script.storageJSON.data(using: .utf8), let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }

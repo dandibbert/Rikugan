@@ -2,6 +2,13 @@ import UIKit
 import WebKit
 
 extension BrowserSession {
+    func deliverScriptNotification(scriptID: String, noticeID: String) {
+        guard let uuid = UUID(uuidString: scriptID), let script = profile.scripts.first(where: { $0.id == uuid }) else { return }
+        let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
+        let idJS = PageTools.jsString(noticeID) ?? "\"\""
+        let source = "globalThis.__rikuganNotify && globalThis.__rikuganNotify(\(idJS))"
+        for tab in tabs { tab.webView.evaluateJavaScript(source, in: nil, in: world) { _, _ in } }
+    }
     func noteURLChange(_ tab: BrowserTab) {
         let js = "globalThis.__rikuganOnURLChange && globalThis.__rikuganOnURLChange()"
         var worlds: [WKContentWorld] = [.page]

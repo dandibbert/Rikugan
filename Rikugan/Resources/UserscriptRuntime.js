@@ -245,6 +245,93 @@
   const GM_xmlhttpRequest = allowed('xmlHttpRequest') ? details => {
     const request = xhr(details); request.promise.catch(() => {}); return {abort: request.abort};
   } : undefined;
+  const notifyCallbacks = Object.create(null);
+  globalThis.__rikuganNotify = id => {
+    const fn = notifyCallbacks[id];
+    if (typeof fn === 'function') fn();
+  };
+  const GM_notification = allowed('notification') ? (details, title, image, onclick) => {
+    const id = Math.random().toString(36).slice(2);
+    let text = '';
+    let heading = '';
+    let click = onclick;
+    if (details && typeof details === 'object') {
+      text = details.text || details.body || '';
+      heading = details.title || '';
+      click = details.onclick || details.ondone;
+    } else {
+      text = details == null ? '' : String(details);
+      heading = title == null ? '' : String(title);
+    }
+    if (typeof click === 'function') notifyCallbacks[id] = click;
+    void call('notification', { id, title: heading, text: String(text) }).catch(console.error);
+    return id;
+  } : undefined;
+  const GM_download = allowed('download') ? (details, name) => {
+    const url = typeof details === 'string' ? details : (details && details.url);
+    const file = typeof details === 'string' ? name : (details && (details.name || details.filename)) || name;
+    return call('download', { url: String(url || ''), name: file == null ? '' : String(file) });
+  } : undefined;
+  const cookieCall = (operation, details, callback) => {
+    const promise = call(operation, details || {});
+    if (typeof callback === 'function') promise.then(value => callback(value), () => callback(null));
+    return promise;
+  };
+  const GM_cookie = allowed('cookie') ? {
+    list: (details, callback) => cookieCall('cookieList', details, callback),
+    set: (details, callback) => cookieCall('cookieSet', details, callback),
+    delete: (details, callback) => cookieCall('cookieDelete', details, callback)
+  } : undefined;
+  const elementSpec = (parent, tag, attributes) => {
+    let node = parent;
+    let name = tag;
+    let attrs = attributes;
+    if (typeof parent === 'string' && (tag == null || typeof tag === 'object')) { name = parent; attrs = tag || {}; node = null; }
+    const fields = {};
+    let text = '';
+    if (attrs && typeof attrs === 'object') {
+      Object.keys(attrs).forEach(key => {
+        if (key === 'text' || key === 'textContent') text = String(attrs[key]);
+        else if (attrs[key] != null) fields[key] = String(attrs[key]);
+      });
+    }
+    return { parent: node, tag: String(name || 'div'), attrs: fields, text };
+  };
+  const runPageScript = code => {
+    const doc = typeof document === 'undefined' ? null : document;
+    if (!doc || typeof doc.createElement !== 'function' || !doc.documentElement) return null;
+    const el = doc.createElement('script');
+    el.textContent = String(code);
+    doc.documentElement.appendChild(el);
+    if (typeof el.remove === 'function') el.remove();
+    return doc.documentElement;
+  };
+  const GM_addElement = allowed('addElement') ? (parent, tag, attributes) => {
+    const spec = elementSpec(parent, tag, attributes);
+    const doc = typeof document === 'undefined' ? null : document;
+    if (config.isolated) {
+      const payload = JSON.stringify({ tag: spec.tag, attrs: spec.attrs, text: spec.text, id: spec.attrs.id || ('rg-el-' + Math.random().toString(36).slice(2)) });
+      const host = runPageScript('(function(){var spec=' + payload + ';var parent=document.body||document.documentElement;var el=document.createElement(spec.tag);Object.keys(spec.attrs||{}).forEach(function(key){el.setAttribute(key,spec.attrs[key]);});if(spec.text)el.textContent=spec.text;if(!el.id)el.id=spec.id;if(parent&&parent.appendChild)parent.appendChild(el);document.documentElement.setAttribute("data-rg-el",JSON.stringify({id:el.id,tag:el.tagName||spec.tag,text:el.textContent||spec.text}));})()');
+      let parsed = { tag: spec.tag, text: spec.text };
+      try { parsed = JSON.parse((host && host.getAttribute && host.getAttribute('data-rg-el')) || '{}'); } catch (_) {}
+      if (host && host.removeAttribute) host.removeAttribute('data-rg-el');
+      return parsed;
+    }
+    if (!doc || typeof doc.createElement !== 'function') return { tag: spec.tag, text: spec.text, attrs: spec.attrs };
+    const el = doc.createElement(spec.tag);
+    Object.keys(spec.attrs).forEach(key => { if (el.setAttribute) el.setAttribute(key, spec.attrs[key]); });
+    if (spec.text) el.textContent = spec.text;
+    const parentNode = spec.parent && spec.parent.appendChild ? spec.parent : (doc.body || doc.documentElement);
+    if (parentNode && parentNode.appendChild) parentNode.appendChild(el);
+    return el;
+  } : undefined;
+  const GM_getTab = allowed('getTab') ? callback => cookieCall('getTab', {}, callback) : undefined;
+  const GM_saveTab = allowed('saveTab') ? data => call('saveTab', { data: data && typeof data === 'object' ? data : { value: data } }) : undefined;
+  const GM_getTabs = allowed('getTabs') ? callback => cookieCall('getTabs', {}, callback) : undefined;
+  try {
+    const target = typeof window === 'undefined' ? globalThis : window;
+    target.close = () => { void call('closeTab', {}).catch(() => {}); };
+  } catch (_) {}
   const GM = {info: GM_info, addStyle, log: GM_log};
   if (allowed('getValue')) GM.getValue = async (key, fallback) => { const value = await call('getValue', {key: String(key)}); return value === null ? fallback : value; };
   if (allowed('setValue')) GM.setValue = async (key, value) => { values[String(key)] = clone(value); return call('setValue', {key: String(key), value}); };
@@ -257,6 +344,13 @@
   if (menuAllowed) GM.registerMenuCommand = GM_registerMenuCommand;
   if (menuAllowed) GM.unregisterMenuCommand = GM_unregisterMenuCommand;
   if (allowed('xmlHttpRequest')) GM.xmlHttpRequest = details => xhr(details).promise;
+  if (allowed('notification')) GM.notification = async details => GM_notification(details);
+  if (allowed('download')) GM.download = async (details, name) => GM_download(details, name);
+  if (allowed('cookie')) GM.cookie = GM_cookie;
+  if (allowed('addElement')) GM.addElement = async (parent, tag, attributes) => GM_addElement(parent, tag, attributes);
+  if (allowed('getTab')) GM.getTab = async () => call('getTab');
+  if (allowed('saveTab')) GM.saveTab = async data => GM_saveTab(data);
+  if (allowed('getTabs')) GM.getTabs = async () => call('getTabs');
   if (allowed('getResourceText')) GM.getResourceText = async name => resources[name] ? resources[name].text : null;
   if (allowed('getResourceURL')) GM.getResourceURL = async name => resources[name] ? resources[name].url : null;
   const unsafeWindow = (() => {
@@ -432,6 +526,23 @@
     });
   } catch (_) {}
   let ranFor = '';
+  let lastURL = '';
+  const emitURLChange = href => {
+    const next = String(href || '');
+    if (!next || next === lastURL) return;
+    const previous = lastURL;
+    lastURL = next;
+    const info = { url: next, oldURL: previous };
+    const target = typeof window === 'undefined' ? globalThis : window;
+    try { if (typeof target.onurlchange === 'function') target.onurlchange(info); } catch (error) { console.error(error); }
+    try {
+      if (typeof target.dispatchEvent !== 'function') return;
+      let event = { type: 'urlchange', url: next };
+      const Ctor = target.Event || (typeof Event === 'function' ? Event : null);
+      if (Ctor) { event = new Ctor('urlchange'); event.url = next; }
+      target.dispatchEvent(event);
+    } catch (error) {}
+  };
   const schedule = () => {
     if (config.runAt === 'document-body') {
       if (typeof document === 'undefined' || document.body) run();
@@ -452,6 +563,6 @@
     ranFor = current;
     schedule();
   };
-  globalThis.__rikuganOnURLChange = () => { try { boot(location.href); } catch (error) { console.error(error); } };
+  globalThis.__rikuganOnURLChange = () => { try { emitURLChange(location.href); boot(location.href); } catch (error) { console.error(error); } };
   try { boot(location.href); } catch (_) {}
 })();

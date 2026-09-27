@@ -108,7 +108,9 @@ struct UserScript: Codable, Identifiable, Equatable {
         "GM_setClipboard", "GM.setClipboard", "GM_openInTab", "GM.openInTab",
         "GM_registerMenuCommand", "GM.registerMenuCommand", "GM_unregisterMenuCommand", "GM.unregisterMenuCommand",
         "GM_getResourceText", "GM.getResourceText", "GM_getResourceURL", "GM.getResourceURL", "unsafeWindow",
-        "GM_addValueChangeListener", "GM.addValueChangeListener", "GM_removeValueChangeListener", "GM.removeValueChangeListener"
+        "GM_addValueChangeListener", "GM.addValueChangeListener", "GM_removeValueChangeListener", "GM.removeValueChangeListener",
+        "GM_notification", "GM.notification", "GM_download", "GM.download", "GM_cookie", "GM.cookie",
+        "GM_addElement", "GM.addElement", "GM_getTab", "GM.getTab", "GM_saveTab", "GM.saveTab", "GM_getTabs", "GM.getTabs"
     ]
 
     static let capabilityNotes: [String: String] = [
@@ -209,7 +211,9 @@ struct UserScript: Codable, Identifiable, Equatable {
     }
 
     func permits(_ operation: String) -> Bool {
+        if operation == "closeTab" { return true }
         if operation == "abortRequest" { return permits("xmlHttpRequest") }
+        if ["cookieList", "cookieSet", "cookieDelete"].contains(operation) { return permits("cookie") }
         if (operation == "registerMenuCommand" || operation == "unregisterMenuCommand") && grants.contains("none") { return true }
         let name = operation == "xmlHttpRequest" ? "xmlhttpRequest" : operation
         return grants.contains("GM_" + name) || grants.contains("GM." + operation)

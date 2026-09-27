@@ -114,6 +114,11 @@ struct PageNotice: Identifiable, Equatable {
         SystemNotifications.withdraw(Array(chosen))
     }
     func activateExtensionNotice(_ notice: PageNotice, button: Int? = nil) {
+        if notice.extensionNotificationID.hasPrefix("gm:") {
+            let id = String(notice.extensionNotificationID.dropFirst(3))
+            session?.deliverScriptNotification(scriptID: notice.extensionRuntimeID, noticeID: id)
+            return
+        }
         guard !notice.extensionNotificationID.isEmpty else { return }
         pendingExtensionEvents.append(ExtensionNotificationEvent(type: button == nil ? "clicked" : "button", notificationID: notice.extensionNotificationID, buttonIndex: button ?? -1, extensionID: notice.extensionRuntimeID))
         if pendingExtensionEvents.count > 40 { pendingExtensionEvents.removeFirst(pendingExtensionEvents.count - 40) }
