@@ -34,11 +34,8 @@ try {
   if (pending && typeof pending.then === 'function') pending.then(result => { visits = (result && result.visits) || 0; }, () => {});
 } catch (error) {}
 
-api.runtime.onMessage.addListener((message, sender, reply) => {
-  if (message && message.source === 'rikugan-bg-probe') {
-    try { if (typeof reply === 'function') reply({ ready: true }); } catch (error) {}
-    return;
-  }
+api.runtime.onMessage.addListener((message, sender) => {
+  if (message && message.source === 'rikugan-bg-probe') return Promise.resolve({ ready: true });
   if (!message || message.type !== 'rikugan-probe') return;
   visits += 1;
   const count = visits;
@@ -87,6 +84,5 @@ api.runtime.onMessage.addListener((message, sender, reply) => {
       }]), 2000);
     })
     .catch(() => {});
-  try { if (typeof reply === 'function') reply(payload); } catch (error) {}
-  return payload;
+  return Promise.resolve(payload);
 });

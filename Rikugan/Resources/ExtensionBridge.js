@@ -441,14 +441,9 @@
         return;
       }
       var settled = false;
-      var sawCallback = false;
-      var callbackValue;
-      var fallbackTried = false;
-      var timer = null;
       function finish(value) {
         if (settled) return;
         settled = true;
-        if (timer && typeof clearTimeout === 'function') clearTimeout(timer);
         var last = runtime && runtime.lastError;
         if (last && last.message) reject(new Error(last.message));
         else resolve(value);
@@ -461,52 +456,41 @@
         for (var key in value) return value;
         return null;
       }
+      // WebKit returns a promise only when the callback argument is omitted.
+      // Passing a callback makes that promise undefined, so the listener object never arrives.
+      var promised;
+      try { promised = options == null ? send.call(runtime, payload) : send.call(runtime, payload, options); }
+      catch (error) { reject(error); return; }
+      if (promised && typeof promised.then === 'function') {
+        promised.then(function (value) {
+          if (!settled) finish(asBody(value) || value);
+        }, function (error) { if (!settled) reject(error); });
+        return;
+      }
+      var direct = asBody(promised);
+      if (direct) { finish(direct); return; }
       function fromCallback(value) {
-        sawCallback = true;
-        callbackValue = value;
         var body = asBody(value);
         if (body) finish(body);
       }
-      function armFallback(weak) {
-        if (fallbackTried || timer || settled) return;
-        if (typeof setTimeout !== 'function') { finish(asBody(weak) || weak); return; }
-        timer = setTimeout(function () {
-          timer = null;
-          if (settled) return;
-          var pendingBody = asBody(callbackValue);
-          if (pendingBody) { finish(pendingBody); return; }
-          fallbackTried = true;
-          var again;
-          try { again = send.call(runtime, payload); }
-          catch (error) { finish(weak); return; }
-          if (again && typeof again.then === 'function') {
-            again.then(function (value) {
-              if (settled) return;
-              finish(asBody(value) || asBody(callbackValue) || weak);
-            }, function (error) {
-              if (settled) return;
-              if (asBody(callbackValue)) finish(asBody(callbackValue));
-              else reject(error);
-            });
-            return;
-          }
-          if (!settled) finish(asBody(again) || asBody(callbackValue) || weak);
-        }, 100);
+      var callbackResult;
+      try {
+        callbackResult = options == null ? send.call(runtime, payload, fromCallback) : send.call(runtime, payload, options, fromCallback);
+      } catch (error) {
+        if (!settled) finish(promised);
+        return;
       }
-      function accept(value) {
-        if (settled) return;
-        var body = asBody(value) || asBody(callbackValue);
-        if (body) { finish(body); return; }
-        armFallback(sawCallback ? callbackValue : value);
-      }
-      var args = options == null ? [payload, fromCallback] : [payload, options, fromCallback];
-      var result;
-      try { result = send.apply(runtime, args); }
-      catch (error) { reject(error); return; }
       if (settled) return;
-      if (result && typeof result.then === 'function') {
-        result.then(function (value) { accept(value); }, function () { if (!settled) armFallback(callbackValue); });
-      } else accept(result);
+      var callbackBody = asBody(callbackResult);
+      if (callbackBody) { finish(callbackBody); return; }
+      if (callbackResult && typeof callbackResult.then === 'function') {
+        callbackResult.then(function (value) {
+          if (!settled) finish(asBody(value) || value);
+        }, function (error) { if (!settled) reject(error); });
+        return;
+      }
+      if (typeof setTimeout !== 'function') { finish(promised); return; }
+      setTimeout(function () { if (!settled) finish(promised); }, 100);
     });
   }
 

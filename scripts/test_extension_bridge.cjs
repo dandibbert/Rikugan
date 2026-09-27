@@ -341,8 +341,11 @@ function load(extra) {
     chrome: {
       runtime: {
         sendMessage(message, callback) {
-          if (typeof callback === 'function') setTimeout(() => callback({ ok: true, visits: 3 }), 20);
-          return Promise.resolve({});
+          if (typeof callback === 'function') {
+            callback(undefined);
+            return undefined;
+          }
+          return new Promise(resolve => setTimeout(() => resolve({ ok: true, visits: 3 }), 20));
         },
         onMessage: { addListener() {} }
       }
@@ -381,6 +384,28 @@ function load(extra) {
   const emptyCallbackReply = await emptyCallbackHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
   assert.equal(emptyCallbackReply.ok, true);
   assert.equal(emptyCallbackReply.visits, 5);
+
+  let webkitProbeCalls = 0;
+  const webkitHost = load({
+    chrome: {
+      runtime: {
+        sendMessage(message, callback) {
+          if (!message || message.type !== 'rikugan-probe') return Promise.resolve({ ready: true });
+          webkitProbeCalls += 1;
+          if (typeof callback === 'function') {
+            callback(undefined);
+            return undefined;
+          }
+          return Promise.resolve({ ok: true, visits: 6 });
+        },
+        onMessage: { addListener() {} }
+      }
+    }
+  });
+  const webkitReply = await webkitHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
+  assert.equal(webkitProbeCalls, 1);
+  assert.equal(webkitReply.ok, true);
+  assert.equal(webkitReply.visits, 6);
 
   const stressHeard = [];
   const gate = gateHost.__rikuganCreateBackgroundGate();
