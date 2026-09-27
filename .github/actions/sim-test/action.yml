@@ -59,7 +59,7 @@ runs:
         if [ -n "$DATA" ] && [ -d "$DATA/Documents/SelfTestReports" ]; then cp "$DATA"/Documents/SelfTestReports/*.json reports/ || true; fi
         ls reports
         python3 scripts/selftest_report.py reports >> "$GITHUB_STEP_SUMMARY" || true
-        python3 scripts/selftest_report.py reports | head -80 || true
+        python3 scripts/selftest_report.py reports | head -400 || true
     - uses: actions/upload-artifact@v4
       if: always()
       with:

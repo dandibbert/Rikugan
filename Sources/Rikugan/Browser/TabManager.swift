@@ -230,7 +230,9 @@ import UIKit
             if tab.groupID != entry.groupID { tab.groupID = entry.groupID }
             ordered.append(tab)
         }
-        tabs = ordered + tabs.filter(\.isPrivate)
+        // Keep removed tabs in the list until `close` runs: it needs to find them to tear them down,
+        // record them as recently closed and notify extensions (otherwise their web views leak).
+        tabs = ordered + closed + tabs.filter(\.isPrivate)
         for tab in closed { close(tab) }
         if let group = currentGroupID, !groups.contains(where: { $0.id == group }) { switchToGroup(nil) }
         objectWillChange.send()
