@@ -71,6 +71,7 @@ import Combine
     func shutdown() {
         guard !stopped else { return }
         persistTabs(); stopped = true; scriptRefresh?.cancel()
+        model?.downloadCenter.endPrivateSession(profileID)
         memoryWarning = nil; privateScriptStorage.removeAll()
         popupPresenter?.dismiss()
         extensionController.didCloseWindow(self)
@@ -114,6 +115,7 @@ import Combine
         if !tab.isPrivate { extensionController.didCloseTab(tab, windowIsClosing: false) }
         commands.removeAll { $0.tabID == tab.id }; tab.teardown()
         if wasPrivate, !tabs.contains(where: \.isPrivate) {
+            model?.downloadCenter.endPrivateSession(profileID)
             privateStore = .nonPersistent(); privateScriptStorage.removeAll()
         }
         if tabs.isEmpty { addTab() }
@@ -377,6 +379,9 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         preferences.preferredContentMode = desktop ? .desktop : .mobile
         preferences.allowsContentJavaScript = site?.javascriptEnabled ?? true
         guard let url = navigationAction.request.url else { decisionHandler(.cancel, preferences); return }
+        if navigationAction.targetFrame?.isMainFrame == true, ["http", "https"].contains(url.scheme ?? "") {
+            syncContentRules(forHost: url.host)
+        }
         if let kind = InternalPages.kind(url) {
             decisionHandler(.cancel, preferences)
             session?.requestedPanel = kind

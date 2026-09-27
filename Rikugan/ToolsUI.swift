@@ -510,6 +510,9 @@ struct DownloadList: View {
     var body: some View {
         let records = model.profile.downloads
         if records.isEmpty { Text("还没有下载文件").foregroundStyle(.secondary) }
+        if model.session?.tabs.contains(where: \.isPrivate) == true {
+            Text("关闭最后一个无痕标签或切换身份，会取消本次无痕会话中未完成的下载；已保存的文件保留。").font(.caption).foregroundStyle(.secondary)
+        }
         ForEach(records) { record in
             let live = center.live[record.id]
             VStack(alignment: .leading, spacing: 6) {

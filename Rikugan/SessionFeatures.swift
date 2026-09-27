@@ -50,10 +50,10 @@ extension BrowserTab: WKScriptMessageHandler {
         webView.configuration.userContentController.add(self, contentWorld: .page, name: "rikuganPage")
         pageHandlerInstalled = true
     }
-    func syncContentRules() {
+    func syncContentRules(forHost upcomingHost: String? = nil) {
         guard let webView = existingWebView else { return }
         guard let list = session?.contentRuleList else { contentRulesOn = false; return }
-        let host = webView.url?.host ?? URL(string: address)?.host
+        let host = upcomingHost ?? webView.url?.host ?? URL(string: address)?.host
         let allowed = (session?.profile.settings.contentBlocking ?? true) && (session?.profile.site(for: host)?.contentBlocking ?? true)
         let controller = webView.configuration.userContentController
         if allowed && !contentRulesOn { controller.add(list); contentRulesOn = true }

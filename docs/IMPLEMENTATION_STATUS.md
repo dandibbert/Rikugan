@@ -15,6 +15,8 @@
 | 脚本站点和 SPA | 匹配最具体站点规则；允许/禁用站点之间导航与 iframe 继续校验；多个页面环境脚本各自保留 SPA URL hook；document-body 等待 body 插入 | scripts/test_runtime.cjs |
 | 下载 | 导航与媒体统一 WKDownload；使用发起页面的 Cookie store；中心持有 delegate；进度/暂停/续传/取消；HTTP 失败不能标成功；按原身份归档 | BrowserLifecycleTests 的认证/Range 下载；DownloadPolicyTests |
 | 下载重启 | 普通续传令牌受文件保护写盘；重启恢复为暂停或明确失败；无痕令牌不写盘 | DownloadPolicyTests；实际杀进程后续传另需设备验收 |
+| 无痕下载结束 | 最后一个无痕标签关闭/身份切换时取消未完成下载，释放持有的网页与临时 Cookie 容器；已保存文件保留 | BrowserLifecycleTests 的私密下载清理测试 |
+| 广告拦截真实运行 | 修复 WebKit 不支持的正则和白名单排序；保留白名单类型条件；不把不支持的排除规则倒转；原生规则负责网络及元素隐藏，主页面跳转前应用目标站点开关 | ContentBlockerTests：真实规则编译、请求阻断/放行及 CSS 隐藏 |
 | 可交付证据 | IPA 先上传；测试后打包 tests.zip、manifest、源码/夹具/日志/xcresult 与 SHA256SUMS；仅成功主分支发布 prerelease | .github/workflows/build.yml |
 
 `tests.zip/manifest.json` 写入真实 commit、run ID、测试步骤结果。测试源码存在不等于测试通过，以对应 Actions 结果为准。

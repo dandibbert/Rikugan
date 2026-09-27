@@ -90,6 +90,12 @@ enum DownloadPolicy {
     }
     private func adopt(_ download: WKDownload, view: WKWebView, profile: UUID, tabID: UUID, isPrivate: Bool, suggested: String? = nil) {
         guard let model, model.state.profiles.contains(where: { $0.id == profile }) else { download.cancel(nil); return }
+        if isPrivate {
+            guard model.session?.profileID == profile,
+                  model.session?.tabs.contains(where: { $0.id == tabID && $0.isPrivate }) == true else {
+                download.cancel(nil); return
+            }
+        }
         let id = UUID(), name = DownloadPolicy.safeName(suggested ?? download.originalRequest?.url?.lastPathComponent ?? "download")
         owners[id] = profile; originTabs[id] = tabID; views[id] = view
         if isPrivate { privateDownloads.insert(id) }
@@ -158,6 +164,11 @@ enum DownloadPolicy {
     }
     func removeProfile(_ profile: UUID) {
         for id in owners.filter({ $0.value == profile }).map(\.key) { delete(id) }
+    }
+    func endPrivateSession(_ profile: UUID) {
+        // A paused download retains its web view and ephemeral cookie store. Do
+        // not let that hidden reference keep a closed private session alive.
+        for id in privateDownloads.filter({ owners[$0] == profile }) { cancel(id) }
     }
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,

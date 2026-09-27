@@ -1,5 +1,6 @@
 import XCTest
 import WebKit
+import UIKit
 @testable import Rikugan
 
 @MainActor final class BrowserLifecycleTests: XCTestCase {
@@ -17,6 +18,23 @@ import WebKit
         model.session?.shutdown(); session.shutdown(); model.session = nil
         try? FileManager.default.removeItem(at: model.root)
         for id in identifiers { WKWebsiteDataStore.remove(forIdentifier: id) { _ in } }
+    }
+    private func present(_ view: WKWebView) throws -> UIWindow {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        controller.view.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor),
+            view.topAnchor.constraint(equalTo: controller.view.topAnchor),
+            view.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor)
+        ])
+        controller.view.layoutIfNeeded()
+        return window
     }
     private func waitUntil(_ description: String, timeout: TimeInterval = 30,
                            condition: () async -> Bool) async throws {
@@ -119,6 +137,10 @@ import WebKit
         let (model, session) = makeSession(tabs: [SavedTab()])
         defer { clean(model, session) }
         let tab = session.tabs[0]
+        // Exercise an active browser page, not a detached zero-sized WebView
+        // whose process WebKit is allowed to throttle as a background page.
+        let window = try present(tab.webView)
+        defer { window.isHidden = true; window.rootViewController = nil }
         tab.navigate(URL(string: "http://127.0.0.1:8765/")!)
         try await loaded(tab)
         _ = await PageTools.call("(document.cookie = 'download-auth=yes; path=/')", in: tab.webView)
@@ -154,5 +176,24 @@ import WebKit
         let original = try XCTUnwrap(model.state.profiles.first { $0.id == session.profileID })
         XCTAssertEqual(original.downloads.first { $0.id == cancelled }?.state, "cancelled", "Late callbacks must not resurrect downloads or target the new profile")
         XCTAssertTrue(model.profile.downloads.isEmpty)
+    }
+
+    func testLastPrivateTabCancelsDownloadAndReleasesSession() async throws {
+        let (model, session) = makeSession(tabs: [SavedTab()])
+        defer { clean(model, session) }
+        let tab = session.addTab(url: URL(string: "http://127.0.0.1:8765/")!, isPrivate: true)
+        let window = try present(tab.webView)
+        defer { window.isHidden = true; window.rootViewController = nil }
+        try await loaded(tab)
+        _ = await PageTools.call("(document.cookie = 'download-auth=yes; path=/')", in: tab.webView)
+        model.downloadCenter.start(url: URL(string: "http://127.0.0.1:8765/__download.bin")!)
+        try await waitUntil("Private download not registered") { !model.profile.downloads.isEmpty }
+        let id = try XCTUnwrap(model.profile.downloads.first?.id)
+        XCTAssertEqual(model.profile.downloads.first?.source, "")
+        session.close(tab)
+        XCTAssertFalse(model.downloadCenter.hasActiveDownload(tabID: tab.id))
+        XCTAssertEqual(model.profile.downloads.first(where: { $0.id == id })?.state, "cancelled")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: model.directory(session.profileID)
+            .appendingPathComponent("DownloadResume").appendingPathComponent(id.uuidString).path))
     }
 }
