@@ -1,7 +1,10 @@
 name: Build and test iOS
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "cursor/**"
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: write
@@ -24,6 +27,7 @@ jobs:
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           python3 scripts/prepare_resources.py
           node scripts/test_runtime.cjs
+          node scripts/test_page_tools.cjs
           xcodegen generate
       - name: Build unsigned iPhone app
         run: |
@@ -32,6 +36,24 @@ jobs:
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
             CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} ARCHS=arm64 build | tee build-device.log
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
+          rm -rf dist/Payload/Rikugan.app/_CodeSignature
+          find dist/Payload -name embedded.mobileprovision -delete
+          file dist/Payload/Rikugan.app/Rikugan
+          cd dist
+          zip -qry Rikugan-0.2.0-unsigned.ipa Payload
+          rm -rf Payload
+          shasum -a 256 *.ipa > SHA256SUMS.txt
+      - name: Upload installable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rikugan-unsigned-IPA
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 90
       - name: Test core, extension runtime and profile isolation
         run: |
           set -o pipefail
@@ -45,31 +67,14 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build \
             -resultBundlePath TestResults.xcresult -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} | tee test.log
-      - name: Package unsigned IPA
-        run: |
-          mkdir -p dist/Payload
-          cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
-          rm -rf dist/Payload/Rikugan.app/_CodeSignature
-          find dist/Payload -name embedded.mobileprovision -delete
-          file dist/Payload/Rikugan.app/Rikugan
-          cd dist
-          zip -qry Rikugan-0.1.0-unsigned.ipa Payload
-          rm -rf Payload
-          shasum -a 256 *.ipa > SHA256SUMS.txt
-      - name: Upload installable artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Rikugan-unsigned-IPA
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 90
       - name: Publish tested prerelease
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v0.1.0-build.${GITHUB_RUN_NUMBER}"
+          TAG="v0.2.0-build.${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" dist/*.ipa dist/SHA256SUMS.txt \
-            --title "Rikugan 0.1.0 · build ${GITHUB_RUN_NUMBER}" \
+            --title "Rikugan 0.2.0 · build ${GITHUB_RUN_NUMBER}" \
             --target "$GITHUB_SHA" --prerelease --notes-file docs/RELEASE_NOTES.md
       - name: Upload test evidence and logs
         if: always()

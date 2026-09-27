@@ -10,7 +10,13 @@
   <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UILaunchScreen</key><dict/>
-  <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+  <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><true/></dict>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>com.dandibbert.Rikugan</string>
+    <key>CFBundleURLSchemes</key><array><string>rikugan</string></array>
+  </dict></array>
+  <key>NSPhotoLibraryAddUsageDescription</key><string>仅在你把网页图片保存到照片时使用。</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>仅在你允许的网站请求位置时使用。</string>
   <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
   <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoadsInWebContent</key><true/><key>NSAllowsLocalNetworking</key><true/></dict>
@@ -22,7 +28,7 @@
     <key>CFBundleTypeName</key><string>Web Extension or User Script</string>
     <key>CFBundleTypeRole</key><string>Viewer</string>
     <key>LSHandlerRank</key><string>Alternate</string>
-    <key>LSItemContentTypes</key><array><string>public.zip-archive</string><string>com.netscape.javascript-source</string><string>public.plain-text</string></array>
+    <key>LSItemContentTypes</key><array><string>public.zip-archive</string><string>com.netscape.javascript-source</string><string>public.plain-text</string><string>public.font</string><string>public.data</string><string>public.json</string></array>
   </dict></array>
 </dict></plist>
 

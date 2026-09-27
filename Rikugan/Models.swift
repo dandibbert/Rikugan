@@ -11,6 +11,22 @@ struct BrowserProfile: Codable, Identifiable, Equatable {
     var scripts: [UserScript] = []
     var extensions: [ExtensionRecord] = []
     var searchEngine = "https://www.google.com/search?q="
+    var tabGroups: [TabGroup] = []
+    var closedTabs: [ClosedTab] = []
+    var bookmarkFolders: [BookmarkFolder] = []
+    var siteSettings: [SiteSettings] = []
+    var webPermissions: [WebPermission] = []
+    var settings = BrowserSettings()
+    var searchHistory: [String] = []
+    var downloads: [DownloadRecord] = []
+
+    func site(for host: String?) -> SiteSettings? {
+        guard let host = host?.lowercased(), !host.isEmpty else { return nil }
+        return siteSettings.first { $0.host.lowercased() == host } ?? siteSettings.first { host.hasSuffix("." + $0.host.lowercased()) }
+    }
+    func permission(host: String, kind: String) -> String {
+        webPermissions.first { $0.host.lowercased() == host.lowercased() && $0.kind == kind }?.decision ?? "ask"
+    }
 }
 
 struct SavedTab: Codable, Identifiable, Equatable {
@@ -18,6 +34,9 @@ struct SavedTab: Codable, Identifiable, Equatable {
     var url = ""
     var title = "新标签页"
     var desktop = false
+    var groupID: UUID? = nil
+    var isPrivate = false
+    var autoRefreshSeconds = 0
 }
 
 struct PageRecord: Codable, Identifiable, Equatable {
@@ -25,6 +44,7 @@ struct PageRecord: Codable, Identifiable, Equatable {
     var title: String
     var url: String
     var date = Date()
+    var folderID: UUID? = nil
 }
 
 struct ExtensionRecord: Codable, Identifiable, Equatable {
@@ -37,10 +57,12 @@ struct ExtensionRecord: Codable, Identifiable, Equatable {
     var allowedPermissions: [String]
     var allowedPatterns: [String]
     var requestedPatterns: [String]
+    var updateURL = ""
+    var storeID = ""
 }
 
 struct AppState: Codable {
-    var schema = 1
+    var schema = 2
     var profiles: [BrowserProfile]
     var activeProfileID: UUID
     static func fresh() -> AppState {
@@ -67,6 +89,13 @@ struct UserScript: Codable, Identifiable, Equatable {
     var noFrames: Bool
     var enabled = true
     var storageJSON = "{}"
+    var namespace = ""
+    var author = ""
+    var icon = ""
+    var downloadURL = ""
+    var updateURL = ""
+    var resources: [ScriptResource] = []
+    var updatedAt = Date()
     var isolated: Bool { !grants.isEmpty && !grants.contains("none") }
 
     static let supportedGrants: Set<String> = [
@@ -74,7 +103,17 @@ struct UserScript: Codable, Identifiable, Equatable {
         "GM_getValue", "GM.getValue", "GM_setValue", "GM.setValue", "GM_deleteValue", "GM.deleteValue",
         "GM_listValues", "GM.listValues", "GM_xmlhttpRequest", "GM.xmlHttpRequest",
         "GM_setClipboard", "GM.setClipboard", "GM_openInTab", "GM.openInTab",
-        "GM_registerMenuCommand", "GM.registerMenuCommand", "GM_unregisterMenuCommand", "GM.unregisterMenuCommand"
+        "GM_registerMenuCommand", "GM.registerMenuCommand", "GM_unregisterMenuCommand", "GM.unregisterMenuCommand",
+        "GM_getResourceText", "GM.getResourceText", "GM_getResourceURL", "GM.getResourceURL", "unsafeWindow"
+    ]
+
+    static let capabilityNotes: [String: String] = [
+        "GM_getValue": "Supported。同步读取本页缓存，写入后其他标签用 GM.getValue 或刷新。",
+        "GM_xmlhttpRequest": "Partial。无 Cookie、无流式进度，单次 8 MB，按 @connect 检查重定向。",
+        "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
+        "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",
+        "unsafeWindow": "Partial。@grant none 就是页面 window；隔离脚本只能用 unsafeWindow.eval，或给 JSON 可序列化属性赋值。",
+        "document-body": "Supported。document-start 注入后等到 body 存在再执行。"
     ]
 
     static func parse(_ source: String) throws -> UserScript {
@@ -96,8 +135,10 @@ struct UserScript: Codable, Identifiable, Equatable {
         let grants = metadata["grant"] ?? []
         let unsupported = grants.filter { !supportedGrants.contains($0) }
         guard unsupported.isEmpty else { throw RikuganError.message("此版尚不支持这些脚本 API：\(unsupported.joined(separator: ", "))。没有静默安装不兼容脚本。") }
-        guard metadata["resource"] == nil else { throw RikuganError.message("此版尚不支持 @resource。请先使用不依赖外部资源声明的脚本。") }
         guard !(grants.contains("none") && grants.count > 1) else { throw RikuganError.message("@grant none 不能与其他授权混用。") }
+        if grants.contains("unsafeWindow") {
+            throw RikuganError.message("unsafeWindow 是全局对象，不是 @grant。隔离模式下它是 Partial：请直接使用 unsafeWindow，不要把它写进 @grant。")
+        }
         if grants.contains("none") == false && !grants.isEmpty,
            metadata["inject-into"]?.contains("page") == true {
             throw RikuganError.message("带原生权限的脚本只能运行在隔离环境，暂不支持 @inject-into page。")
@@ -108,16 +149,43 @@ struct UserScript: Codable, Identifiable, Equatable {
             guard URLRules.validMatchPattern(pattern) else { throw RikuganError.message("无效的 @match 规则：\(pattern)") }
         }
         let runAt = metadata["run-at"]?.first ?? "document-end"
-        guard ["document-start", "document-end", "document-idle"].contains(runAt) else {
+        guard ["document-start", "document-body", "document-end", "document-idle"].contains(runAt) else {
             throw RikuganError.message("暂不支持注入时机 \(runAt)。")
         }
         let requires = metadata["require"] ?? []
         guard requires.count <= 8 else { throw RikuganError.message("一个脚本最多允许 8 个 @require 依赖。") }
-        return UserScript(name: metadata["name"]?.first ?? "未命名脚本", version: metadata["version"]?.first ?? "1.0",
+        let resources = try resourceList(metadata["resource"] ?? [])
+        var script = UserScript(name: metadata["name"]?.first ?? "未命名脚本", version: metadata["version"]?.first ?? "1.0",
                           description: metadata["description"]?.first ?? "", source: source, matches: matches, includes: includes,
                           excludes: metadata["exclude"] ?? [], excludeMatches: metadata["exclude-match"] ?? [],
                           grants: grants, connects: metadata["connect"] ?? [], requires: requires,
                           runAt: runAt, noFrames: metadata["noframes"] != nil)
+        script.namespace = metadata["namespace"]?.first ?? ""
+        script.author = metadata["author"]?.first ?? ""
+        script.icon = metadata["icon"]?.first ?? ""
+        script.downloadURL = httpsOnly(metadata["downloadURL"]?.first)
+        script.updateURL = httpsOnly(metadata["updateURL"]?.first)
+        script.resources = resources
+        return script
+    }
+
+    private static func httpsOnly(_ value: String?) -> String {
+        guard let value, let url = URL(string: value), url.scheme?.lowercased() == "https" else { return "" }
+        return url.absoluteString
+    }
+    private static func resourceList(_ rows: [String]) throws -> [ScriptResource] {
+        guard rows.count <= 8 else { throw RikuganError.message("一个脚本最多 8 个 @resource。") }
+        var resources: [ScriptResource] = []
+        for raw in rows {
+            let parts = raw.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
+            guard parts.count == 2, let url = URL(string: String(parts[1])), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else {
+                throw RikuganError.message("@resource 需要名称和 HTTP(S) 地址：\(raw)")
+            }
+            let name = String(parts[0])
+            guard !resources.contains(where: { $0.name == name }) else { throw RikuganError.message("@resource 名称重复：\(name)") }
+            resources.append(ScriptResource(name: name, url: url.absoluteString))
+        }
+        return resources
     }
 
     func matchesURL(_ url: URL) -> Bool {
@@ -158,16 +226,39 @@ enum URLRules {
         let path = (components?.percentEncodedPath.isEmpty == false ? components!.percentEncodedPath : "/") + (components?.percentEncodedQuery.map { "?" + $0 } ?? "")
         return glob(String(parts[1][slash...]), value: path)
     }
-    static func inputURL(_ input: String, searchEngine: String) -> URL? {
+    static func directURL(_ value: String) -> URL? {
+        guard let url = URL(string: value), let scheme = url.scheme?.lowercased(),
+              ["https", "http", "rikugan", "chrome", "edge"].contains(scheme) else { return nil }
+        return url
+    }
+    static func inputURL(_ input: String, searchEngine: String, customEngines: [SearchEngine] = []) -> URL? {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
-        if let url = URL(string: value), ["https", "http"].contains(url.scheme?.lowercased() ?? "") { return url }
+        if let direct = directURL(value) { return direct }
+        if let space = value.firstIndex(where: { $0.isWhitespace }) {
+            let key = String(value[..<space])
+            let rest = value[value.index(after: space)...].trimmingCharacters(in: .whitespaces)
+            if let template = SearchEngines.template(for: key, custom: customEngines), !rest.isEmpty {
+                return searchURL(String(rest), template: template)
+            }
+        }
         if !value.contains(where: { $0.isWhitespace }), value.contains(".") || value.hasPrefix("localhost") {
             return URL(string: "https://" + value)
         }
+        return searchURL(value, template: searchEngine)
+    }
+    static func searchURL(_ query: String, template: String) -> URL? {
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "&+=?#")
-        return URL(string: searchEngine + (value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""))
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+        if template.contains("{query}") { return URL(string: template.replacingOccurrences(of: "{query}", with: encoded)) }
+        return URL(string: template + encoded)
+    }
+    static func isSearch(_ input: String) -> Bool {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if directURL(value) != nil { return false }
+        if !value.contains(where: { $0.isWhitespace }), (value.contains(".") || value.hasPrefix("localhost")) { return false }
+        return !value.isEmpty
     }
     static func connectionAllowed(_ url: URL, origin: URL, rules: [String]) -> Bool {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host?.lowercased(), url.user == nil, url.password == nil else { return false }

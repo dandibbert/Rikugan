@@ -20,14 +20,20 @@
       return hostOK && glob(parts[3], url.pathname + url.search);
     } catch (_) { return false; }
   };
-  if (!['http:', 'https:'].includes(location.protocol)) return;
-  if (!(config.matches.some(p => match(p, location.href)) || config.includes.some(p => glob(p, location.href)))) return;
-  if (config.excludes.some(p => glob(p, location.href)) || config.excludeMatches.some(p => match(p, location.href))) return;
+  const matched = href => ['http:', 'https:'].includes(new URL(href).protocol)
+    && (config.matches.some(p => match(p, href)) || config.includes.some(p => glob(p, href)))
+    && !config.excludes.some(p => glob(p, href)) && !config.excludeMatches.some(p => match(p, href));
   const allowed = name => config.grants.includes('GM.' + name) || config.grants.includes('GM_' + (name === 'xmlHttpRequest' ? 'xmlhttpRequest' : name));
   const call = (operation, args = {}) => window.webkit.messageHandlers[config.handler].postMessage({operation, args});
   const values = Object.assign(Object.create(null), config.storage || {});
+  const resources = config.resources || {};
   const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
-  const GM_info = {scriptHandler: 'Rikugan', version: '0.1.0', script: {name: config.name, version: config.version, grants: config.grants}, scriptWillUpdate: false};
+  const GM_info = {
+    scriptHandler: 'Rikugan', version: '0.2.0',
+    script: { name: config.name, namespace: config.namespace || '', version: config.version, author: config.author || '', grants: config.grants, resources: Object.keys(resources) },
+    scriptWillUpdate: false,
+    capabilities: { unsafeWindow: config.isolated ? 'partial' : 'supported', GM_getResourceText: 'supported', GM_xmlhttpRequest: 'partial' }
+  };
   const addStyle = css => {
     const style = document.createElement('style'); style.textContent = String(css);
     (document.head || document.documentElement).appendChild(style); return style;
@@ -44,6 +50,8 @@
   const GM_listValues = allowed('listValues') ? () => Object.keys(values) : undefined;
   const GM_setClipboard = allowed('setClipboard') ? text => call('setClipboard', {text: String(text)}) : undefined;
   const GM_openInTab = allowed('openInTab') ? (url, options = {}) => call('openInTab', {url: String(url), background: options === true || options.active === false}) : undefined;
+  const GM_getResourceText = allowed('getResourceText') ? name => resources[name] ? resources[name].text : undefined : undefined;
+  const GM_getResourceURL = allowed('getResourceURL') ? name => resources[name] ? resources[name].url : undefined : undefined;
   const callbacks = Object.create(null);
   Object.defineProperty(globalThis, '__rikuganCommands', {value: callbacks, configurable: true});
   const GM_registerMenuCommand = allowed('registerMenuCommand') ? (title, callback) => {
@@ -81,13 +89,52 @@
   if (allowed('registerMenuCommand')) GM.registerMenuCommand = GM_registerMenuCommand;
   if (allowed('unregisterMenuCommand')) GM.unregisterMenuCommand = GM_unregisterMenuCommand;
   if (allowed('xmlHttpRequest')) GM.xmlHttpRequest = xhr;
+  if (allowed('getResourceText')) GM.getResourceText = async name => resources[name] ? resources[name].text : null;
+  if (allowed('getResourceURL')) GM.getResourceURL = async name => resources[name] ? resources[name].url : null;
+  const unsafeWindow = (() => {
+    if (!config.isolated) return typeof window === 'undefined' ? globalThis : window;
+    const evalInPage = code => {
+      const el = document.createElement('script');
+      el.textContent = String(code);
+      (document.documentElement || document.head || document.body).appendChild(el);
+      el.remove();
+    };
+    return new Proxy(Object.create(null), {
+      get(_, prop) {
+        if (prop === 'eval') return evalInPage;
+        if (prop === Symbol.toPrimitive || prop === 'then' || prop === Symbol.toStringTag) return undefined;
+        throw new Error('Unsupported API: isolated unsafeWindow.' + String(prop) + ' is Partial. Use unsafeWindow.eval(code).');
+      },
+      set(_, prop, value) {
+        const json = JSON.stringify(value);
+        if (json === undefined) throw new Error('Unsupported API: unsafeWindow assignment only accepts JSON values. Compatibility: Partial.');
+        evalInPage('window[' + JSON.stringify(String(prop)) + '] = ' + json + ';');
+        return true;
+      }
+    });
+  })();
   const run = () => {
     try {
       /*__SOURCE__*/
     } catch (error) { console.error('[Rikugan userscript: ' + config.name + ']', error); }
   };
-  if (config.runAt === 'document-idle') {
-    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, {timeout: 1000});
-    else setTimeout(run, 1);
-  } else run();
+  let ranFor = '';
+  const schedule = () => {
+    if (config.runAt === 'document-body') {
+      if (typeof document === 'undefined' || document.body) run();
+      else document.addEventListener('DOMContentLoaded', run, {once: true});
+    } else if (config.runAt === 'document-idle') {
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(run, {timeout: 1000});
+      else setTimeout(run, 1);
+    } else run();
+  };
+  const boot = href => {
+    let current = href;
+    try { current = href || location.href; if (!matched(current)) return; } catch (_) { return; }
+    if (ranFor === current) return;
+    ranFor = current;
+    schedule();
+  };
+  globalThis.__rikuganOnURLChange = () => { try { boot(location.href); } catch (error) { console.error(error); } };
+  try { boot(location.href); } catch (_) {}
 })();

@@ -21,5 +21,17 @@ const storage = run('https://example.com/', {grants: ['GM_getValue', 'GM_setValu
 assert.equal(storage.sandbox.before, 1); assert.equal(storage.sandbox.after, 2);
 assert.equal(storage.sandbox.unauthorized, 'undefined');
 assert.equal(storage.calls[0].operation, 'setValue');
-console.log('PASS: userscript runtime syntax, URL guards, exclusions, grants and synchronous storage');
+const resources = run('https://example.com/', {
+  grants: ['GM_getResourceText', 'GM_getResourceURL'],
+  resources: { style: { text: 'body{}', url: 'data:text/css;base64,Ym9keXt9' } }
+}, "globalThis.text = GM_getResourceText('style'); globalThis.href = GM_getResourceURL('style'); globalThis.missing = String(GM_getResourceText('nope'));");
+assert.equal(resources.sandbox.text, 'body{}');
+assert.equal(resources.sandbox.href, 'data:text/css;base64,Ym9keXt9');
+assert.equal(resources.sandbox.missing, 'undefined');
+const isolated = run('https://example.com/', { isolated: true }, 'try { unsafeWindow.document; globalThis.leaked = true; } catch (error) { globalThis.partial = String(error.message); }');
+assert.equal(isolated.sandbox.leaked, undefined);
+assert.match(isolated.sandbox.partial, /Partial/);
+const body = run('https://example.com/a', { runAt: 'document-body' });
+assert.equal(body.sandbox.didRun, true);
+console.log('PASS: userscript runtime syntax, URL guards, exclusions, grants, resources and partial unsafeWindow');
 
