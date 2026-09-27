@@ -15,7 +15,7 @@
   - 沉浸式翻译：注入的界面元素。
 - 下载失败记为“未测试”，不会记为通过或失败。
 
-## 当前结果（CI run 36318483508，commit d8cb557，iOS 26.2 模拟器）
+## 当前结果（CI run 36321777638，commit 84b0094，iOS 26.2 模拟器；与 run 36318483508 结果一致）
 
 | 扩展 | 版本 | 来源 | 安装 | 后台 | 内容脚本 | Popup | storage | messaging | ports | scripting | tabs | DNR | 行为 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -23,7 +23,7 @@
 | uBlock Origin Lite | 2026.926.2202 | GitHub `uBOLite_*.chromium.zip` | ✅ | ✅ 0.8 s | — | ✅ | ✅ 109 | ⚪ | ⚪ | ✅ | ✅ | 🟡 ² | ✅ 广告脚本被拦截，对照请求正常 |
 | Violentmonkey | 2.49.0 | GitHub `Violentmonkey-webext-*.zip` | ❌ ³ | — | — | — | — | — | — | — | — | — | — |
 | Tampermonkey | 5.5.0 | Chrome 应用商店 CRX | ✅ | ✅ 0.9 s | — | ❌ ⁴ | ✅ 23 | ✅ | ✅ 6 | ⚪ | ✅ | 🟡 ⁵ | ❌ ⁴ |
-| 沉浸式翻译 | 1.33.3 | Chrome 应用商店 CRX | ✅ | ✅ | ✅ | ❌ ⁶ | ✅ | 🟡 ⁶ | ⚪ | ⚪ | ✅ | ❌ ⁶ | ✅ 界面元素已注入 |
+| 沉浸式翻译 | 1.33.3 | Chrome 应用商店 CRX | ✅ | ✅ 1.0 s | ✅ | ❌ ⁶ | ✅ 463 | 🟡 ⁶ | ⚪ | ⚪ | ✅ | ❌ ⁶ | ✅ 界面元素已注入 |
 
 （数字为观察到的调用次数；⚪ = 该扩展在测试期间没有调用这类 API。）
 
@@ -38,7 +38,12 @@
 3. **Violentmonkey**：Chrome 版仍是 **Manifest V2**，安装时被明确拒绝（“仅支持 Manifest V3 扩展（当前 manifest_version = 2）”）。
 4. **Tampermonkey**：MV3 版的核心依赖 `chrome.userScripts`（`configureWorld`、`onUserScriptConnect`）和 `webRequest`（`onBeforeRequest` 等），Rikugan 都不提供，所以 Popup 为空，无法用它注入脚本。后台、存储、消息、Port 正常。**替代方案**：Rikugan 内置用户脚本管理器（GM API、`unsafeWindow`、`@inject-into`）。
 5. **Tampermonkey DNR**：24 条规则使用 `redirect`，被跳过并列出。
-6. **沉浸式翻译**：界面元素已注入页面；实际翻译需要在线服务，本套件不验证。Popup、messaging 和 DNR 的具体失败信息在该次运行的 Job Summary / `selftest-compat` artifact 中（报告日志从下一次运行起完整输出）。
+6. **沉浸式翻译**：
+   - 内容脚本注入并在页面上生成界面元素；实际翻译需要其在线服务，本套件不验证。
+   - **DNR ❌**：唯一的规则集中 32 条规则全部是 `modifyHeaders`，WebKit 不支持，全部被跳过（明确列出，不是静默失效）。
+   - **Popup ❌**：页面加载但内容为空，没有记录到脚本错误。它申请了 `sidePanel`、`offscreen`、`webRequest`，Rikugan 都不提供，这是最可能的原因，未进一步确认。
+   - **messaging 🟡**：17 次调用中 1 次 `tabs.sendMessage` 返回 “Receiving end does not exist”，目标标签页没有它的内容脚本，与 Chrome 行为一致。
+   - 后台报错 “Cannot find menu item with id toggleTranslatePage”：它更新了一个不存在的右键菜单项，原因未确认，已记录。
 
 ### 修复记录（由此报告驱动）
 
