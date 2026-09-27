@@ -15,6 +15,7 @@ import Combine
     @Published var thumbnails: [UUID: UIImage] = [:]
     @Published var favicons: [UUID: UIImage] = [:]
     @Published var requestedPanel: String?
+    @Published var contentRuleError: String?
     var contexts: [UUID: WKWebExtensionContext] = [:]
     var privateStore: WKWebsiteDataStore = .nonPersistent()
     var contentRuleList: WKContentRuleList?

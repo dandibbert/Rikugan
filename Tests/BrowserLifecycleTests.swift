@@ -131,7 +131,14 @@ import WebKit
         try await waitUntil("Download did not pause") { model.profile.downloads.first?.state == "paused" }
         XCTAssertTrue(model.profile.downloads[0].resumable)
         model.downloadCenter.resume(id)
-        try await waitUntil("Resumed download did not finish") { model.profile.downloads.first?.state == "finished" }
+        do {
+            try await waitUntil("Resumed download did not finish") { model.profile.downloads.first?.state == "finished" }
+        } catch {
+            let details = model.downloadCenter.diagnosticSummary + "\n" + (model.message ?? "")
+            print("DOWNLOAD_DIAGNOSTICS: \(details)")
+            let attachment = XCTAttachment(string: details); attachment.lifetime = .keepAlways; add(attachment)
+            throw error
+        }
         let record = try XCTUnwrap(model.profile.downloads.first)
         let data = try Data(contentsOf: model.downloadCenter.fileURL(record, profile: session.profileID))
         XCTAssertEqual(data.count, 4 * 1024 * 1024)

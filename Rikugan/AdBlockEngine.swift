@@ -44,15 +44,10 @@ enum AdBlockEngine {
         for raw in input.prefix(8000) {
             guard let rule = parse(raw) else { continue }
             switch rule {
-            case .allow(let filter):
-                if let trigger = trigger(filter) { allows.append(["trigger": trigger, "action": ["type": "ignore-previous-rules"]]) }
+            case .allow(let filter, let options):
+                if let trigger = trigger(filter, options: options) { allows.append(["trigger": trigger, "action": ["type": "ignore-previous-rules"]]) }
             case .block(let filter, let options):
-                if var trigger = trigger(filter) {
-                    if let types = options.resourceTypes { trigger["resource-type"] = types }
-                    if options.thirdParty == true { trigger["load-type"] = ["third-party"] }
-                    if options.thirdParty == false { trigger["load-type"] = ["first-party"] }
-                    if !options.ifDomains.isEmpty { trigger["if-domain"] = options.ifDomains }
-                    if !options.unlessDomains.isEmpty { trigger["unless-domain"] = options.unlessDomains }
+                if let trigger = trigger(filter, options: options) {
                     network.append(["trigger": trigger, "action": ["type": "block"]])
                 }
             case .cosmetic(let domains, let selector):
@@ -76,10 +71,11 @@ enum AdBlockEngine {
             ])
         }
         let networkCapped = Array(network.prefix(limit))
-        let full = allows + networkCapped + cosmetic
+        // Exceptions must follow the rules they override, not precede them.
+        let full = cosmetic + networkCapped + allows
         return Compiled(
             json: stringify(full),
-            networkJSON: stringify(allows + networkCapped),
+            networkJSON: stringify(networkCapped + allows),
             globalCSS: global.isEmpty ? "" : global.prefix(200).joined(separator: ",") + "{display:none!important}",
             hostSelectors: hosts.mapValues { Array($0.prefix(40)) },
             blockedSamples: []
@@ -93,7 +89,7 @@ enum AdBlockEngine {
         for raw in lines {
             guard let rule = parse(raw) else { continue }
             switch rule {
-            case .allow(let filter):
+            case .allow(let filter, _):
                 if matches(filter, host: host, absolute: absolute) { return .allow }
             case .block(let filter, _):
                 if matches(filter, host: host, absolute: absolute) { blocked = true }
@@ -106,7 +102,7 @@ enum AdBlockEngine {
 
     private enum Rule {
         case block(String, Options)
-        case allow(String)
+        case allow(String, Options)
         case cosmetic([String], String)
         case unhide(String)
     }
@@ -129,7 +125,9 @@ enum AdBlockEngine {
             let domainPart = String(line[..<range.lowerBound])
             let selector = String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
             guard safe(selector) else { return nil }
-            let domains = domainPart.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "~", with: "") }.filter { !$0.isEmpty }
+            let domains = domainPart.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            // Never invert an unsupported exclusion into an inclusion.
+            guard domains.allSatisfy({ validDomain($0) }) else { return nil }
             return .cosmetic(domains, selector)
         }
         var body = line
@@ -142,7 +140,7 @@ enum AdBlockEngine {
             guard apply(&options, modifiers: String(mods)) else { return nil }
         }
         guard body.hasPrefix("||") || body.hasPrefix("|") else { return nil }
-        return allow ? .allow(body) : .block(body, options)
+        return allow ? .allow(body, options) : .block(body, options)
     }
 
     private static func apply(_ options: inout Options, modifiers: String) -> Bool {
@@ -158,19 +156,24 @@ enum AdBlockEngine {
             case "xmlhttprequest": types.append("raw")
             case "media": types.append("media")
             case "font": types.append("font")
-            case "document", "other", "important", "ping", "websocket", "popup", "all": break
+            case "document": types.append("document")
+            case "other": types.append("raw")
+            case "important", "ping", "websocket", "popup", "all": return false
             default:
                 if token.hasPrefix("domain=") {
                     for domain in token.dropFirst(7).split(separator: "|") {
                         let value = String(domain)
-                        if value.hasPrefix("~") { options.unlessDomains.append(String(value.dropFirst())) }
-                        else { options.ifDomains.append(value) }
+                        let domain = value.hasPrefix("~") ? String(value.dropFirst()) : value
+                        guard validDomain(domain) else { return false }
+                        if value.hasPrefix("~") { options.unlessDomains.append(domain) }
+                        else { options.ifDomains.append(domain) }
                     }
                 } else if token.contains("=") { return false }
                 else { return false }
             }
         }
         if !types.isEmpty { options.resourceTypes = types }
+        if !options.ifDomains.isEmpty && !options.unlessDomains.isEmpty { return false }
         return true
     }
 
@@ -192,7 +195,7 @@ enum AdBlockEngine {
         return true
     }
 
-    private static func trigger(_ filter: String) -> [String: Any]? {
+    private static func trigger(_ filter: String, options: Options) -> [String: Any]? {
         var pattern = filter
         if pattern.hasPrefix("|") && !pattern.hasPrefix("||") { pattern.removeFirst() }
         guard pattern.hasPrefix("||") else { return nil }
@@ -200,11 +203,24 @@ enum AdBlockEngine {
         pattern = pattern.replacingOccurrences(of: "^", with: "")
         let parts = pattern.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
         let domain = String(parts.first ?? "")
-        guard domain.range(of: #"^[A-Za-z0-9.*-]+$"#, options: .regularExpression) != nil else { return nil }
+        guard validDomain(domain) else { return nil }
         let escaped = NSRegularExpression.escapedPattern(for: domain.replacingOccurrences(of: "*.", with: ""))
         let host = "^https?://([^/?#]*\\.)?" + escaped
-        let regex = parts.count > 1 ? host + "/" + NSRegularExpression.escapedPattern(for: String(parts[1])) : host + "([/?#]|$)"
-        return ["url-filter": regex, "url-filter-is-case-sensitive": false]
+        // Canonical HTTP(S) URLs have a path slash. The WebKit regex subset does
+        // not accept disjunctions such as ([/?#]|$), used by the old builtins.
+        let path = parts.count > 1 ? NSRegularExpression.escapedPattern(for: String(parts[1]))
+            .replacingOccurrences(of: "\\*", with: ".*") : ""
+        let regex = host + "(:[0-9]+)?/" + path
+        var result: [String: Any] = ["url-filter": regex, "url-filter-is-case-sensitive": false]
+        if let types = options.resourceTypes { result["resource-type"] = types }
+        if let thirdParty = options.thirdParty { result["load-type"] = [thirdParty ? "third-party" : "first-party"] }
+        if !options.ifDomains.isEmpty { result["if-domain"] = options.ifDomains.map { "*" + $0 } }
+        if !options.unlessDomains.isEmpty { result["unless-domain"] = options.unlessDomains.map { "*" + $0 } }
+        return result
+    }
+
+    private static func validDomain(_ value: String) -> Bool {
+        value.range(of: #"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$"#, options: .regularExpression) != nil
     }
 
     private static func safe(_ selector: String) -> Bool {

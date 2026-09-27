@@ -453,7 +453,8 @@ struct ContentBlockingView: View {
                 TextField("https://…/filters.txt", text: $subURL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("添加并下载") { Task { await addSubscription() } }
             }
-            Text("网络规则编译成 WKContentRuleList，元素隐藏同时走 cosmetic CSS。订阅只解析兼容的子集，单次最多采用约 1500 条网络规则。").font(.footnote).foregroundStyle(.secondary)
+            if let error = model.session?.contentRuleError { Text(error).font(.footnote).foregroundStyle(.red) }
+            Text("网络和元素隐藏规则编译为 WKContentRuleList。只解析兼容子集；不支持的语法不会扩大成无条件拦截，最多约 1500 条网络规则。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("内容拦截")
     }
     private func setting(_ key: WritableKeyPath<BrowserSettings, Bool>) -> Binding<Bool> {

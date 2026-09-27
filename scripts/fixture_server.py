@@ -35,6 +35,7 @@ class Handler(SimpleHTTPRequestHandler):
         if value:
             self.send_header("Content-Range", f"bytes {start}-{end}/{SIZE}")
         self.end_headers()
+        self.log_message("DOWNLOAD start range=%s start=%d end=%d", value, start, end)
         try:
             while start <= end:
                 length = min(32768, end - start + 1)
@@ -42,8 +43,9 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.flush()
                 start += length
                 time.sleep(0.03)
+            self.log_message("DOWNLOAD sent through byte=%d", start - 1)
         except (BrokenPipeError, ConnectionResetError):
-            pass  # Expected when a test pauses or cancels.
+            self.log_message("DOWNLOAD client closed after byte=%d", start - 1)
 
 
 if __name__ == "__main__":

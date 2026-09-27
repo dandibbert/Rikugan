@@ -35,6 +35,15 @@ enum DownloadPolicy {
     private var observations: [UUID: [NSKeyValueObservation]] = [:]
     private var samples: [UUID: (bytes: Int64, time: Date)] = [:]
     private var resumeData: [UUID: Data] = [:]
+    private var diagnostics: [String] = []
+
+    private func note(_ phase: String, id: UUID) {
+        let value = live[id]
+        let line = "\(id.uuidString.prefix(8)) \(phase) state=\(record(id)?.state ?? "missing") bytes=\(value?.received ?? 0)/\(value?.total ?? 0)"
+        diagnostics.append(line); diagnostics = Array(diagnostics.suffix(60))
+        NSLog("Rikugan download %@", line)
+    }
+    var diagnosticSummary: String { diagnostics.joined(separator: "\n") }
 
     func activate(_ model: AppModel) {
         self.model = model
@@ -101,6 +110,7 @@ enum DownloadPolicy {
             }
         ]
         progress(download, id: id)
+        note("attached", id: id)
     }
 
     func pause(_ id: UUID) {
@@ -111,6 +121,7 @@ enum DownloadPolicy {
             self.detach(id, releaseView: data == nil)
             self.storeResumeData(data, id: id)
             self.update(id) { $0.state = data == nil ? "failed" : "paused"; $0.resumable = data != nil }
+            self.note("pause-callback", id: id)
             if data == nil { self.model?.message = "服务器未提供续传数据，下载已停止；可重新下载。" }
         }
     }
@@ -125,6 +136,7 @@ enum DownloadPolicy {
             view = WKWebView(frame: .zero, configuration: configuration); views[id] = view
         }
         update(id) { $0.state = "running"; $0.resumable = true }
+        note("resume-request", id: id)
         view.resumeDownload(fromResumeData: data) { [weak self] download in
             guard let self, self.record(id)?.state == "running" else { download.cancel(nil); return }
             self.attach(download, id: id)
@@ -158,9 +170,11 @@ enum DownloadPolicy {
         let file = String(id.uuidString.prefix(8)) + "-" + name
         update(id) { $0.name = name; $0.fileName = file; $0.total = max(0, response.expectedContentLength) }
         completionHandler(directory(profile: owner).appendingPathComponent(file))
+        note("destination", id: id)
     }
     func downloadDidFinish(_ download: WKDownload) {
         guard let id = identifiers[ObjectIdentifier(download)], let record = record(id), let owner = owners[id] else { return }
+        note("finish-callback", id: id)
         let file = fileURL(record, profile: owner)
         guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
             fail(id, message: "下载完成回调没有对应的文件，未标记为成功。", resume: nil); return
@@ -174,6 +188,7 @@ enum DownloadPolicy {
         fail(id, message: "下载失败：\(error.localizedDescription)", resume: resumeData)
     }
     private func fail(_ id: UUID, message: String, resume: Data?) {
+        note("failed: " + message, id: id)
         persistProgress(id); storeResumeData(resume, id: id)
         update(id) { $0.state = "failed"; $0.resumable = resume != nil }
         detach(id, releaseView: resume == nil)
@@ -189,6 +204,10 @@ enum DownloadPolicy {
             samples[id] = (bytes, now)
         } else if samples[id] == nil { samples[id] = (bytes, now) }
         live[id] = DownloadLive(received: bytes, total: max(0, download.progress.totalUnitCount), speed: speed, updated: now)
+        if (bytes / 1_048_576) != ((record(id)?.received ?? 0) / 1_048_576) {
+            note("progress", id: id)
+            persistProgress(id)
+        }
     }
     private func persistProgress(_ id: UUID) {
         if let value = live[id] { update(id) { $0.received = value.received; $0.total = value.total } }

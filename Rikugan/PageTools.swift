@@ -36,9 +36,12 @@ enum BlockListCoordinator {
     @MainActor static func rebuild(_ session: BrowserSession, announce: Bool = false) async {
         let settings = session.profile.settings
         let compiled = AdBlockEngine.compile(lines: AdBlockEngine.lines(settings: settings))
-        session.globalCosmetic = compiled.globalCSS
+        // Native cosmetic rules carry domain/allow conditions; unconditional CSS
+        // would ignore those conditions and defeat per-site disabling.
+        session.globalCosmetic = ""
+        session.contentRuleError = nil
         let store = WKContentRuleListStore.default()
-        let identifier = "rikugan.rules"
+        let identifier = "rikugan.rules." + session.profileID.uuidString
         if let existing = session.contentRuleList {
             for tab in session.tabs {
                 tab.existingWebView?.configuration.userContentController.remove(existing)
@@ -55,7 +58,8 @@ enum BlockListCoordinator {
             if let list = try? await compile(store, identifier: identifier, json: compiled.networkJSON) {
                 session.contentRuleList = list
             } else {
-                if announce { session.model?.message = "内容规则没有编译成功，已保留样式隐藏。\(error.localizedDescription)" }
+                session.contentRuleError = "内容规则编译失败，未启用拦截：\(error.localizedDescription)"
+                if announce { session.model?.message = session.contentRuleError }
             }
         }
         session.refreshScripts()
