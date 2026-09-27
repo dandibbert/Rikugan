@@ -77,13 +77,13 @@ struct BrowserShell: View {
                 Section {
                     ForEach(session.profile.tabGroups) { group in
                         Text(group.name).font(.headline)
-                        ForEach(session.tabs.filter { $0.groupID == group.id }) { row($0) }
+                        ForEach(session.tabs.filter { $0.windowID == nil && $0.groupID == group.id }) { row($0) }
                     }
                     Text("未分组").font(.headline)
-                    ForEach(session.tabs.filter { $0.groupID == nil && !$0.isPrivate }) { row($0) }
-                    if session.tabs.contains(where: \.isPrivate) {
+                    ForEach(session.tabs.filter { $0.windowID == nil && $0.groupID == nil && !$0.isPrivate }) { row($0) }
+                    if session.tabs.contains(where: { $0.windowID == nil && $0.isPrivate }) {
                         Text("无痕").font(.headline)
-                        ForEach(session.tabs.filter(\.isPrivate)) { row($0) }
+                        ForEach(session.tabs.filter { $0.windowID == nil && $0.isPrivate }) { row($0) }
                     }
                 }
             }.navigationTitle("标签")
@@ -95,7 +95,7 @@ struct BrowserShell: View {
             VStack(spacing: 0) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack {
-                        ForEach(session.tabs) { tab in
+                        ForEach(session.tabs.filter { $0.windowID == nil }) { tab in
                             Button(tab.pageTitle) { session.select(tab) }
                                 .font(.subheadline.weight(tab.id == session.selectedID ? .bold : .regular))
                                 .padding(.horizontal, 10).padding(.vertical, 6)
@@ -108,13 +108,44 @@ struct BrowserShell: View {
         }
     }
     private func row(_ tab: BrowserTab) -> some View {
-        Button { session.select(tab) } label: { HStack { Image(systemName: tab.isPrivate ? "eyeglasses" : "globe"); Text(tab.pageTitle).lineLimit(1) } }
+        Button { session.select(tab) } label: {
+            HStack {
+                tabIcon(tab)
+                Text(tab.pageTitle).lineLimit(1)
+            }
+        }
+    }
+    private func tabIcon(_ tab: BrowserTab) -> some View {
+        Group {
+            if let image = session.favicons[tab.id] ?? hostIcon(tab.address) {
+                Image(uiImage: image).resizable().scaledToFit().frame(width: 16, height: 16).clipShape(RoundedRectangle(cornerRadius: 3))
+            } else {
+                Image(systemName: tab.isPrivate ? "eyeglasses" : "globe")
+            }
+        }
+    }
+    private func hostIcon(_ url: String) -> UIImage? {
+        guard let host = URL(string: url)?.host else { return nil }
+        return session.hostIcons[BrowserSession.faviconKey(host)]
     }
     private func openAnotherWindow() {
-        let tab = session.activeTab
-        let store = tab?.isPrivate == true ? session.privateStore : session.dataStore
-        let id = model.windows.open(store: store, extensions: session.extensionController, url: tab?.webView.url ?? URL(string: tab?.address ?? ""))
-        openWindow(value: id)
+        let windowID = UUID()
+        let source = session.activeTab
+        let url = source?.webView.url ?? URL(string: source?.address ?? "")
+        _ = session.addTab(url: url, activate: false, isPrivate: source?.isPrivate == true, windowID: windowID)
+        openWindow(value: windowID)
+    }
+}
+
+struct BookmarkIcon: View {
+    @ObservedObject var session: BrowserSession
+    var url: String
+    var body: some View {
+        if let host = URL(string: url)?.host, let image = session.hostIcons[BrowserSession.faviconKey(host)] {
+            Image(uiImage: image).resizable().scaledToFit().frame(width: 16, height: 16).clipShape(RoundedRectangle(cornerRadius: 3))
+        } else {
+            Image(systemName: "globe").foregroundStyle(.indigo)
+        }
     }
 }
 
@@ -252,7 +283,7 @@ struct BrowserPage: View {
                 Button { openPanel(.profiles) } label: { Image(systemName: model.profile.symbol).frame(width: 36, height: 30) }.accessibilityLabel("身份空间").accessibilityIdentifier("browser.profiles")
                 Spacer(minLength: 8)
                 Button { share() } label: { Image(systemName: "square.and.arrow.up").frame(width: 32, height: 30) }.disabled(tab.isHome).accessibilityLabel("分享")
-                Button { openPanel(.tabs) } label: { ZStack { Image(systemName: "square.on.square"); Text("\(session.tabs.count)").font(.system(size: 9, weight: .bold)).offset(x: -2, y: 2) }.frame(width: 36, height: 30) }
+                Button { openPanel(.tabs) } label: { ZStack { Image(systemName: "square.on.square"); Text("\(session.tabs.filter { $0.windowID == tab.windowID }.count)").font(.system(size: 9, weight: .bold)).offset(x: -2, y: 2) }.frame(width: 36, height: 30) }
                     .accessibilityLabel("标签页").accessibilityIdentifier("browser.tabs")
                     .contextMenu { shortcutMenu }
                 pageMenu
@@ -261,8 +292,8 @@ struct BrowserPage: View {
     }
     private var pageMenu: some View {
         Menu {
-            Button("新标签页", systemImage: "plus") { session.addTab() }
-            Button("无痕标签页", systemImage: "eyeglasses") { session.addTab(isPrivate: true) }
+            Button("新标签页", systemImage: "plus") { addSibling() }
+            Button("无痕标签页", systemImage: "eyeglasses") { addSibling(isPrivate: true) }
             Button("书签与历史", systemImage: "book") { openPanel(.library) }
             Button("添加书签", systemImage: "bookmark") { session.addBookmark() }.disabled(tab.isHome)
             Divider()
@@ -299,7 +330,7 @@ struct BrowserPage: View {
     }
     private func shortcut(_ id: String) {
         switch id {
-        case "newTab": session.addTab()
+        case "newTab": addSibling()
         case "closeTab": session.close(tab)
         case "dark": cycleDark()
         case "translate": tool = .translate
@@ -311,6 +342,9 @@ struct BrowserPage: View {
         case "find": showFind = true
         default: break
         }
+    }
+    private func addSibling(url: URL? = nil, isPrivate: Bool = false) {
+        session.addTab(url: url, activate: tab.windowID == nil, isPrivate: isPrivate, windowID: tab.windowID)
     }
     private func cycleDark() {
         let order = ["off", "auto", "on"]
@@ -420,7 +454,7 @@ struct HomeView: View {
                     let pages = model.profile.bookmarks.isEmpty ? [PageRecord(title: "Google", url: "https://www.google.com"), PageRecord(title: "GitHub", url: "https://github.com"), PageRecord(title: "扩展自检页", url: "https://example.com")] : Array(model.profile.bookmarks.prefix(8))
                     ForEach(pages) { page in
                         Button { session.activeTab?.navigate(URL(string: page.url)!) } label: {
-                            HStack { Image(systemName: "globe").foregroundStyle(.indigo); Text(page.title).lineLimit(1); Spacer(); Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(.tertiary) }
+                            HStack { BookmarkIcon(session: session, url: page.url); Text(page.title).lineLimit(1); Spacer(); Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(.tertiary) }
                                 .padding(16).background(.background, in: RoundedRectangle(cornerRadius: 14))
                         }.buttonStyle(.plain)
                     }
@@ -458,6 +492,7 @@ struct TabsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var model: AppModel
     @ObservedObject var session: BrowserSession
+    var windowID: UUID? = nil
     @State private var naming = false
     @State private var groupName = ""
     var body: some View {
@@ -467,22 +502,24 @@ struct TabsView: View {
                     if !model.profile.closedTabs.isEmpty {
                         Button("恢复最近关闭 · \(model.profile.closedTabs[0].title)", systemImage: "arrow.uturn.backward") { session.reopenClosed() }
                     }
-                    if !session.tabs.filter(\.isPrivate).isEmpty { groupBlock(title: "无痕", tabs: session.tabs.filter(\.isPrivate), group: nil) }
+                    if !scoped(session.tabs.filter(\.isPrivate)).isEmpty { groupBlock(title: "无痕", tabs: scoped(session.tabs.filter(\.isPrivate)), group: nil) }
                     ForEach(model.profile.tabGroups) { group in
-                        groupBlock(title: group.name, tabs: session.tabs.filter { $0.groupID == group.id && !$0.isPrivate }, group: group)
+                        groupBlock(title: group.name, tabs: scoped(session.tabs.filter { $0.groupID == group.id && !$0.isPrivate }), group: group)
                     }
-                    groupBlock(title: "未分组", tabs: session.tabs.filter { $0.groupID == nil && !$0.isPrivate }, group: nil)
+                    groupBlock(title: "未分组", tabs: scoped(session.tabs.filter { $0.groupID == nil && !$0.isPrivate }), group: nil)
                 }.padding(16)
             }.navigationTitle("标签页")
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) { Button("新建", systemImage: "plus") { session.addTab(); dismiss() } }
+                    ToolbarItem(placement: .topBarLeading) { Button("新建", systemImage: "plus") { session.addTab(windowID: windowID); dismiss() } }
                     ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
                     ToolbarItem(placement: .bottomBar) {
                         Menu("整理") {
-                            Button("无痕标签") { session.addTab(isPrivate: true); dismiss() }
+                            Button("无痕标签") { session.addTab(isPrivate: true, windowID: windowID); dismiss() }
                             Button("新建标签组") { naming = true }
-                            Button("关闭全部") { session.closeAllTabs() }
-                            if let current = session.activeTab { Button("关闭其他") { session.closeOthers(keeping: current) } }
+                            Button("关闭全部") { session.closeAllTabs(in: windowID) }
+                            if let current = scoped(session.tabs).first(where: { $0.id == (windowID == nil ? session.selectedID : model.windows.selection[windowID]) }) ?? scoped(session.tabs).first {
+                                Button("关闭其他") { session.closeOthers(keeping: current) }
+                            }
                         }
                     }
                 }
@@ -511,11 +548,15 @@ struct TabsView: View {
         }
     }
     private func card(_ tab: BrowserTab) -> some View {
-        Button { session.select(tab); dismiss() } label: {
+        Button {
+            if let windowID { model.windows.select(tab.id, in: windowID) } else { session.select(tab) }
+            dismiss()
+        } label: {
             VStack(alignment: .leading, spacing: 6) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10).fill(Color(uiColor: .secondarySystemFill))
                     if let image = session.thumbnails[tab.id] { Image(uiImage: image).resizable().scaledToFill() }
+                    else if let icon = session.favicons[tab.id] ?? Self.hostIcon(session, tab.address) { Image(uiImage: icon).resizable().scaledToFit().frame(width: 28, height: 28) }
                     else { Image(systemName: tab.isHome ? "house" : (tab.isPrivate ? "eyeglasses" : "globe")).font(.title2).foregroundStyle(.secondary) }
                 }.frame(height: 92).clipped().clipShape(RoundedRectangle(cornerRadius: 10))
                 Text(tab.pageTitle).font(.subheadline).lineLimit(1)
@@ -533,6 +574,11 @@ struct TabsView: View {
                 ForEach(model.profile.tabGroups) { group in Button(group.name) { session.move(tab, to: group.id) } }
             }
         }
+    }
+    private func scoped(_ tabs: [BrowserTab]) -> [BrowserTab] { tabs.filter { $0.windowID == windowID } }
+    private static func hostIcon(_ session: BrowserSession, _ url: String) -> UIImage? {
+        guard let host = URL(string: url)?.host else { return nil }
+        return session.hostIcons[BrowserSession.faviconKey(host)]
     }
 }
 
@@ -589,7 +635,7 @@ struct LibraryView: View {
                     }
                     if filteredBookmarks.isEmpty { ContentUnavailableView("还没有书签", systemImage: "book") }
                     ForEach(filteredBookmarks) { page in
-                        Button { open(page.url) } label: { VStack(alignment: .leading) { Text(page.title).lineLimit(1); Text(page.url).font(.caption).foregroundStyle(.secondary).lineLimit(1) } }
+                        Button { open(page.url) } label: { HStack { BookmarkIcon(session: session, url: page.url); VStack(alignment: .leading) { Text(page.title).lineLimit(1); Text(page.url).font(.caption).foregroundStyle(.secondary).lineLimit(1) } } }
                             .swipeActions {
                                 Button("删除", role: .destructive) { model.updateProfile(session.profileID) { $0.bookmarks.removeAll { $0.id == page.id } } }
                                 Button("编辑") { BrowserPresentation.input(title: "编辑书签", message: page.url, initial: page.title) { title in

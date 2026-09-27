@@ -243,5 +243,25 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(settings.homepageURL, "")
         XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "notifications" }?.level, "Unsupported")
     }
+    func testGrantNonePageWorldAndRequire() throws {
+        let page = """
+        // ==UserScript==
+        // @name Page
+        // @match https://example.com/*
+        // @require https://example.com/lib.js
+        // @grant none
+        // ==/UserScript==
+        unsafeWindow.document.title = "x";
+        """
+        let script = try UserScript.parse(page)
+        XCTAssertFalse(script.isolated)
+        XCTAssertEqual(script.requires, ["https://example.com/lib.js"])
+        XCTAssertTrue(script.permits("registerMenuCommand"))
+        XCTAssertFalse(BrowserSession.shouldPersistTab(isPrivate: false, windowID: UUID()))
+        XCTAssertFalse(BrowserSession.shouldPersistTab(isPrivate: true, windowID: nil))
+        XCTAssertTrue(BrowserSession.shouldPersistTab(isPrivate: false, windowID: nil))
+        XCTAssertEqual(BrowserSession.faviconKey("News.Example.com"), "news.example.com")
+        XCTAssertFalse(BrowserSession.faviconKey("a/b").contains("/"))
+    }
 }
 

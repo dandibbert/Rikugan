@@ -86,7 +86,7 @@ struct ScriptCommand: Identifiable {
         case "openInTab":
             guard let raw = args["url"] as? String, let url = URL(string: raw, relativeTo: origin)?.absoluteURL,
                   ["http", "https"].contains(url.scheme ?? "") else { replyHandler(nil, "只能打开 HTTP(S) 页面。"); return }
-            session.addTab(url: url, activate: !(args["background"] as? Bool ?? false))
+            session.addTab(url: url, activate: !(args["background"] as? Bool ?? false), windowID: tab.windowID)
             replyHandler(true, nil)
         case "registerMenuCommand":
             guard message.frameInfo.isMainFrame, let id = args["id"] as? String, let title = args["title"] as? String else { replyHandler(nil, "菜单命令仅支持顶层页面。"); return }

@@ -13,6 +13,7 @@ import WebKit
     @Published var commands: [ScriptCommand] = []
     @Published var thumbnails: [UUID: UIImage] = [:]
     @Published var favicons: [UUID: UIImage] = [:]
+    @Published var hostIcons: [String: UIImage] = [:]
     @Published var requestedPanel: String?
     var contexts: [UUID: WKWebExtensionContext] = [:]
     var privateStore: WKWebsiteDataStore = .nonPersistent()
@@ -26,7 +27,16 @@ import WebKit
     private var scriptRefresh: Task<Void, Never>?
     private var stopped = false
     var profile: BrowserProfile { model?.state.profiles.first { $0.id == profileID } ?? BrowserProfile(name: "个人") }
-    var activeTab: BrowserTab? { tabs.first { $0.id == selectedID } ?? tabs.first }
+    var activeTab: BrowserTab? {
+        if let selected = tabs.first(where: { $0.id == selectedID && $0.windowID == nil }) { return selected }
+        return tabs.first { $0.windowID == nil }
+    }
+    static func shouldPersistTab(isPrivate: Bool, windowID: UUID?) -> Bool { !isPrivate && windowID == nil }
+    static func faviconKey(_ host: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-"))
+        let mapped = host.lowercased().unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
+        return String(mapped.prefix(180))
+    }
     var isActive: Bool { !stopped && model?.state.activeProfileID == profileID }
 
     init(model: AppModel, profileID: UUID) {
@@ -37,6 +47,7 @@ import WebKit
         extensionController = WKWebExtensionController(configuration: config)
         super.init()
         extensionController.delegate = self
+        loadFaviconCache()
         let saved = profile.tabs.isEmpty ? [SavedTab()] : profile.tabs
         tabs = saved.map { BrowserTab(saved: $0, session: self) }
         selectedID = saved.contains(where: { $0.id == profile.selectedTabID }) ? profile.selectedTabID : saved.first?.id
@@ -71,12 +82,20 @@ import WebKit
         tabs.removeAll()
         extensionController.delegate = nil
     }
-    @discardableResult func addTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false, groupID: UUID? = nil) -> BrowserTab {
+    @discardableResult func addTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false, groupID: UUID? = nil, windowID: UUID? = nil) -> BrowserTab {
         var saved = SavedTab(isPrivate: isPrivate, groupID: groupID)
         if let groupID { saved.groupID = groupID }
         let tab = BrowserTab(saved: saved, session: self, configuration: configuration)
+        tab.windowID = windowID
         tabs.append(tab); extensionController.didOpenTab(tab)
-        if activate { select(tab) }
+        if let windowID {
+            model?.windows.select(tab.id, in: windowID)
+            if activate {
+                let previous = tabs.first { $0.id == selectedID }
+                extensionController.didActivateTab(tab, previousActiveTab: previous)
+            }
+        } else if activate { select(tab) }
+        installPageTools(on: tab)
         if let url { tab.navigate(url) }
         else if !isPrivate, profile.settings.homepage == "custom", let home = URL(string: profile.settings.homepageURL), !profile.settings.homepageURL.isEmpty { tab.navigate(home) }
         else if !isPrivate, profile.settings.homepage == "blank" { tab.isHome = false; tab.navigate(URL(string: "about:blank")!) }
@@ -99,6 +118,7 @@ import WebKit
         }
         let wasActive = selectedID == tab.id
         let wasPrivate = tab.isPrivate
+        let windowID = tab.windowID
         tabs.remove(at: index); thumbnails[tab.id] = nil; favicons[tab.id] = nil
         extensionController.didCloseTab(tab, windowIsClosing: false)
         commands.removeAll { $0.tabID == tab.id }; tab.teardown()
@@ -107,15 +127,40 @@ import WebKit
             privateStore = .nonPersistent()
             privateScriptValues.removeAll()
         }
-        if tabs.isEmpty { addTab() }
-        else if wasActive { select(tabs[min(index, tabs.count - 1)]) }
+        let main = tabs.filter { $0.windowID == nil }
+        if windowID == nil {
+            if main.isEmpty { addTab() }
+            else if wasActive { select(main[min(index, main.count - 1)]) }
+        } else {
+            let siblings = tabs.filter { $0.windowID == windowID }
+            if model?.windows.selection[windowID] == tab.id { model?.windows.replace(siblings.last?.id, in: windowID) }
+            if wasActive, let fallback = main.last { select(fallback) }
+        }
         persistTabs()
     }
     func persistTabs() {
         guard !stopped else { return }
-        let snapshots = tabs.filter { !$0.isPrivate }.map(\.snapshot)
-        let selected = tabs.first { $0.id == selectedID && !$0.isPrivate }?.id ?? snapshots.first?.id
+        let snapshots = tabs.filter { Self.shouldPersistTab(isPrivate: $0.isPrivate, windowID: $0.windowID) }.map(\.snapshot)
+        let selected = tabs.first { $0.id == selectedID && Self.shouldPersistTab(isPrivate: $0.isPrivate, windowID: $0.windowID) }?.id ?? snapshots.first?.id
         model?.updateProfile(profileID) { $0.tabs = snapshots.isEmpty ? [SavedTab()] : snapshots; $0.selectedTabID = selected }
+    }
+    func storeFavicon(_ image: UIImage, host: String) {
+        let key = Self.faviconKey(host)
+        guard !key.isEmpty else { return }
+        hostIcons[key] = image
+        guard let model, let data = image.pngData() else { return }
+        let folder = model.directory(profileID).appendingPathComponent("Favicons", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? data.write(to: folder.appendingPathComponent(key + ".png"), options: .atomic)
+    }
+    func loadFaviconCache() {
+        guard let model else { return }
+        let folder = model.directory(profileID).appendingPathComponent("Favicons", isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
+        for file in files where file.pathExtension.lowercased() == "png" {
+            let key = file.deletingPathExtension().lastPathComponent
+            if hostIcons[key] == nil, let image = UIImage(contentsOfFile: file.path) { hostIcons[key] = image }
+        }
     }
     func recordVisit(_ tab: BrowserTab) {
         guard !tab.isPrivate, let url = tab.webView.url, ["http", "https"].contains(url.scheme ?? "") else { return }
@@ -134,15 +179,18 @@ import WebKit
         }
         model?.message = "已添加到「\(profile.name)」的书签。"
     }
+    func installPageTools(on tab: BrowserTab) {
+        let hostJSON = (try? JSONSerialization.data(withJSONObject: hostCSS)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic, hostCSS: hostJSON, procedural: proceduralJSON)
+        tab.ensurePageHandler()
+        tab.syncContentRules()
+    }
     func refreshScripts() {
         guard isActive else { return }
         for tab in tabs {
             let allowed = tab.userscriptsAllowed
             tab.scriptEngine.configure(tab.webView.configuration.userContentController, scripts: allowed ? profile.scripts : [])
-            let hostJSON = (try? JSONSerialization.data(withJSONObject: hostCSS)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-            PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic, hostCSS: hostJSON, procedural: proceduralJSON)
-            tab.ensurePageHandler()
-            tab.syncContentRules()
+            installPageTools(on: tab)
         }
     }
     func scheduleScriptRefresh() {
@@ -189,6 +237,7 @@ import WebKit
     private var downloads: [ObjectIdentifier: URL] = [:]
     var isPrivate: Bool
     var groupID: UUID?
+    var windowID: UUID?
     var autoRefreshSeconds: Int
     var contentRulesOn = false
     var installedRuleLists: [WKContentRuleList] = []
@@ -388,11 +437,11 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         if popup == "block" { return nil }
         if popup == "ask" {
             BrowserPresentation.confirm(title: host.isEmpty ? "弹窗" : host, message: "这个网页想打开新标签页。") { allowed in
-                if allowed, let url = navigationAction.request.url { session.addTab(url: url, activate: true, configuration: configuration) }
+                if allowed, let url = navigationAction.request.url { session.addTab(url: url, activate: true, configuration: configuration, windowID: windowID) }
             }
             return nil
         }
-        return session.addTab(activate: true, configuration: configuration).webView
+        return session.addTab(activate: true, configuration: configuration, windowID: windowID).webView
     }
     func webViewDidClose(_ webView: WKWebView) { session?.close(self) }
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo,

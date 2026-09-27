@@ -83,7 +83,40 @@ const dom = run('https://example.com/', { isolated: true }, "globalThis.got = un
   document: { createElement() { return { textContent: '', remove() {} }; }, documentElement: domElement }
 });
 assert.equal(dom.sandbox.got, 'Ad:div.ad');
+const node = { textContent: 'old', attrs: { id: 'p1' }, getAttribute(name) { return this.attrs[name]; } };
+const domDoc = { title: 'T', querySelector() { return node; } };
+const nodePage = { document: domDoc };
+const domHost = {
+  attrs: {},
+  appendChild(el) { vm.runInNewContext(el.textContent, { window: nodePage, document: { documentElement: domHost }, JSON }); },
+  setAttribute(name, value) { this.attrs[name] = value; },
+  getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+  removeAttribute(name) { delete this.attrs[name]; }
+};
+const domOps = run('https://example.com/', { isolated: true }, "const el = unsafeWindow.document.querySelector('p'); globalThis.before = el.textContent; el.textContent = 'set-ok'; globalThis.after = el.textContent; globalThis.attr = el.getAttribute('id'); globalThis.title = unsafeWindow.document.title;", {
+  document: { createElement() { return { textContent: '', remove() {} }; }, documentElement: domHost }
+});
+assert.equal(domOps.sandbox.before, 'old');
+assert.equal(domOps.sandbox.after, 'set-ok');
+assert.equal(node.textContent, 'set-ok');
+assert.equal(domOps.sandbox.attr, 'p1');
+assert.equal(domOps.sandbox.title, 'T');
+const blockedFn = run('https://example.com/', { isolated: true }, "try { unsafeWindow.document.title = function () { return 1; }; globalThis.sent = true; } catch (error) { globalThis.blocked = String(error.message); }", {
+  document: { createElement() { return { textContent: '', remove() {} }; }, documentElement: domHost }
+});
+assert.equal(blockedFn.sandbox.sent, undefined);
+assert.match(blockedFn.sandbox.blocked, /Partial/);
+assert.equal(domDoc.title, 'T');
+const pageWindow = {
+  webkit: { messageHandlers: { test: { postMessage() { return Promise.resolve(true); } } } },
+  document: { title: 'old', querySelector() { return { id: 'p9', getAttribute(name) { return name === 'id' ? this.id : null; } }; } }
+};
+const direct = run('https://example.com/', { isolated: false, grants: ['none'] }, "globalThis.same = unsafeWindow === window; unsafeWindow.document.title = 'direct'; globalThis.title = unsafeWindow.document.title; globalThis.attr = unsafeWindow.document.querySelector('p').getAttribute('id');", { window: pageWindow });
+assert.equal(direct.sandbox.same, true);
+assert.equal(pageWindow.document.title, 'direct');
+assert.equal(direct.sandbox.title, 'direct');
+assert.equal(direct.sandbox.attr, 'p9');
 const body = run('https://example.com/a', { runAt: 'document-body' });
 assert.equal(body.sandbox.didRun, true);
-console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow DOM bridge, menu, xhr and listeners');
+console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow get/set/call, page-world window, menu, xhr and listeners');
 

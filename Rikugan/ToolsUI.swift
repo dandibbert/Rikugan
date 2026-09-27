@@ -666,7 +666,7 @@ struct ContentBlockingView: View {
                 TextField("https://…/filters.txt", text: $subURL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("添加并下载") { Task { await addSubscription() } }
             }
-            Text("订阅按原文件编译，单次下载上限 8 MB，够一份完整的 EasyList 体量；不在解析时砍到 1500 条。网络规则按每 5 万条切成 WKContentRuleList（Safari 内容拦截扩展的实际上限；WebKit 没有公开硬顶，编译失败的段会退回纯网络规则）。支持例外规则、资源类型、域名、元素隐藏、样式注入，以及 :has、:has-text、:contains、:xpath、:matches-css、:upward、:remove、:style。不处理 scriptlet 和 redirect。这不是把 EasyList 内置进包里。").font(.footnote).foregroundStyle(.secondary)
+            Text("规格里的规则是内置列表、自定义规则、第三方 AdGuard 列表、WKContentRuleList 网络过滤和 CSS 元素隐藏。订阅按原文件编译，单次下载上限 8 MB，够一份完整列表的体量；不在解析时砍到 1500 条。网络规则按每 5 万条切成 WKContentRuleList 并安装到网页（Safari 内容拦截扩展的实际上限；WebKit 没有公开硬顶，编译失败的段会退回纯网络规则）。支持例外规则、资源类型、域名、元素隐藏、样式注入，以及 :has、:has-text、:contains、:xpath、:matches-css、:upward、:remove、:style。scriptlet 和 redirect 不在这组规则里，编译时会丢掉。EasyList 没有打进安装包。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("内容拦截")
     }
     private func setting(_ key: WritableKeyPath<BrowserSettings, Bool>) -> Binding<Bool> {

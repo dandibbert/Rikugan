@@ -46,7 +46,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 ## 浏览器功能
 
-多标签、标签组（缩略图写入身份目录，网格里可以重命名和删除分组）、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照）、地址栏关键词与可改名/删除的自定义 `{query}` 引擎、Google / Bing / DuckDuckGo 搜索建议（设置里可关）、前进/后退/标签按钮长按快捷动作、自动刷新（恢复会话后继续当前标签的计时）、系统分享、页内查找（`WKWebView.find`，匹配次数用只读文本统计，不往页面插 `<mark>`）、桌面版模式、按 `parentID` 嵌套的书签文件夹（删除文件夹时子项回到上一层）、按天历史、下载暂停/继续。`URLSession` 路径有速度和剩余时间，并带上 `WKWebsiteDataStore` 的 Cookie。网页触发的 `WKDownload` 走 WebKit 会话（因此带页面 Cookie），可以取消并拿 resume data 再 `resumeDownload`。公开的 `WKDownloadDelegate` 没有字节回调，进度、速度和剩余时间来自目标文件在磁盘上的增长。下载列表的「保存到文件」用 `UIDocumentPickerViewController` 导出已完成的文件。站点权限含摄像头、麦克风、位置、剪贴板、通知、弹窗和外部跳转。允许通知后，页面 `Notification` 进入 App 内通知列表和顶部提示；iOS 不会因此弹出系统横幅。iPhone 保持单栏界面；较宽的 iPad 使用侧栏和标签条。「新窗口」打开 `WindowSession`：自己的标签条、地址栏、前进、后退和刷新，每个标签是单独的 `WKWebView`，共用当前身份的数据存储。
+多标签、标签组（缩略图写入身份目录，网格里可以重命名和删除分组）、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照）、地址栏关键词与可改名/删除的自定义 `{query}` 引擎、Google / Bing / DuckDuckGo 搜索建议（设置里可关）、前进/后退/标签按钮长按快捷动作、自动刷新（恢复会话后继续当前标签的计时）、系统分享、页内查找（`WKWebView.find`，匹配次数用只读文本统计，不往页面插 `<mark>`）、桌面版模式、按 `parentID` 嵌套的书签文件夹（删除文件夹时子项回到上一层）、按天历史、下载暂停/继续。`URLSession` 路径有速度和剩余时间，并带上 `WKWebsiteDataStore` 的 Cookie。网页触发的 `WKDownload` 走 WebKit 会话（因此带页面 Cookie），可以取消并拿 resume data 再 `resumeDownload`。公开的 `WKDownloadDelegate` 没有字节回调，进度、速度和剩余时间来自目标文件在磁盘上的增长。下载列表的「保存到文件」用 `UIDocumentPickerViewController` 导出已完成的文件。站点权限含摄像头、麦克风、位置、剪贴板、通知、弹窗和外部跳转。允许通知后，页面 `Notification` 进入 App 内通知列表和顶部提示；iOS 不会因此弹出系统横幅。iPhone 保持单栏界面；较宽的 iPad 使用侧栏和标签条。「新窗口」在同一个 `BrowserSession` 里再开一组 `BrowserTab`，所以脚本、内容规则、下载、页内查找、阅读模式和页面菜单都会跑。这些标签不写入主窗口保存的标签列表。切换标签不会新建 `WKWebView`。
 
 另外有：
 
@@ -88,7 +88,7 @@ cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
 
 ## 主要目录
 
-`Models.swift`：数据结构、脚本元数据、URL 权限与 ZIP 检查。`FeatureModels.swift` / `StateMigration.swift`：标签组、站点设置、搜索建议、播放列表解析、备份和 schema 1 升级。`AppModel.swift`：持久化与身份切换。`BrowserSession.swift` / `SessionFeatures.swift`：标签、查找、下载接入和内容规则。`Windows.swift`：第二个窗口自己的标签会话。`DownloadCenter.swift`：URLSession 与 WKDownload。`ExtensionHost.swift` / `ExtensionPackage.swift`：WebExtension 宿主、CRX、更新 XML 和兼容表。`AdBlockEngine.swift`：广告规则子集。`UserScriptEngine.swift` / `UserscriptRuntime.js`：隔离桥接与 GM API。`PageTools.js`：暗黑样式、阅读结构、查找计数、媒体列表、元素选择和填充。`BrowserUI.swift` / `AddonsUI.swift` / `ToolsUI.swift`：界面。`ShareExtension/`：系统分享。`Tests` / `UITests`：测试。
+`Models.swift`：数据结构、脚本元数据、URL 权限与 ZIP 检查。`FeatureModels.swift` / `StateMigration.swift`：标签组、站点设置、搜索建议、播放列表解析、备份和 schema 1 升级。`AppModel.swift`：持久化与身份切换。`BrowserSession.swift` / `SessionFeatures.swift`：标签、查找、下载接入和内容规则。`Windows.swift`：第二个窗口复用 `BrowserSession` 的 `BrowserTab`。`DownloadCenter.swift`：URLSession 与 WKDownload。`ExtensionHost.swift` / `ExtensionPackage.swift`：WebExtension 宿主、CRX、更新 XML 和兼容表。`AdBlockEngine.swift`：广告规则子集。`UserScriptEngine.swift` / `UserscriptRuntime.js`：隔离桥接与 GM API。`PageTools.js`：暗黑样式、阅读结构、查找计数、媒体列表、元素选择和填充。`BrowserUI.swift` / `AddonsUI.swift` / `ToolsUI.swift`：界面。`ShareExtension/`：系统分享。`Tests` / `UITests`：测试。
 
 ## Apple / WebKit 参考
 

@@ -1,158 +1,115 @@
 import SwiftUI
-import WebKit
 
+/// Auxiliary iPad windows do not own a second WKWebView stack.
+/// Their tabs are `BrowserTab`s on the active `BrowserSession`, so userscripts,
+/// content rules, downloads, find, reader, and the page menu run there too.
 @MainActor final class WindowRegistry: ObservableObject {
-    @Published var sessions: [UUID: WindowSession] = [:]
-    @discardableResult func open(store: WKWebsiteDataStore, extensions: WKWebExtensionController?, url: URL?) -> UUID {
-        let session = WindowSession(store: store, extensions: extensions)
-        session.addTab(url: url, select: true)
-        sessions[session.id] = session
-        return session.id
+    @Published var selection: [UUID: UUID] = [:]
+    private var hidden: Set<UUID> = []
+
+    func select(_ tabID: UUID, in windowID: UUID) { selection[windowID] = tabID }
+    func replace(_ tabID: UUID?, in windowID: UUID) {
+        if let tabID { selection[windowID] = tabID }
+        else { selection.removeValue(forKey: windowID) }
     }
-}
-
-@MainActor final class WindowTab: ObservableObject, Identifiable {
-    let id = UUID()
-    let webView: WKWebView
-    @Published var title = "新标签"
-    @Published var address = ""
-    @Published var canGoBack = false
-    @Published var canGoForward = false
-    @Published var loading = false
-
-    init(webView: WKWebView, url: URL?) {
-        self.webView = webView
-        address = url?.absoluteString ?? ""
-        if let url { webView.load(URLRequest(url: url)) }
+    func markVisible(_ windowID: UUID) { hidden.remove(windowID) }
+    func markHidden(_ windowID: UUID) { hidden.insert(windowID) }
+    func isHidden(_ windowID: UUID) -> Bool { hidden.contains(windowID) }
+    func forget(_ windowID: UUID) {
+        selection.removeValue(forKey: windowID)
+        hidden.remove(windowID)
     }
-
-    func sync() {
-        address = webView.url?.absoluteString ?? address
-        if let pageTitle = webView.title, !pageTitle.isEmpty { title = pageTitle }
-        canGoBack = webView.canGoBack
-        canGoForward = webView.canGoForward
-        loading = webView.isLoading
-    }
-}
-
-@MainActor final class WindowSession: NSObject, ObservableObject, WKNavigationDelegate {
-    let id = UUID()
-    let store: WKWebsiteDataStore
-    let extensions: WKWebExtensionController?
-    @Published var tabs: [WindowTab] = []
-    @Published var selectedID: UUID?
-
-    init(store: WKWebsiteDataStore, extensions: WKWebExtensionController?) {
-        self.store = store
-        self.extensions = extensions
-    }
-
-    var active: WindowTab? { tabs.first { $0.id == selectedID } ?? tabs.first }
-
-    @discardableResult func addTab(url: URL?, select: Bool) -> WindowTab {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = store
-        if let extensions { configuration.webExtensionController = extensions }
-        configuration.allowsInlineMediaPlayback = true
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        let tab = WindowTab(webView: webView, url: url)
-        webView.navigationDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
-        tabs.append(tab)
-        if select || selectedID == nil { selectedID = tab.id }
-        return tab
-    }
-
-    func select(_ id: UUID) { selectedID = id }
-
-    func close(_ id: UUID) {
-        tabs.removeAll { $0.id == id }
-        if selectedID == id { selectedID = tabs.last?.id }
-    }
-
-    func load(_ text: String) {
-        guard let tab = active else { return }
-        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return }
-        tab.address = url.absoluteString
-        tab.webView.load(URLRequest(url: url))
-    }
-
-    private func tab(for webView: WKWebView) -> WindowTab? { tabs.first { $0.webView === webView } }
-
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        tab(for: webView)?.loading = true
-        objectWillChange.send()
-    }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { tab(for: webView)?.sync(); objectWillChange.send() }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { tab(for: webView)?.sync(); objectWillChange.send() }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { tab(for: webView)?.sync(); objectWillChange.send() }
 }
 
 struct AuxiliaryBrowserView: View {
-    @EnvironmentObject var model: AppModel
+    @EnvironmentObject private var model: AppModel
     var windowID: UUID?
+    @State private var panel: BrowserPanel?
+
     var body: some View {
-        if let windowID, let session = model.windows.sessions[windowID] {
-            WindowBrowserView(session: session)
-        } else {
-            ContentUnavailableView("这个窗口没有自己的页面", systemImage: "macwindow", description: Text("新窗口有自己的标签、地址栏和前进后退，不会把当前标签的网页视图挪走。"))
+        Group {
+            if let windowID, let session = model.session {
+                AuxiliaryWindowPage(windowID: windowID, session: session, windows: model.windows, panel: $panel)
+            } else {
+                ContentUnavailableView("这个窗口没有页面", systemImage: "macwindow", description: Text("从主窗口的「新窗口」打开。这个窗口里的页面使用当前身份的标签、脚本、广告过滤和下载。"))
+            }
+        }
+        .sheet(item: $panel) { item in
+            if let session = model.session {
+                switch item {
+                case .addons: AddonsView(session: session)
+                case .profiles: ProfilesView()
+                case .tabs: TabsView(session: session, windowID: windowID)
+                case .library: LibraryView(session: session)
+                case .settings: SettingsView(session: session)
+                case .commands: CommandsView(session: session)
+                }
+            }
         }
     }
 }
 
-struct WindowBrowserView: View {
-    @ObservedObject var session: WindowSession
-    @State private var input = ""
+struct AuxiliaryWindowPage: View {
+    @EnvironmentObject private var model: AppModel
+    let windowID: UUID
+    @ObservedObject var session: BrowserSession
+    @ObservedObject var windows: WindowRegistry
+    @Binding var panel: BrowserPanel?
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var tabs: [BrowserTab] { session.tabs.filter { $0.windowID == windowID } }
+    private var selected: BrowserTab? { tabs.first { $0.id == windows.selection[windowID] } ?? tabs.first }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(session.tabs) { tab in
-                        WindowTabChip(tab: tab, selected: tab.id == session.active?.id) { session.select(tab.id) } close: { session.close(tab.id) }
+                    ForEach(tabs) { tab in
+                        HStack(spacing: 4) {
+                            Button(tab.pageTitle) { focus(tab) }
+                                .font(.subheadline.weight(tab.id == selected?.id ? .bold : .regular))
+                                .lineLimit(1)
+                            Button { session.close(tab) } label: { Image(systemName: "xmark").font(.caption2) }
+                                .accessibilityLabel("关闭标签")
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(tab.id == selected?.id ? Color.accentColor.opacity(0.15) : Color.clear, in: Capsule())
                     }
-                    Button { session.addTab(url: nil, select: true); input = "" } label: { Image(systemName: "plus") }
+                    Button { _ = session.addTab(activate: true, windowID: windowID) } label: { Image(systemName: "plus") }
                         .accessibilityLabel("这个窗口的新标签")
+                    Menu {
+                        Button("关闭其他") { if let selected { session.closeOthers(keeping: selected) } }
+                        Button("关闭全部", role: .destructive) { session.closeAllTabs(in: windowID) }
+                    } label: { Image(systemName: "ellipsis") }
+                        .accessibilityLabel("整理这个窗口的标签")
                 }.padding(.horizontal, 10).padding(.vertical, 8)
             }
-            HStack {
-                Button { session.active?.webView.goBack() } label: { Image(systemName: "chevron.left") }
-                    .disabled(session.active?.canGoBack != true).accessibilityLabel("后退")
-                Button { session.active?.webView.goForward() } label: { Image(systemName: "chevron.right") }
-                    .disabled(session.active?.canGoForward != true).accessibilityLabel("前进")
-                TextField("这个窗口的网址", text: $input)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .onSubmit { session.load(input) }
-                Button(session.active?.loading == true ? "停止" : "刷新") {
-                    if session.active?.loading == true { session.active?.webView.stopLoading() } else { session.active?.webView.reload() }
-                }
-                Button("打开") { session.load(input) }
-            }.padding(10)
-            if let tab = session.active {
-                WebSurface(webView: tab.webView)
+            if let selected {
+                BrowserPage(tab: selected, session: session, openPanel: { panel = $0 }).id(selected.id)
             } else {
-                ContentUnavailableView("没有标签", systemImage: "plus", description: Text("点加号打开这个窗口里的新标签。"))
+                ContentUnavailableView("没有标签", systemImage: "plus", description: Text("点加号在这个窗口打开新标签。脚本、广告过滤、查找、阅读模式和下载与主窗口相同。"))
             }
         }
-        .onAppear { input = session.active?.address ?? "" }
-        .onChange(of: session.selectedID) { _, _ in input = session.active?.address ?? "" }
-        .onChange(of: session.active?.address ?? "") { _, value in if !value.isEmpty { input = value } }
-        .navigationTitle(session.active?.title ?? "新窗口")
-    }
-}
-
-private struct WindowTabChip: View {
-    @ObservedObject var tab: WindowTab
-    var selected: Bool
-    var select: () -> Void
-    var close: () -> Void
-    var body: some View {
-        HStack(spacing: 4) {
-            Button(tab.title) { select() }.font(.subheadline.weight(selected ? .bold : .regular)).lineLimit(1)
-            Button(action: close) { Image(systemName: "xmark").font(.caption2) }.accessibilityLabel("关闭标签")
+        .onAppear {
+            model.windows.markVisible(windowID)
+            if let selected { focus(selected) }
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(selected ? Color.accentColor.opacity(0.15) : Color.clear, in: Capsule())
+        .onDisappear {
+            let id = windowID
+            let leaving = scenePhase != .active
+            guard leaving else { return }
+            model.windows.markHidden(id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                guard model.windows.isHidden(id), let session = model.session else { return }
+                for tab in session.tabs.filter({ $0.windowID == id }) { session.close(tab) }
+                model.windows.forget(id)
+            }
+        }
+    }
+
+    private func focus(_ tab: BrowserTab) {
+        windows.select(tab.id, in: windowID)
+        let previous = session.tabs.first { $0.id == session.selectedID }
+        session.extensionController.didActivateTab(tab, previousActiveTab: previous)
     }
 }

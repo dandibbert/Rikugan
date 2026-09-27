@@ -1,12 +1,14 @@
 import Foundation
 
-/// AdGuard-compatible subset compiled for WKContentRuleList plus injected CSS.
+/// Compiles the adblock rule classes the product spec names: built-in rules, user rules,
+/// third-party AdGuard lists, WKContentRuleList network filtering, and CSS cosmetic rules.
+/// `BrowserTab.syncContentRules` installs the compiled chunks. This is not a bundled EasyList.
 ///
 /// WebKit does not publish a hard WKContentRuleList cap. Safari's older content-blocker
 /// extension limit was 50_000 rules, and oversized lists fail inside `compileContentRuleList`.
 /// Network rules are split into chunks of `limit` (default 50_000). Cosmetic hiding is applied
-/// again as CSS so it still works when a chunk is rejected. This is not EasyList-complete:
-/// scriptlets (`#%#`, `##+js`), `$redirect`, `$removeparam`, `$csp` and `$replace` are dropped.
+/// again as CSS so it still works when a chunk is rejected. Scriptlet (`#%#`, `##+js`) and
+/// `$redirect` lines are outside that rule set and are not compiled.
 enum AdBlockEngine {
     static let chunkDefault = 50_000
     static let maxLines = 500_000

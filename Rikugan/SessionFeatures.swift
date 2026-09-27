@@ -13,10 +13,10 @@ extension BrowserSession {
         }
     }
     func closeOthers(keeping tab: BrowserTab) {
-        for other in tabs.filter({ $0.id != tab.id }) { close(other) }
+        for other in tabs.filter({ $0.id != tab.id && $0.windowID == tab.windowID }) { close(other) }
     }
-    func closeAllTabs() {
-        for tab in Array(tabs) { close(tab) }
+    func closeAllTabs(in windowID: UUID? = nil) {
+        for tab in Array(tabs) where tab.windowID == windowID { close(tab) }
     }
     func reopenClosed() {
         guard let closed = profile.closedTabs.first, let url = URL(string: closed.url) else { return }
@@ -143,6 +143,7 @@ extension BrowserTab: WKScriptMessageHandler {
             var request = URLRequest(url: url); request.timeoutInterval = 8
             guard let (data, _) = try? await URLSession.shared.data(for: request), data.count < 400_000, let image = UIImage(data: data) else { return }
             session?.favicons[id] = image
+            if let host = webView.url?.host ?? URL(string: address)?.host { session?.storeFavicon(image, host: host) }
         }
     }
     func findInPage(_ query: String, direction: Int) async -> (Int, Int) {
