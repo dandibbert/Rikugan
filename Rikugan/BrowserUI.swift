@@ -63,7 +63,10 @@ struct BrowserShell: View {
             List {
                 Section {
                     ForEach(session.profile.tabGroups) { group in
-                        Text(group.name).font(.headline)
+                        Text(group.name).font(.headline).contextMenu {
+                            Button("重命名") { renameGroup(group) }
+                            Button("删除标签组", role: .destructive) { confirmDeleteGroup(group) }
+                        }
                         ForEach(session.tabs.filter { $0.groupID == group.id }) { row($0) }
                     }
                     Text("未分组").font(.headline)
@@ -96,6 +99,18 @@ struct BrowserShell: View {
     }
     private func row(_ tab: BrowserTab) -> some View {
         Button { session.select(tab) } label: { HStack { Image(systemName: tab.isPrivate ? "eyeglasses" : "globe"); Text(tab.pageTitle).lineLimit(1) } }
+    }
+    private func renameGroup(_ group: TabGroup) {
+        BrowserPresentation.input(title: "重命名标签组", message: nil, initial: group.name) { value in
+            guard let value else { return }
+            let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { session.renameGroup(group.id, to: name) }
+        }
+    }
+    private func confirmDeleteGroup(_ group: TabGroup) {
+        BrowserPresentation.confirm(title: "删除标签组？", message: "标签页会移到未分组，不会被关闭。") { allowed in
+            if allowed { session.deleteGroup(group.id) }
+        }
     }
 }
 
@@ -386,6 +401,7 @@ struct TabsView: View {
     @ObservedObject var session: BrowserSession
     @State private var naming = false
     @State private var groupName = ""
+    @State private var deletingGroup: TabGroup?
     var body: some View {
         NavigationStack {
             List {
@@ -396,8 +412,13 @@ struct TabsView: View {
                     Section("无痕") { ForEach(session.tabs.filter(\.isPrivate)) { row($0) } }
                 }
                 ForEach(model.profile.tabGroups) { group in
-                    Section(group.name) {
+                    Section {
                         ForEach(session.tabs.filter { $0.groupID == group.id && !$0.isPrivate }) { row($0) }
+                    } header: {
+                        Text(group.name).contextMenu {
+                            Button("重命名") { renameGroup(group) }
+                            Button("删除标签组", role: .destructive) { deletingGroup = group }
+                        }
                     }
                 }
                 Section("标签页") { ForEach(session.tabs.filter { $0.groupID == nil && !$0.isPrivate }) { row($0) } }
@@ -418,6 +439,9 @@ struct TabsView: View {
                     TextField("名称", text: $groupName)
                     Button("创建") { session.addGroup(named: groupName); groupName = "" }
                     Button("取消", role: .cancel) {}
+                }
+                .confirmationDialog("删除标签组「\(deletingGroup?.name ?? "")」？标签页会移到未分组。", isPresented: Binding(get: { deletingGroup != nil }, set: { if !$0 { deletingGroup = nil } }), titleVisibility: .visible) {
+                    Button("删除标签组", role: .destructive) { if let deletingGroup { session.deleteGroup(deletingGroup.id) }; deletingGroup = nil }
                 }
         }
     }
@@ -443,6 +467,13 @@ struct TabsView: View {
             }
         }
         .swipeActions { Button("关闭", role: .destructive) { session.close(tab) } }
+    }
+    private func renameGroup(_ group: TabGroup) {
+        BrowserPresentation.input(title: "重命名标签组", message: nil, initial: group.name) { value in
+            guard let value else { return }
+            let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { session.renameGroup(group.id, to: name) }
+        }
     }
 }
 

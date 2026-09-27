@@ -83,7 +83,7 @@ struct MediaSheet: View {
                         let width = (item["width"] as? NSNumber)?.intValue ?? 0
                         let height = (item["height"] as? NSNumber)?.intValue ?? 0
                         if width > 0 { Text("\(width)×\(height)").font(.caption2).foregroundStyle(.secondary) }
-                        Button("下载") { if let raw = item["url"] as? String, let url = URL(string: raw) { model.downloadCenter.start(url: url) } }.font(.subheadline)
+                        Button("下载") { if let raw = item["url"] as? String, let url = URL(string: raw) { model.downloadCenter.start(url: url, from: tab) } }.font(.subheadline)
                     }
                 }
             }.navigationTitle("媒体")
@@ -105,7 +105,7 @@ struct ImageSheet: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
                     ForEach(urls, id: \.self) { url in
-                        AsyncImage(url: URL(string: url)) { image in image.resizable().scaledToFill() } placeholder: { Color.secondary.opacity(0.15) }
+                        WebsiteImageThumbnail(tab: tab, rawURL: url)
                             .frame(height: 110).clipped().overlay(alignment: .topTrailing) { if selected.contains(url) { Image(systemName: "checkmark.circle.fill").padding(6) } }
                             .onTapGesture { if selected.contains(url) { selected.remove(url) } else { selected.insert(url) } }
                             .contextMenu {
@@ -150,6 +150,30 @@ struct ImageSheet: View {
         }
         let failed = fetchFailures + photoFailures
         model.message = saved == 0 ? "没有保存任何图片。失败 \(failed) 张。" : "已保存 \(saved) 张" + (failed > 0 ? "，失败 \(failed) 张。" : "图片。")
+    }
+}
+
+struct WebsiteImageThumbnail: View {
+    @ObservedObject var tab: BrowserTab
+    let rawURL: String
+    @State private var image: UIImage?
+    @State private var failed = false
+    var body: some View {
+        Group {
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else if failed { Image(systemName: "photo.badge.exclamationmark").frame(maxWidth: .infinity, maxHeight: .infinity).background(.quaternary) }
+            else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(.quaternary) }
+        }.task(id: rawURL) { await load() }
+    }
+    private func load() async {
+        guard let url = URL(string: rawURL), let webView = tab.existingWebView else { failed = true; return }
+        let userAgent = await PageTools.call("navigator.userAgent", in: webView) as? String
+        do {
+            let (data, _) = try await WebsiteResourceFetcher.data(from: url, store: webView.configuration.websiteDataStore,
+                referer: webView.url, userAgent: userAgent, limit: 8 * 1024 * 1024)
+            guard let decoded = UIImage(data: data) else { failed = true; return }
+            image = decoded
+        } catch { failed = true }
     }
 }
 
@@ -263,12 +287,15 @@ struct TranslateSheet: View {
     @State private var rows: [(id: String, text: String)] = []
     @State private var status = "正在提取页面文字"
     @State private var original = false
+    @State private var translatedPairs: [[String: String]] = []
     var body: some View {
         NavigationStack {
             Form {
                 Text(status).font(.footnote)
                 Picker("目标语言", selection: Binding(get: { model.profile.settings.translateTarget }, set: { value in
                     model.updateProfile(model.profile.id) { $0.settings.translateTarget = value }
+                    translatedPairs = []; original = false
+                    configuration = TranslationSession.Configuration(target: Locale.Language(identifier: value))
                 })) {
                     ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
                 }
@@ -295,6 +322,7 @@ struct TranslateSheet: View {
         do {
             let responses = try await session.translations(from: Array(requests))
             let pairs: [[String: String]] = responses.map { ["id": $0.clientIdentifier ?? "", "text": $0.targetText] }
+            translatedPairs = pairs
             guard let data = try? JSONSerialization.data(withJSONObject: pairs), let json = String(data: data, encoding: .utf8) else { return }
             _ = await PageTools.call("RikuganPageTools.applyTexts(\(json))", in: tab.webView)
             status = "已替换 \(responses.count) 段文字，版面结构保持为原来的文本节点。"
@@ -302,9 +330,14 @@ struct TranslateSheet: View {
     }
     private func toggle() async {
         original.toggle()
-        let call = original ? "RikuganPageTools.restoreTexts()" : "RikuganPageTools.applyTexts([])"
-        if original { _ = await PageTools.call(call, in: tab.webView) }
-        else { configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget)) }
+        if original { _ = await PageTools.call("RikuganPageTools.restoreTexts()", in: tab.webView) }
+        else if !translatedPairs.isEmpty,
+                let data = try? JSONSerialization.data(withJSONObject: translatedPairs),
+                let json = String(data: data, encoding: .utf8) {
+            _ = await PageTools.call("RikuganPageTools.applyTexts(\(json))", in: tab.webView)
+        } else {
+            configuration = TranslationSession.Configuration(target: Locale.Language(identifier: model.profile.settings.translateTarget))
+        }
     }
 }
 

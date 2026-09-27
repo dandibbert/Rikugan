@@ -27,11 +27,17 @@ Element Picker 修正 iPhone 触摸选择：不再依赖 mousemove，pointer/tou
 
 图片保存改用当前 WKWebsiteDataStore 的 Cookie 进行用户主动资源获取，逐跳重建目标 Cookie header，支持登录态图片且避免把旧站凭证带到重定向域；单图 25 MB 上限。相册保存改走 Photos add-only 权限和 PHPhotoLibrary 完成回调，权限拒绝或系统保存失败不再误报“已保存”。
 
+图片列表缩略图也使用当前页面 WKWebsiteDataStore（单预览 8 MB 上限），不再因 AsyncImage 缺少登录 Cookie 而对登录态图片只显示空白；MediaSheet 下载显式绑定打开面板的源标签，iPad/多窗口期间切换 active tab 不会错用另一个标签的 Cookie 或无痕上下文。
+
 站点相机/麦克风权限修正组合请求：同时请求相机+麦克风时，任一明确禁止都会拒绝，只有两项都已允许才无提示放行，其余情况再次询问；保存结果拆回 camera/microphone 两个 UI 可管理的权限，不再产生不可编辑的合并权限键。
 
 站点 Desktop/JavaScript/Userscripts 改动后会重新载入当前页使设置立即生效；站点记录统一小写 host，避免大小写重复。Popup 新增“跟随”，未配置站点默认采用询问而非无提示允许新窗口。
 
 普通下载失败且没有服务器续传数据时，只要记录保留了无凭证的 HTTP(S) source，就提供“重新下载”，继续使用该身份的 WKWebsiteDataStore Cookie；旧记录直到 WebKit 成功创建替代下载后才删除。无痕下载从不持久化 source，因此不会跨无痕会话出现重新下载入口。
+
+iPad 已有 NavigationSplitView Sidebar、桌面式横向标签条和 WindowGroup 多窗口入口；标签组 UI 补上重命名/删除，删除只把组内标签移回未分组、不关闭页面。Split View / Stage Manager 的系统窗口行为仍需要真机 iPad 验收。
+
+网页翻译会缓存本次译文映射，“显示原文/显示译文”直接恢复或重放同一批文本，不依赖重复触发相同 Translation configuration；切换目标语言会清空旧译文并真正启动新目标语言翻译。
 
 ## 0.3.0 已交付
 

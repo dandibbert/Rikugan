@@ -80,8 +80,9 @@ enum DownloadPolicy {
         originTabs.contains { $0.value == tabID && downloads[$0.key] != nil }
     }
 
-    func start(url: URL, suggested name: String? = nil) {
-        guard let tab = model?.session?.activeTab, let profile = tab.session?.profileID,
+    func start(url: URL, suggested name: String? = nil, from sourceTab: BrowserTab? = nil) {
+        guard let tab = sourceTab ?? model?.session?.activeTab, let sourceSession = tab.session, sourceSession.isActive,
+              let profile = tab.session?.profileID,
               ["http", "https", "blob", "data"].contains(url.scheme?.lowercased() ?? "") else {
             model?.message = "只能下载当前浏览环境中的 HTTP(S)、blob 或 data 资源。"; return
         }
