@@ -151,6 +151,12 @@ enum TranslationState: Equatable {
 
     /// The tab lost focus but keeps its live web view.
     func deactivate() {
+        // Capture the scroll position now, while the web view is still on screen: once detached,
+        // WebKit may lay it out at zero size and report 0.
+        if let scrollView = webView?.scrollView, lifecycle == .active {
+            let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+            lastScrollY = max(0, Double(offset / max(scrollView.zoomScale, 0.01)))
+        }
         guard lifecycle == .active || lifecycle == .restoring else { return }
         // A start-page tab has no web view: it is not live in the background.
         lifecycle = webView == nil ? .suspended : .liveBackground
@@ -163,7 +169,8 @@ enum TranslationState: Equatable {
     /// content are lost and the page reloads on restore — this is accepted, not hidden.
     func suspend() async {
         guard let webView, lifecycle == .liveBackground, manager?.activeTabID != id else { return }
-        if let y = (try? await webView.rkCall("return window.scrollY || 0;", world: Worlds.tools)) as? Double { lastScrollY = y }
+        // Prefer the position captured on deactivation; a detached web view can report 0.
+        if let y = (try? await webView.rkCall("return window.scrollY || 0;", world: Worlds.tools)) as? Double, y > 0 || lastScrollY == nil { lastScrollY = y }
         // Re-check after the await: the tab may have been selected meanwhile (it is then
         // `.restoring` or `.active` and the current tab) — never release the visible web view.
         guard self.webView === webView, lifecycle == .liveBackground, manager?.activeTabID != id else { return }
