@@ -82,7 +82,12 @@ import WebKit
         _ = await ctx.waitLoaded(hist, path: "/lifecycle/page.html", query: "n=hist2&tall=1")
         _ = await ctx.eval(hist, "window.scrollTo(0, 1200); return window.scrollY;")
         _ = await ctx.waitUntil(3) { (await ctx.eval(hist, "return window.scrollY;") as? Double ?? 0) >= 1199 }
-        for other in created.filter({ $0.id != hist.id }).prefix(7) { manager.select(other) }
+        // Visit other tabs like a user would (each one is shown and loads), which pushes `hist`
+        // out of the live set. A burst of selections restores only the final tab by design.
+        for other in created.filter({ $0.id != hist.id && $0.id != manager.activeTabID }).prefix(7) {
+            manager.select(other)
+            _ = await ctx.waitLoaded(other, path: "/lifecycle/page.html", seconds: 15)
+        }
         let wasSuspended = await ctx.waitUntil(10) { hist.lifecycle == .suspended && !hist.isLive }
         ctx.record("标签页被挂起（WebView 释放）", wasSuspended, "lifecycle=\(hist.lifecycle) live=\(hist.isLive) suspendCount=\(hist.suspendCount)")
         let suspendedSnapshot = hist.snapshot
