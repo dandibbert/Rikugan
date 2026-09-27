@@ -14,6 +14,8 @@ final class BrowserUITests: XCTestCase {
         print("INSTALL_RESULT: " + installationMessage)
         XCTAssertFalse(installationMessage.contains("未能启动"), installationMessage)
         app.alerts.buttons["好"].tap()
+        XCTAssertTrue(app.buttons["home.addons"].waitForExistence(timeout: 15))
+        app.buttons["home.addons"].tap()
         XCTAssertTrue(app.buttons["extension.run.Rikugan Demo"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["extension.run.Rikugan Demo"].isEnabled)
         app.buttons["addons.done"].tap()

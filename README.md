@@ -22,6 +22,14 @@ GitHub Actions 在功能分支推送、针对 `main` 的 pull request，以及 `
 
 **不能保证任意 Chrome/Firefox 扩展能直接运行。** 设置里的兼容表把 API 标成 Supported、Partial 或 Unsupported。`debugger`、`nativeMessaging` 和持久通知是 Unsupported。`runtime.sendNativeMessage` / `connectNative` 列入 `unsupportedAPIs`。扩展的签名及商店来源不由本 App 验证。不同 iOS 的 WebKit API 支持可能不同。
 
+### 普通证书版的后台兼容模式
+
+未获得默认浏览器 / Service Worker entitlement 的普通 iOS 签名不能保证原生扩展 Service Worker 可用。因此这个自用版本把 MV3 `background.service_worker` 的入口放入 **非持久后台页面**，仍由 WebKit 提供原生 `browser.*` / `chrome.*` API，而不是把扩展转成用户脚本。转换前保留完整原始 ZIP / 目录，权限预览和详情页明确标注兼容模式；不会改扩展的 JS 代码或权限。
+
+这不是完整 Service Worker 兼容层。`importScripts`、Worker 的 install/activate/fetch 事件、clients 等语义没有模拟，依赖它们的扩展可能失败。兼容模式限制单个解压文件 8 MB、总计 128 MB。只有取得相应 Apple 授权并使用包含 entitlement 的描述文件的开发者，才应在构建中配置 `RikuganNativeServiceWorkers=true`；这个开关本身不会赋予权限。
+
+技术依据：WebKit 的 `Source/WebKit/UIProcess/API/Cocoa/WKWebView.mm` 在没有 `com.apple.developer.WebKit.ServiceWorkers`、`com.apple.developer.web-browser` 或 App-Bound Domains 时关闭 Service Workers。本浏览器不会用限制全网导航的 App-Bound Domains 冒充解决方案。
+
 Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每个身份也有独立的 `WKWebExtensionController.Configuration(identifier:)`。这是一款 App 内的逻辑分区，不是多个独立安装 App 的 OS 安全边界。
 
 ## 用户脚本支持

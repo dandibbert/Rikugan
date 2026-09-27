@@ -114,11 +114,11 @@ struct AddonsView: View {
                 .alert("商店链接或扩展 ID", isPresented: $storePrompt) {
                     TextField("chromewebstore 或 a-p 共 32 位 ID", text: $storeText).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("取消", role: .cancel) {}
-                    Button("下载") { let value = storeText; Task { await session.installFromStore(value) } }
+                    Button("下载") { let value = storeText; dismiss(); Task { try? await Task.sleep(nanoseconds: 350_000_000); await session.installFromStore(value) } }
                 } message: { Text("会下载 CRX 并进入权限确认。商店若拒绝未签名客户端，会显示失败原因，不会假装已安装。") }
                 .alert("安装自检组件？", isPresented: $confirmDemo) {
                     Button("取消", role: .cancel) {}
-                    Button("安装示例") { Task { await model.installDemos() } }
+                    Button("安装示例") { dismiss(); Task { try? await Task.sleep(nanoseconds: 350_000_000); await model.installDemos() } }
                 } message: { Text("将安装一个示例扩展和一个示例脚本。扩展申请 tabs、storage，以及 example.com 和 127.0.0.1 测试页访问权限。") }
         }
     }
@@ -147,6 +147,7 @@ struct ExtensionDetails: View {
                         }
                     }
                     Section("已授权 API") { ForEach(Array(Set(record.allowedPermissions + record.allowedPatterns)).sorted(), id: \.self) { Text(ChromeAPIMatrix.describe($0)).font(.subheadline) } }
+                    if record.backgroundMode == "document" { Section("后台兼容模式") { Text(ExtensionCompatibility.notice).font(.footnote) } }
                     Section("身份") { LabeledContent("扩展 ID", value: record.storeID.isEmpty ? record.id.uuidString : record.storeID); if !record.updateURL.isEmpty { Text(record.updateURL).font(.caption2) } }
                     NavigationLink("API 兼容矩阵") { CapabilityView() }
                     Button("检查更新") { Task { await session.updateExtension(record) } }

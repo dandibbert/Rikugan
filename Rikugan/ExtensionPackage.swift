@@ -167,6 +167,36 @@ enum ZipArchive {
         return nil
     }
 
+    static func unpack(_ data: Data, to destination: URL) throws {
+        try ArchiveValidator.validate(data)
+        let bytes = [UInt8](data)
+        guard let directory = centralDirectory(bytes) else { throw RikuganError.message("ZIP 目录损坏。") }
+        var paths = Set<String>()
+        let root = destination.standardizedFileURL
+        for entry in directory {
+            guard ExtensionCompatibility.safeRelativePath(entry.name), paths.insert(entry.name.lowercased()).inserted,
+                  entry.uncompressed <= 8_000_000 else {
+                throw RikuganError.message("扩展含重复/不安全路径，或单文件超过兼容模式的 8 MB 限制。")
+            }
+            let target = root.appendingPathComponent(entry.name).standardizedFileURL
+            guard target.path.hasPrefix(root.path + "/") else { throw RikuganError.message("扩展路径越界。") }
+            if entry.name.hasSuffix("/") {
+                try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+                continue
+            }
+            guard entry.offset >= 0, entry.offset + 30 <= bytes.count, int32(bytes, entry.offset) == 0x04034b50 else {
+                throw RikuganError.message("ZIP 本地文件头损坏。")
+            }
+            let start = entry.offset + 30 + int16(bytes, entry.offset + 26) + int16(bytes, entry.offset + 28)
+            guard start <= bytes.count, entry.compressed <= bytes.count - start else { throw RikuganError.message("ZIP 内容不完整。") }
+            let compressed = Data(bytes[start..<(start + entry.compressed)])
+            let content = entry.method == 0 ? compressed : entry.method == 8 ? inflate(compressed, expected: entry.uncompressed) : nil
+            guard let content, content.count == entry.uncompressed else { throw RikuganError.message("不支持的压缩格式或解压失败：\(entry.name)") }
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try content.write(to: target, options: .atomic)
+        }
+    }
+
     private struct Entry { var name: String; var method: Int; var compressed: Int; var uncompressed: Int; var offset: Int }
     private static func centralDirectory(_ bytes: [UInt8]) -> [Entry]? {
         guard bytes.count >= 22 else { return nil }

@@ -8,10 +8,13 @@ import WebKit
     let webExtension: WKWebExtension
     var updateURL = ""
     var storeID = ""
+    var backgroundMode: String?
     var name: String { webExtension.displayName ?? "未命名扩展" }
     var permissions: [String] { webExtension.requestedPermissions.map(\.rawValue).sorted() }
     var patterns: [String] { webExtension.allRequestedMatchPatterns.map(\.string).sorted() }
-    var warnings: String { webExtension.errors.map(\.localizedDescription).joined(separator: "\n") }
+    var warnings: String {
+        (webExtension.errors.map(\.localizedDescription) + (backgroundMode == "document" ? [ExtensionCompatibility.notice] : [])).joined(separator: "\n")
+    }
 }
 
 extension BrowserSession {
@@ -50,17 +53,19 @@ extension BrowserSession {
             guard (values.fileSize ?? Int.max) <= 32 * 1024 * 1024 else { throw RikuganError.message("扩展 ZIP 不能超过 32 MB。") }
             try ArchiveValidator.validate(Data(contentsOf: source))
         }
-        try FileManager.default.copyItem(at: source, to: destination)
         do {
-            let manifest = Self.manifestData(at: destination, directory: directory)
+            let preparedResources = try ExtensionCompatibility.prepare(source: source, directory: directory, destination: destination)
+            let resourceURL = preparedResources.url
+            let manifest = Self.manifestData(at: resourceURL, directory: directory || preparedResources.mode != nil)
             var parsed: ParsedManifest?
             if let manifest {
                 parsed = try ExtensionManifest.parse(manifest)
             }
-            let webExtension = try await WKWebExtension(resourceBaseURL: destination)
+            let webExtension = try await WKWebExtension(resourceBaseURL: resourceURL)
             guard isActive else { throw RikuganError.message("导入期间切换了身份，请在目标身份重新导入。") }
-            var prepared = PreparedExtension(id: id, profileID: profileID, relativePath: relative, webExtension: webExtension)
+            var prepared = PreparedExtension(id: id, profileID: profileID, relativePath: relative + (preparedResources.mode != nil ? "/runtime" : ""), webExtension: webExtension)
             prepared.updateURL = parsed?.updateURL ?? ""
+            prepared.backgroundMode = preparedResources.mode
             return prepared
         } catch { try? FileManager.default.removeItem(at: destination); throw error }
     }
@@ -71,7 +76,7 @@ extension BrowserSession {
     }
     func discardExtension(_ prepared: PreparedExtension) {
         guard let model else { return }
-        try? FileManager.default.removeItem(at: model.directory(prepared.profileID).appendingPathComponent(prepared.relativePath))
+        try? FileManager.default.removeItem(at: packageRoot(profile: prepared.profileID, relativePath: prepared.relativePath, model: model))
     }
     func installExtension(_ prepared: PreparedExtension) async throws {
         guard prepared.profileID == profileID, isActive else { throw RikuganError.message("身份已切换，请重新导入扩展。") }
@@ -80,6 +85,7 @@ extension BrowserSession {
                                      allowedPermissions: prepared.permissions, allowedPatterns: prepared.patterns, requestedPatterns: prepared.patterns)
         record.updateURL = prepared.updateURL
         record.storeID = prepared.storeID
+        record.backgroundMode = prepared.backgroundMode
         try await activateExtension(prepared.webExtension, record: record)
         model?.updateProfile(profileID) { $0.extensions.append(record) }
     }
@@ -142,7 +148,7 @@ extension BrowserSession {
             try? extensionController.unload(context)
         }
         model?.updateProfile(profileID) { $0.extensions.removeAll { $0.id == record.id } }
-        if let model { try? FileManager.default.removeItem(at: model.directory(profileID).appendingPathComponent(record.relativePath)) }
+        if let model { try? FileManager.default.removeItem(at: packageRoot(profile: profileID, relativePath: record.relativePath, model: model)) }
         extensionErrors.removeValue(forKey: record.id)
     }
     func setHostPermission(_ pattern: String, record: ExtensionRecord, allowed: Bool) {
@@ -199,6 +205,7 @@ extension BrowserSession {
                 var updated = record
                 updated.version = version
                 updated.relativePath = prepared.relativePath
+                updated.backgroundMode = prepared.backgroundMode
                 updated.allowedPermissions = prepared.permissions
                 updated.allowedPatterns = prepared.patterns
                 updated.requestedPatterns = prepared.patterns
@@ -224,7 +231,11 @@ extension BrowserSession {
     }
     private func discardInstalledFiles(_ record: ExtensionRecord) {
         guard let model else { return }
-        try? FileManager.default.removeItem(at: model.directory(profileID).appendingPathComponent(record.relativePath))
+        try? FileManager.default.removeItem(at: packageRoot(profile: profileID, relativePath: record.relativePath, model: model))
+    }
+    private func packageRoot(profile: UUID, relativePath: String, model: AppModel) -> URL {
+        let path = model.directory(profile).appendingPathComponent(relativePath)
+        return path.lastPathComponent == "runtime" ? path.deletingLastPathComponent() : path
     }
     func openOptions(_ id: UUID) {
         guard let context = contexts[id], let url = context.optionsPageURL else { model?.message = "这个扩展没有选项页面。"; return }

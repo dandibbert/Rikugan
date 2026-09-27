@@ -200,5 +200,25 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try BackupImporter.decode(JSONEncoder().encode(backup)))
         XCTAssertThrowsError(try BackupImporter.decode(Data("broken".utf8)))
     }
+    func testDocumentBackgroundCompatibilityPreservesPermissionsAndOriginal() throws {
+        let source = Data(#"{"manifest_version":3,"name":"Test","version":"1.0","permissions":["storage"],"background":{"service_worker":"background.js","type":"module"}}"#.utf8)
+        let converted = try XCTUnwrap(ExtensionCompatibility.documentManifest(source))
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: converted) as? [String: Any])
+        let background = try XCTUnwrap(manifest["background"] as? [String: Any])
+        XCTAssertNil(background["service_worker"])
+        XCTAssertEqual(background["scripts"] as? [String], ["background.js"])
+        XCTAssertEqual(background["persistent"] as? Bool, false)
+        XCTAssertEqual(background["type"] as? String, "module")
+        XCTAssertEqual(manifest["permissions"] as? [String], ["storage"])
+        let file = try XCTUnwrap(Bundle.main.url(forResource: "DemoExtension", withExtension: "zip"))
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let result = try ExtensionCompatibility.prepare(source: file, directory: false, destination: temp)
+        XCTAssertEqual(result.mode, "document")
+        XCTAssertEqual(try Data(contentsOf: temp.appendingPathComponent("original.zip")), try Data(contentsOf: file))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.url.appendingPathComponent("background.js").path))
+        XCTAssertFalse(ExtensionCompatibility.safeRelativePath("../escape.js"))
+        XCTAssertFalse(ExtensionCompatibility.safeRelativePath("https://example.com/remote.js"))
+    }
 }
 

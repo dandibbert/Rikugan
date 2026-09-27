@@ -6,6 +6,10 @@
 
 从首页「扩展与脚本」导入 ZIP、CRX 或 `.user.js`，或安装自检示例。设置里的兼容表会标明 Supported、Partial 和 Unsupported。未实现的扩展 API 不会被记成成功。
 
+**普通证书版使用后台页面兼容模式**：MV3 Service Worker 入口转为非持久后台页面，仍用原生 WebExtension 消息、存储和弹窗；原安装包保留不变。不是完整 Worker 模拟器，不保证使用 importScripts / Worker 生命周期 / clients 的扩展可用。安装预览和详情会标注限制。
+
+网页字体支持系统字体、可见的描述文件字体及 ttf/otf/ttc 导入；常见图标和符号字体不会被统一覆盖，可按网站关闭。备份先预览再合并或替换，并自动保留导入前的资料恢复副本。
+
 本 release 由成功完成真机目标编译及模拟器测试的 GitHub Actions 发布。测试日志和 `.xcresult` 在对应运行的 Test Evidence artifact 中。真实设备安装和具体第三方扩展尚需验证。
 
 不含默认浏览器特权、iCloud，也不播放 FairPlay / Widevine。分享扩展的 App Group 要在重签描述文件里启用。详细范围见 README。

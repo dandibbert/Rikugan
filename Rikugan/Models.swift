@@ -59,6 +59,7 @@ struct ExtensionRecord: Codable, Identifiable, Equatable {
     var requestedPatterns: [String]
     var updateURL = ""
     var storeID = ""
+    var backgroundMode: String?
 }
 
 struct AppState: Codable {
