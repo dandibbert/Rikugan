@@ -42,7 +42,16 @@
      - Edge 加载项 2.49.0：MV3；
      - GitHub v2.49.0 与 v2.48.0 的 `Violentmonkey-mv3-*.zip`：MV3；
      - v2.49.1–v2.49.3 的 beta：MV3。
-   - 因此 CI 改为下载 `Violentmonkey-mv3-*.zip`，下一次报告会测试 MV3 版本。Rikugan 不增加 MV2 支持。
+   - 因此 CI 改为下载 `Violentmonkey-mv3-*.zip`。Rikugan 不增加 MV2 支持。
+   - **MV3 版实测（run 36335924012）**：
+     - 安装 ✅、后台 0.84 s 就绪 ✅、存储 ✅。
+     - **Popup ❌**：`TypeError: undefined is not an object (evaluating 'r.controller') @ common-ui.js:1`，这是第一个阻塞错误。在它之前没有失败或不受支持的 chrome.* 调用。
+       - 从表达式看，它读取的是 `navigator.serviceWorker.controller`（依据是报错表达式，没有读源码）。
+       - Rikugan 用隐藏的后台页面模拟 MV3 Service Worker，扩展页面没有真正的 `navigator.serviceWorker`。
+     - 行为 ❌：核心的脚本注入依赖 `chrome.userScripts`（`configureWorld`、`unregister`），Rikugan 不提供。
+     - 其他不支持的调用：`runtime.getBrowserInfo`、`webRequest.onBeforeRequest` / `onSendHeaders`。
+     - 1 条 `modifyHeaders` DNR 规则被跳过。
+     - **替代方案**：与 Tampermonkey 相同，使用 Rikugan 内置用户脚本管理器。
 4. **Tampermonkey**：MV3 版的核心依赖 `chrome.userScripts`（`configureWorld`、`onUserScriptConnect`）和 `webRequest`（`onBeforeRequest` 等），Rikugan 都不提供，所以无法用它注入脚本（Popup 本身能渲染，见 6）。后台、存储、消息、Port 正常。**替代方案**：Rikugan 内置用户脚本管理器（GM API、`unsafeWindow`、`@inject-into`）。
 5. **Tampermonkey DNR**：24 条规则使用 `redirect`，被跳过并列出。
 6. **沉浸式翻译**：
