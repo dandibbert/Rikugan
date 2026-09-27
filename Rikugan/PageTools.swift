@@ -24,7 +24,9 @@ enum PageTools {
     static func call(_ expression: String, in webView: WKWebView) async -> Any? {
         let script = "(function(){try{if(!globalThis.RikuganPageTools){\(source)} return \(expression);}catch(e){return {error:String(e)};}})()"
         return await withCheckedContinuation { continuation in
-            webView.evaluateJavaScript(script) { value, _ in continuation.resume(returning: value) }
+            DispatchQueue.main.async {
+                webView.evaluateJavaScript(script) { value, _ in continuation.resume(returning: value) }
+            }
         }
     }
 
