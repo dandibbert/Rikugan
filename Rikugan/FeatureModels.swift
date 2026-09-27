@@ -101,6 +101,7 @@ struct SiteSettings: Codable, Equatable, Identifiable {
     var userScriptsEnabled: Bool?
     var javascriptEnabled: Bool?
     var popups: String?
+    var webFontFamily: String?
 }
 
 struct WebPermission: Codable, Equatable, Identifiable {

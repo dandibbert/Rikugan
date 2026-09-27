@@ -302,6 +302,11 @@ struct SiteSettingsSheet: View {
                         Text("跟随全局").tag(String?.none); Text("关闭").tag(String?("off")); Text("自动").tag(String?("auto")); Text("始终").tag(String?("on"))
                     }
                     toggle("内容拦截", key: \.contentBlocking)
+                    Picker("网页字体", selection: optional(\.webFontFamily)) {
+                        Text("跟随全局").tag(Optional<String>.none)
+                        Text("不覆盖").tag(Optional(""))
+                        ForEach(FontLibrary.families(), id: \.self) { Text($0).tag(Optional($0)) }
+                    }
                     Picker("外部 App", selection: optional(\.externalNavigation)) { Text("跟随全局").tag(Optional<String>.none); Text("询问").tag(Optional("ask")); Text("允许").tag(Optional("allow")); Text("禁止").tag(Optional("block")) }
                     toggle("用户脚本", key: \.userScriptsEnabled)
                     toggle("JavaScript", key: \.javascriptEnabled)
@@ -358,7 +363,7 @@ struct ConsoleSheet: View {
     private func run() {
         tab.webView.evaluateJavaScript(source) { value, error in
             if let error { result = error.localizedDescription }
-            else if let data = try? JSONSerialization.data(withJSONObject: value ?? NSNull(), options: [.prettyPrinted]), let text = String(data: data, encoding: .utf8) { result = text }
+            else if let data = try? JSONSerialization.data(withJSONObject: value ?? NSNull(), options: [.prettyPrinted, .fragmentsAllowed]), let text = String(data: data, encoding: .utf8) { result = text }
             else { result = String(describing: value ?? "undefined") }
         }
     }
@@ -479,7 +484,7 @@ struct FontSettingsView: View {
                 ForEach(FontLibrary.families(), id: \.self) { Text($0).tag($0) }
             }
             Button("安装字体文件") { importing = true }
-            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf/otf 会注册到本进程，并用 data URL 注入页面。").font(.footnote).foregroundStyle(.secondary)
+            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。可导入 ttf/otf/ttc；仅替换文本，保留图标、符号和代码字体。动态内容会继续应用；站点设置可以单独覆盖或关闭。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("网页字体")
             .fileImporter(isPresented: $importing, allowedContentTypes: [.font, .data], allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first { do { try model.importFont(url) } catch { model.message = error.localizedDescription } }

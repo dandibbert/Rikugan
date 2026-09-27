@@ -36,7 +36,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 明确的兼容限制：
 
-- 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。`unsafeWindow` 不是 `@grant`：页面环境下就是 `window`（Supported），隔离环境下只能 `eval` 或给可 JSON 序列化的属性赋值（Partial），读取其他属性会抛错。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。
+- 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。接受 `@grant unsafeWindow`，但其兼容性是 Partial：隔离环境下只提供注入 `eval` 或 JSON 可序列化属性赋值，读取页面对象会抛错；页面 CSP 也可能拒绝注入。页面环境下它就是 `window`。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。
 - 同步 `GM_getValue` 读取当前页面缓存；其他标签修改的值使用异步 `GM.getValue` 读取，或刷新页面。跨标签 value-change listener 尚未实现。存储是 JSON，不支持函数/循环引用/特殊对象序列化。
 - GM 网络使用无 Cookie 的 ephemeral URLSession，不自动附带浏览器登录 Cookie。按 `@connect` 检查首个请求和每次重定向；同源默认允许。系统 ATS 对普通 HTTP 原生请求仍可能限制；建议 HTTPS。
 - XHR 不支持流式、进度事件、FormData 和完整同步/中间 readyState 语义；`abort()` 当前只中止回调交付，不保证终止底层传输。单次响应限制 8 MB。
@@ -50,7 +50,11 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 另外有：内置广告域名和 AdGuard 子集规则（网络规则走 `WKContentRuleList`，元素隐藏同时注入 CSS，订阅和自定义规则有上限）、页面暗黑、阅读模式、Apple Translation 整页替换、媒体嗅探、图片保存、二维码、HTML5 画中画 / 全屏 / AirPlay、打印和 PDF、钥匙串自动填充（只在点按后填入，不写 UserDefaults）、实验控制台，以及 Share Extension。普通网页文件输入由 WebKit/系统处理。
 
-没有系统默认浏览器资格，也没有 iCloud 同步。FairPlay / Widevine 不在范围内。广告规则不是完整 EasyList。分享扩展在未签名 IPA 里编进包，但 App Group 要等带该 entitlement 的描述文件重签后才真正共享文件；短链接仍可通过 `rikugan://` 唤起主 App。
+没有系统默认浏览器资格，也没有 iCloud 同步。FairPlay / Widevine 不在范围内。广告规则不是完整 EasyList。分享扩展需带 App Group 的描述文件重签才能共享待打开内容；iOS 不保证允许分享扩展直接启动主 App，失败时会明确提示手动打开。缺少 App Group 时提供复制退路，不谎报已发送。
+
+### 字体与备份
+
+全局网页字体和站点字体覆盖独立于用户脚本。可以导入系统接受的 ttf/otf/ttc 字体，字体替换避开常见图标类、符号字体、PUA 图标字符和代码区，关闭后恢复原样；未知自定义图标仍可能需要对该网站关闭覆盖。备份导入先校验和预览，再选择合并或替换标签/分组/书签及设置。导入前保留当前状态恢复副本，不包含 Cookie、扩展包、脚本、钥匙串或字体/壁纸的文件内容。
 
 ## 构建与验证
 

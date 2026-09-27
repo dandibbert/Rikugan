@@ -60,6 +60,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         session?.shutdown()
         var next = state; next.activeProfileID = id
         do { try save(next) } catch { message = error.localizedDescription }
+        registerFonts()
         let newSession = BrowserSession(model: self, profileID: id)
         session = newSession
         Task { await newSession.start() }
@@ -102,18 +103,22 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return }
         try? FileManager.default.removeItem(at: file)
         let action = json["action"] ?? "open"
-        let value = json["url"] ?? json["text"] ?? ""
+        let link = json["url"] ?? ""
+        let text = json["text"] ?? ""
+        let value = action == "search" || link.isEmpty ? text : link
         guard !value.isEmpty else { return }
         pendingShare = (action, value)
         applyPendingShare()
     }
     func applyPendingShare() {
-        guard let pending = pendingShare, let session else { return }
+        guard let pending = pendingShare, let session, session.ready else { return }
         pendingShare = nil
-        if pending.action == "search" { session.activeTab?.loadInput(pending.value) }
-        else if let url = URL(string: pending.value) ?? URLRules.inputURL(pending.value, searchEngine: profile.searchEngine) {
+        let target = pending.action == "search"
+            ? URLRules.searchURL(pending.value, template: profile.searchEngine)
+            : URLRules.inputURL(pending.value, searchEngine: profile.searchEngine)
+        if let url = target, ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
             if session.activeTab?.isHome == true { session.activeTab?.navigate(url) } else { session.addTab(url: url) }
-        }
+        } else { message = "分享内容不能作为普通网页打开。" }
     }
     func handleFile(_ url: URL) {
         Task {
@@ -247,9 +252,12 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         let fileName = UUID().uuidString + "." + (url.pathExtension.isEmpty ? "ttf" : url.pathExtension)
         let destination = folder.appendingPathComponent(fileName)
         try data.write(to: destination, options: .atomic)
-        let family = try FontLibrary.register(destination)
+        let family: String
+        do { family = try FontLibrary.register(destination) }
+        catch { try? FileManager.default.removeItem(at: destination); throw error }
         updateProfile(profile.id) { $0.settings.importedFonts.append(ImportedFont(family: family, fileName: fileName)); $0.settings.webFontFamily = family }
         session?.refreshScripts()
+        session?.tabs.forEach { $0.applyDecorations() }
     }
     func importWallpaper(_ url: URL) throws {
         let access = url.startAccessingSecurityScopedResource()
@@ -278,6 +286,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
                 .task { model.start() }
                 .onOpenURL { model.handleIncomingURL($0) }
                 .onAppear { model.consumeShareFile() }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.consumeShareFile() }
         }
         .commands {
             CommandGroup(after: .newItem) {

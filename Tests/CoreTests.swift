@@ -34,7 +34,8 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(URLRules.match("http://127.0.0.1/*", url: URL(string: "http://127.0.0.1:8765/test?q=1#hash")!))
     }
     func testUnsupportedPermissionsFailClosed() {
-        XCTAssertThrowsError(try UserScript.parse(source.replacingOccurrences(of: "GM_getValue", with: "unsafeWindow")))
+        XCTAssertThrowsError(try UserScript.parse(source.replacingOccurrences(of: "GM_getValue", with: "GM_notification")))
+        XCTAssertNoThrow(try UserScript.parse(source.replacingOccurrences(of: "GM_getValue", with: "unsafeWindow")))
         XCTAssertThrowsError(try UserScript.parse(source.replacingOccurrences(of: "GM_getValue", with: "none")))
         XCTAssertThrowsError(try UserScript.parse("not a userscript"))
     }

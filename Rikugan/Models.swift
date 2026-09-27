@@ -136,9 +136,6 @@ struct UserScript: Codable, Identifiable, Equatable {
         let unsupported = grants.filter { !supportedGrants.contains($0) }
         guard unsupported.isEmpty else { throw RikuganError.message("此版尚不支持这些脚本 API：\(unsupported.joined(separator: ", "))。没有静默安装不兼容脚本。") }
         guard !(grants.contains("none") && grants.count > 1) else { throw RikuganError.message("@grant none 不能与其他授权混用。") }
-        if grants.contains("unsafeWindow") {
-            throw RikuganError.message("unsafeWindow 是全局对象，不是 @grant。隔离模式下它是 Partial：请直接使用 unsafeWindow，不要把它写进 @grant。")
-        }
         if grants.contains("none") == false && !grants.isEmpty,
            metadata["inject-into"]?.contains("page") == true {
             throw RikuganError.message("带原生权限的脚本只能运行在隔离环境，暂不支持 @inject-into page。")

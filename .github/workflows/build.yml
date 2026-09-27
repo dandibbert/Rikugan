@@ -28,6 +28,7 @@ jobs:
           python3 scripts/prepare_resources.py
           node scripts/test_runtime.cjs
           node scripts/test_page_tools.cjs
+          node scripts/test_web_fonts.cjs
           python3 scripts/validate_project.py
           xcodegen generate
       - name: Build unsigned iPhone app

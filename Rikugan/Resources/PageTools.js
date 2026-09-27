@@ -45,9 +45,8 @@
     else ensureStyle('rikugan-dark', '');
   }
   function setFont(family, faceCSS) {
-    if (!family) { ensureStyle('rikugan-font', ''); return; }
-    const stack = JSON.stringify(family);
-    ensureStyle('rikugan-font', (faceCSS || '') + 'html,body,button,input,textarea,select{font-family:' + stack + ',sans-serif!important}');
+    ensureStyle('rikugan-font', '');
+    if (root.RikuganWebFonts) root.RikuganWebFonts.apply(family, faceCSS);
   }
   function textNodes(rootNode) {
     const doc = root.document;

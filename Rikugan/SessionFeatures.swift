@@ -79,7 +79,7 @@ extension BrowserTab: WKScriptMessageHandler {
         let host = webView.url?.host
         let site = session?.profile.site(for: host)
         let mode = site?.darkMode ?? session?.profile.settings.darkMode ?? "off"
-        let family = session?.profile.settings.webFontFamily ?? ""
+        let family = site?.webFontFamily ?? session?.profile.settings.webFontFamily ?? ""
         var face = ""
         if let font = session?.profile.settings.importedFonts.first(where: { $0.family == family }), let session, let model = session.model {
             let file = model.directory(session.profileID).appendingPathComponent("Fonts").appendingPathComponent(font.fileName)

@@ -20,7 +20,10 @@ struct DownloadLive: Equatable {
     func activate(_ model: AppModel) {
         self.model = model
         guard session == nil else { return }
-        let configuration = URLSessionConfiguration.default
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
         configuration.waitsForConnectivity = true
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }

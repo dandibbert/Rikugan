@@ -82,16 +82,35 @@ public final class ShareViewController: UIViewController {
     }
     @objc private func cancel() { extensionContext?.cancelRequest(withError: CocoaError(.userCancelled)) }
     private func finish(action: String, value: String) {
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let payload = ["action": action, "url": pageURL?.absoluteString ?? "", "text": value]
+        var queued = false
         if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.dandibbert.Rikugan") {
             let file = container.appendingPathComponent("share-inbox.json")
-            try? JSONSerialization.data(withJSONObject: payload).write(to: file)
+            do {
+                try JSONSerialization.data(withJSONObject: payload).write(to: file, options: .atomic)
+                queued = true
+            } catch { queued = false }
         }
         var parts = URLComponents()
         parts.scheme = "rikugan"
-        parts.host = value.count > 1500 ? "pending" : action
-        if value.count <= 1500 { parts.queryItems = [URLQueryItem(name: "action", value: action), URLQueryItem(name: "text", value: value)] }
+        parts.host = queued ? "pending" : action
+        if !queued { parts.queryItems = [URLQueryItem(name: "action", value: action), URLQueryItem(name: "text", value: value)] }
         guard let url = parts.url else { extensionContext?.completeRequest(returningItems: nil); return }
-        extensionContext?.open(url) { _ in self.extensionContext?.completeRequest(returningItems: nil) }
+        let saved = queued
+        extensionContext?.open(url) { opened in
+            DispatchQueue.main.async {
+                if opened { self.extensionContext?.completeRequest(returningItems: nil); return }
+                let message = saved
+                    ? "已保存到待打开列表，请手动打开 Rikugan 接收。iOS 不允许此分享面板直接启动主 App。"
+                    : "当前签名没有可用的 App Group，且 iOS 未允许直接启动主 App。可复制内容后打开 Rikugan。"
+                let alert = UIAlertController(title: saved ? "内容已保存" : "未发送到 Rikugan", message: message, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: saved ? "完成" : "复制并完成", style: .default) { _ in
+                    if !saved { UIPasteboard.general.string = value }
+                    self.extensionContext?.completeRequest(returningItems: nil)
+                })
+                self.present(alert, animated: true)
+            }
+        }
     }
 }

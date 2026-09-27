@@ -6,7 +6,9 @@ enum PageTools {
               let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else {
             return "globalThis.RikuganPageTools = globalThis.RikuganPageTools || {};"
         }
-        return text
+        let fontSource = Bundle.main.url(forResource: "WebFontEngine", withExtension: "js")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        return fontSource + "\n" + text
     }()
 
     static func install(on controller: WKUserContentController, cosmeticCSS: String) {
