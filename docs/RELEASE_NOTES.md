@@ -2,9 +2,13 @@
 
 新增 `.user.js` 文件与源码分享安装、多项持久分享队列、逐个权限确认及待处理分享管理；新增 GM 跨标签/iframe value-change listener 与同步存储镜像，保持普通/无痕/身份/脚本隔离。分享安装不自动执行源码，缺少 App Group 会明确提示。
 
+GM 存储继续兼容旧 JSON，并新增 undefined、特殊数字、BigInt、Date、RegExp、Map、Set、ArrayBuffer 和 TypedArray 往返；循环引用和不可序列化值明确失败，不静默损坏数据。
+
 GM XHR 新增实际取消、超时、进度事件及 FormData/二进制上传，保留 @connect/重定向校验和 Cookie 隔离。扩展可直接从工具栏打开 popup，固定测试扩展补充 Port、scripting、权限和 DNR 的实际效果测试。完整 Worker、第三方扩展及真实设备分享资格仍不冒充已验收。
 
 静态 DNR 的 block/allow 由宿主单独编译执行并覆盖优先级与卸载测试；并非完整 DNR。仅支持 manifest 声明的启用静态规则，原生 declarativeNetRequest JavaScript 命名空间（包括查询和修改）不提供。未实现的规则条件会阻止加载并说明原因；安装预览、详情和兼容矩阵均会说明，不再将 API 接受调用误认为请求已被拦截。
+
+设置新增“真机验收诊断”，可在重签安装后直接检查 App Group 实际读写、Share Extension 嵌入、WebKit 身份/无痕存储、扩展/DNR/内容拦截和下载状态，并导出不含浏览记录、URL、Cookie、密码或脚本源码的 JSON 报告。
 
 本轮补齐标签懒加载/内存回收与恢复、v2→v3 备份迁移及引用校验，修复无痕新标签/GM 存储隔离、脚本元数据更新和重装保留数据。导航和媒体下载统一使用发起页面的 WKDownload，增加进度、暂停、服务器支持时的续传、失败/取消和原身份归档。
 

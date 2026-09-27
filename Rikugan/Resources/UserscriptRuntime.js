@@ -31,9 +31,79 @@
   const allowed = name => config.grants.includes('GM.' + name) || config.grants.includes('GM_' + (name === 'xmlHttpRequest' ? 'xmlhttpRequest' : name));
   const clientID = config.id + '-' + (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now());
   const call = (operation, args = {}) => window.webkit.messageHandlers[config.handler].postMessage({operation, args, client: clientID});
-  const values = Object.assign(Object.create(null), config.storage || {});
+  const tagOf = value => Object.prototype.toString.call(value);
+  const bytesToBase64 = bytes => {
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 32768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+    return btoa(binary);
+  };
+  const base64ToBytes = text => Uint8Array.from(atob(text), character => character.charCodeAt(0));
+  const encodeStorageNode = (value, seen) => {
+    if (value === undefined) return {$t: 'undefined'};
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'number') {
+      if (Number.isNaN(value)) return {$t: 'number', v: 'nan'};
+      if (value === Infinity) return {$t: 'number', v: 'infinity'};
+      if (value === -Infinity) return {$t: 'number', v: '-infinity'};
+      if (Object.is(value, -0)) return {$t: 'number', v: '-0'};
+      return value;
+    }
+    if (typeof value === 'bigint') return {$t: 'bigint', v: String(value)};
+    if (typeof value === 'function' || typeof value === 'symbol') throw new TypeError('GM storage cannot serialize ' + typeof value);
+    if (seen.has(value)) throw new TypeError('GM storage cannot serialize cyclic values');
+    seen.add(value);
+    try {
+      const kind = tagOf(value);
+      if (kind === '[object Date]') return {$t: 'date', v: Number.isNaN(value.getTime()) ? null : value.toISOString()};
+      if (kind === '[object RegExp]') return {$t: 'regexp', s: value.source, f: value.flags};
+      if (kind === '[object Map]') return {$t: 'map', v: Array.from(value, ([key, item]) => [encodeStorageNode(key, seen), encodeStorageNode(item, seen)])};
+      if (kind === '[object Set]') return {$t: 'set', v: Array.from(value, item => encodeStorageNode(item, seen))};
+      if (kind === '[object ArrayBuffer]') return {$t: 'arraybuffer', v: bytesToBase64(new Uint8Array(value))};
+      if (/^\[object (?:Uint|Int|Float|BigInt|BigUint)(?:8|16|32|64)?Array\]$/.test(kind) || kind === '[object Uint8ClampedArray]') {
+        return {$t: 'typedarray', n: kind.slice(8, -1), v: bytesToBase64(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))};
+      }
+      if (Array.isArray(value)) return {$t: 'array', v: value.map(item => encodeStorageNode(item, seen))};
+      if (kind === '[object Object]') return {$t: 'object', v: Object.keys(value).map(key => [key, encodeStorageNode(value[key], seen)])};
+      throw new TypeError('Unsupported GM storage value: ' + kind);
+    } finally { seen.delete(value); }
+  };
+  const encodeStored = value => ({__rikugan_storage_codec__: 'v1', value: encodeStorageNode(value, new Set())});
+  const decodeStorageNode = node => {
+    if (!node || typeof node !== 'object' || !node.$t) return node;
+    switch (node.$t) {
+      case 'undefined': return undefined;
+      case 'number': return node.v === 'nan' ? NaN : node.v === 'infinity' ? Infinity : node.v === '-infinity' ? -Infinity : -0;
+      case 'bigint': return typeof BigInt === 'function' ? BigInt(node.v) : node.v;
+      case 'date': return node.v === null ? new Date(NaN) : new Date(node.v);
+      case 'regexp': return new RegExp(node.s, node.f || '');
+      case 'map': return new Map((node.v || []).map(([key, value]) => [decodeStorageNode(key), decodeStorageNode(value)]));
+      case 'set': return new Set((node.v || []).map(decodeStorageNode));
+      case 'arraybuffer': return base64ToBytes(node.v || '').buffer;
+      case 'typedarray': {
+        const bytes = base64ToBytes(node.v || '');
+        const constructors = {Uint8Array, Uint8ClampedArray, Uint16Array, Uint32Array, Int8Array, Int16Array, Int32Array, Float32Array, Float64Array};
+        if (typeof BigInt64Array !== 'undefined') constructors.BigInt64Array = BigInt64Array;
+        if (typeof BigUint64Array !== 'undefined') constructors.BigUint64Array = BigUint64Array;
+        const Constructor = constructors[node.n];
+        if (!Constructor) throw new TypeError('Unsupported stored typed array: ' + node.n);
+        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        return new Constructor(buffer);
+      }
+      case 'array': return (node.v || []).map(decodeStorageNode);
+      case 'object': {
+        const result = {};
+        for (const [key, value] of node.v || []) Object.defineProperty(result, key, {value: decodeStorageNode(value), enumerable: true, writable: true, configurable: true});
+        return result;
+      }
+      default: return node;
+    }
+  };
+  const decodeStored = value => value && typeof value === 'object' && value.__rikugan_storage_codec__ === 'v1' && Object.prototype.hasOwnProperty.call(value, 'value')
+    ? decodeStorageNode(value.value) : value;
+  const clone = value => decodeStored(encodeStored(value));
+  const values = Object.create(null);
+  for (const [key, value] of Object.entries(config.storage || {})) values[key] = decodeStored(value);
   const resources = config.resources || {};
-  const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
   const listeners = new Map(), pendingWrites = new Map();
   let listenerSequence = 0, writeSequence = 0, storageRevision = -1;
   const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -48,17 +118,19 @@
     if (!snapshot || typeof snapshot.revision !== 'number' || !snapshot.values || snapshot.revision < storageRevision) return;
     storageRevision = snapshot.revision;
     for (const key of Object.keys(values)) delete values[key];
-    Object.assign(values, snapshot.values);
+    for (const [key, value] of Object.entries(snapshot.values)) values[key] = decodeStored(value);
   };
   const acceptChange = event => {
     if (!event || !event.changed) { acceptSnapshot(event); return; }
     if (event.revision <= storageRevision) return;
     storageRevision = event.revision;
-    if (event.newExists) values[event.key] = clone(event.newValue); else delete values[event.key];
+    const oldValue = event.oldExists ? decodeStored(event.oldValue) : undefined;
+    const newValue = event.newExists ? decodeStored(event.newValue) : undefined;
+    if (event.newExists) values[event.key] = clone(newValue); else delete values[event.key];
     for (const [id, listener] of Array.from(listeners)) {
       if (listeners.has(id) && listener.key === event.key) {
-        try { listener.callback(event.key, event.oldExists ? clone(event.oldValue) : undefined,
-          event.newExists ? clone(event.newValue) : undefined, event.writer !== clientID); }
+        try { listener.callback(event.key, event.oldExists ? clone(oldValue) : undefined,
+          event.newExists ? clone(newValue) : undefined, event.writer !== clientID); }
         catch (error) { console.error('[Rikugan GM listener]', error); }
       }
     }
@@ -71,11 +143,11 @@
   const writeValue = (key, value, deleting = false) => {
     key = String(key);
     const copied = deleting ? undefined : clone(value);
-    if (!deleting && copied === undefined) return Promise.reject(new TypeError('GM storage accepts JSON values, not undefined'));
+    const encoded = deleting ? null : encodeStored(copied);
     const sequence = ++writeSequence;
     pendingWrites.set(sequence, {key, value: copied, deleting});
     let request;
-    try { request = call(deleting ? 'deleteValue' : 'setValue', {key, value: deleting ? null : copied}); }
+    try { request = call(deleting ? 'deleteValue' : 'setValue', {key, value: encoded}); }
     catch (error) { pendingWrites.delete(sequence); return Promise.reject(error); }
     return Promise.resolve(request).then(result => {
       // Older bridges returned true; keep the shim testable without events.
@@ -231,7 +303,7 @@
     const request = xhr(details); request.catch(() => {}); return {abort: request.abort};
   } : undefined;
   const GM = {info: GM_info, addStyle, log: GM_log};
-  if (allowed('getValue')) GM.getValue = async (key, fallback) => { const result = await call('getValue', {key: String(key)}); return result.exists ? result.value : fallback; };
+  if (allowed('getValue')) GM.getValue = async (key, fallback) => { const result = await call('getValue', {key: String(key)}); return result.exists ? clone(decodeStored(result.value)) : fallback; };
   if (allowed('setValue')) GM.setValue = (key, value) => writeValue(key, value);
   if (allowed('deleteValue')) GM.deleteValue = key => writeValue(key, null, true);
   if (allowed('listValues')) GM.listValues = () => call('listValues');

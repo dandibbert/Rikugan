@@ -111,7 +111,7 @@ struct UserScript: Codable, Identifiable, Equatable {
     ]
 
     static let capabilityNotes: [String: String] = [
-        "GM_getValue": "Supported。同步镜像通过原生通知跨标签/iframe 更新；GM.getValue 从原生存储读取。",
+        "GM_getValue": "Supported。同步镜像通过原生通知跨标签/iframe 更新；兼容旧 JSON，并支持 undefined、特殊数字、BigInt、Date、RegExp、Map、Set、ArrayBuffer 和常见 TypedArray。",
         "GM_addValueChangeListener": "Supported。提供旧值、新值和 remote；按脚本、身份、无痕会话隔离，删除使用 undefined。",
         "GM_xmlhttpRequest": "Partial。支持真实取消、超时、下载进度、FormData/二进制正文和常见响应类型；不自动附带登录 Cookie，不支持 stream/同步请求。响应最多 8 MB，正文 2 MB。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",

@@ -2,7 +2,7 @@
 
 ## 0.4.0 · 分享安装与跨页面脚本通信
 
-新增 `.user.js` 文件/源码分享，多条消息不再共用单个覆盖槽；主 App 逐个展示脚本源码与权限并等待确认。设置中的「待处理分享」可继续或移除。新增 GM_addValueChangeListener / GM_removeValueChangeListener、GM.* 异步对应接口和跨标签/iframe 存储镜像。GM XHR 支持实际取消、超时、进度和 FormData/二进制正文；扩展可从工具栏直接打开 popup。下载文件名为 `Rikugan-0.4.0-unsigned.ipa`；设备签名和第三方扩展兼容仍以实际设备验证为准。
+新增 `.user.js` 文件/源码分享，多条消息不再共用单个覆盖槽；主 App 逐个展示脚本源码与权限并等待确认。设置中的「待处理分享」可继续或移除。新增 GM_addValueChangeListener / GM_removeValueChangeListener、GM.* 异步对应接口和跨标签/iframe 存储镜像。GM XHR 支持实际取消、超时、进度和 FormData/二进制正文；GM 存储可往返常见特殊类型。扩展可从工具栏直接打开 popup。设置新增「真机验收诊断」，用于重签后检查 App Group、Share Extension 和 WebKit 宿主并导出脱敏报告。下载文件名为 `Rikugan-0.4.0-unsigned.ipa`；设备签名和第三方扩展兼容仍以实际设备验证为准。
 
 ## 0.3.0 · 最新规格续做
 

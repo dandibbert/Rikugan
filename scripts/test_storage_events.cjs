@@ -30,7 +30,7 @@ function page(domain, id = 'probe') {
   };
   const config = {id, name: id, isolated: true, handler: 'test', matches: ['https://example.com/*'], includes: [], excludes: [], excludeMatches: [],
     grants: ['GM_getValue', 'GM.getValue', 'GM_setValue', 'GM.setValue', 'GM_deleteValue', 'GM.deleteValue', 'GM_listValues', 'GM_addValueChangeListener', 'GM_removeValueChangeListener'], runAt: 'document-end', storage: {}};
-  sandbox = vm.createContext({location: new URL('https://example.com/'), URL, console, setTimeout, document: {body: {}},
+  sandbox = vm.createContext({location: new URL('https://example.com/'), URL, console, setTimeout, btoa, atob, document: {body: {}},
     window: {webkit: {messageHandlers: {test: {postMessage: bridge}}}}});
   new vm.Script(template.replace('/*__CONFIG__*/', JSON.stringify(config)).replace('/*__SOURCE__*/', `
     globalThis.events = [];
@@ -67,5 +67,20 @@ function page(domain, id = 'probe') {
   await a.api.set('__proto__', {safe: true}); await tick();
   assert.deepEqual(JSON.parse(JSON.stringify(b.api.read('__proto__'))), {safe: true});
   assert.equal(privatePage.events.length, 0); assert.equal(otherScript.events.length, 0);
+  await a.api.set('undefined', undefined); await tick();
+  assert.equal(b.api.list().includes('undefined'), true); assert.equal(b.api.read('undefined', 'fallback'), undefined);
+  const special = vm.runInContext(`({nan: NaN, inf: Infinity, neg: -Infinity, minusZero: -0, big: 9007199254740993n,
+    date: new Date('2026-09-27T00:00:00Z'), regexp: /rikugan/gi, map: new Map([['x', 1]]), set: new Set(['a', 'b']),
+    bytes: new Uint16Array([1, 65535]), nested: {__proto__: null, safe: 'yes'}})`, a);
+  await a.api.set('special', special); await tick();
+  const restored = b.api.read('special');
+  assert.equal(Number.isNaN(restored.nan), true); assert.equal(restored.inf, Infinity); assert.equal(restored.neg, -Infinity); assert.equal(Object.is(restored.minusZero, -0), true);
+  assert.equal(String(restored.big), '9007199254740993'); assert.equal(Object.prototype.toString.call(restored.date), '[object Date]');
+  assert.equal(restored.date.toISOString(), '2026-09-27T00:00:00.000Z'); assert.equal(String(restored.regexp), '/rikugan/gi');
+  assert.equal(restored.map.get('x'), 1); assert.deepEqual(Array.from(restored.set), ['a', 'b']); assert.deepEqual(Array.from(restored.bytes), [1, 65535]);
+  assert.equal(restored.nested.safe, 'yes');
+  const cyclic = {}; cyclic.self = cyclic;
+  assert.throws(() => a.api.set('cycle', cyclic), /cyclic/);
+  assert.throws(() => a.api.set('function', () => {}), /function/);
   console.log('PASS: GM cross-page mirror, local/remote events, null vs deletion, listeners, pending writes and private/script isolation');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -9,11 +9,15 @@ main 目前沿用 iOS 18.4 的公开 WKWebExtension 宿主与普通签名后台�
 
 新增 GM_addValueChangeListener / GM_removeValueChangeListener 及 GM.* 对应接口；本地和远端事件含旧值、新值、remote，删除与 null 区分；同步镜像随原生事件更新。按脚本、身份、无痕隔离；Swift 写盘成功才发送事件。ScriptEventTests 验证真实页面、第二标签、iframe 和无痕，Node 覆盖重叠写入、重复值、取消监听及隔离。以对应 CI 结果为验收，不以测试源码存在代替运行通过。
 
+GM 存储增加带版本的 tagged codec，继续读取旧版纯 JSON 数据；新写入支持 undefined、NaN/±Infinity/-0、BigInt、Date、RegExp、Map、Set、ArrayBuffer 和常见 TypedArray，跨标签 value-change 事件保持这些类型。循环引用、函数、Symbol 和未知宿主对象明确报错，不静默转成空对象。
+
 GM XHR 新增原生 URLSessionDataTask 取消、总超时、下载进度与 readyState、text/URLSearchParams/FormData/Blob/ArrayBuffer 正文、JSON/blob/arraybuffer/document 响应。请求正文最多 2 MB、响应最多 8 MB、每页最多 16 个在途请求；导航/关闭/禁用脚本清理请求；@connect self 精确比较 scheme/host/port，逐跳验证重定向。仍不自动附带浏览器登录 Cookie；stream、同步请求、cookiePartition/proxy 等不支持选项明确报错。ScriptNetworkTests 和 ScriptEventTests 验证真实服务器、桥接与页面，Node 验证序列化和回调。
 
 扩展增加独立可横向滚动的工具栏动作条（图标/标题/徽标/启用状态），点击直接打开原生 popup；无痕不展示。详情页可查看运行时与原始 manifest.json。固定测试扩展增加 document_start/end + CSS、background messaging/Port、storage、popup 当前标签、scripting.executeScript、host permissions、DNR 实际阻断；UI 验证实际效果。后台沿用普通证书非持久页面，不宣称完整 Worker 生命周期。
 
 静态 DNR 改为独立宿主规则列表执行：每个扩展单独编译、挂载和卸载 block/allow 规则，支持优先级、URL/glob/可编译正则和资源类型；关闭扩展/切换身份释放规则，无痕不挂载。真实测试确认原生扩展 API 接受静态规则但没有拦截，因此不再仅依赖原生声明。每个扩展最多 5000 条静态规则；redirect/modifyHeaders、request/initiator domains、WithHostAccess 等未实现条件会阻止加载并展示具体原因，绝不丢弃条件扩大拦截。原生 declarativeNetRequest JavaScript 命名空间整体隐藏（查询接口、动态/session 修改、运行时启停规则集均不提供）；只执行 manifest 声明的启用静态规则，不能报告成功却不生效。不是完整 DNR 兼容。
+
+新增“真机验收诊断”：检查实际运行环境、主 App App Group 容器读写、Share Extension 是否嵌入、普通/无痕 WKWebsiteDataStore、扩展载入/DNR/内容拦截/下载及标签资源状态，并可导出脱敏 JSON。报告明确不读取 Cookie、历史、书签、脚本源码、页面 URL/标题或下载地址；系统默认浏览器 entitlement 仍以系统列表为准。真机分享往返仍需要用户在真实系统 Share Sheet 验证。
 
 ## 0.3.0 已交付
 
@@ -45,6 +49,6 @@ GM XHR 新增原生 URLSessionDataTask 取消、总超时、下载进度与 read
 - 第三方扩展逐个兼容验收、完整 Worker 语义、更多 Chrome API/规则语法不能承诺；不是所有桌面扩展都能运行。
 - 长期真实内存压力、跨窗口交互、无痕页所有外部打开入口、图片保存/视频/PiP/AirPlay、权限和证书 App Group 行为需要真机验证。
 - 页面 JS 堆不会在挂起后恢复；App 被系统杀死后仅恢复持久化普通标签资料；媒体/下载没有无限后台运行保证。
-- GM 流式响应（stream）、完整 Cookie/代理/分区语义、特殊对象/undefined 存储序列化尚未实现；不支持项保持明确错误/Partial。
+- GM 流式响应（stream）、完整 Cookie/代理/分区语义、循环引用/函数/Symbol/未知宿主对象存储尚未实现；不支持项保持明确错误/Partial。
 
 PlayCover 仅可作部分启动/UI 冒烟测试，不能代替以上真实 iOS 验收。

@@ -640,6 +640,7 @@ struct SettingsView: View {
                 Section("本身份的下载") { DownloadList(center: model.downloadCenter) }
                 Section("关于 Rikugan") {
                     LabeledContent("版本", value: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0") + " (" + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1") + ")")
+                    NavigationLink("真机验收诊断") { DeviceDiagnosticsView(session: session) }
                     Text("扩展运行时使用 iOS 18.4 的 WKWebExtension，而不是一套假装完整的自研 chrome.*。未实现的 API 会标明 Unsupported，不会静默当成成功。").font(.footnote).foregroundStyle(.secondary)
                     Text("未签名 IPA 没有默认浏览器 entitlement。重签时如果描述文件不含该权限，Rikugan 不会出现在系统默认浏览器列表里，这里也不会假装可以。分享扩展需要同一个 App Group：\(AppGroupID.suite)。").font(.footnote).foregroundStyle(.secondary)
                     Link("源代码与问题反馈", destination: URL(string: "https://github.com/dandibbert/Rikugan")!)
