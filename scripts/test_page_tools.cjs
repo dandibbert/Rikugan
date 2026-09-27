@@ -102,7 +102,52 @@ assert.equal(classify('example.com#?#.ad:upward(2)'), 'procedural');
 assert.equal(classify('example.com#?#.ad:remove()'), 'procedural');
 assert.equal(classify('example.com#?#.ad:style(color: red)'), 'procedural');
 assert.equal(classify('#%#scriptlet'), 'drop');
-assert.equal(classify('||ads.example^$redirect'), 'drop');
+assert.equal(classify("example.com#%#//scriptlet('abort-on-property-read', 'alert')"), 'scriptlet');
+assert.equal(classify('example.com##+js(set-constant, canRunAds, false)'), 'scriptlet');
+assert.equal(classify('||ads.example^$redirect=noopjs'), 'block');
+assert.equal(classify('||news.example^$removeparam=utm_source'), 'removeparam');
+assert.equal(classify("||news.example^$csp=script-src 'none'"), 'csp');
+assert.equal(classify('||news.example^$replace=/a/b/'), 'drop');
+sandbox.location = { hostname: 'news.example' };
+sandbox.JSON = { parse: JSON.parse, stringify: JSON.stringify };
+sandbox.Promise = Promise;
+let fetched = [];
+sandbox.fetch = url => { fetched.push(url); return { ok: true }; };
+function XHR() {}
+XHR.prototype.open = function (method, url) { this.url = url; };
+XHR.prototype.send = function () { this.sent = true; };
+sandbox.XMLHttpRequest = XHR;
+sandbox.RikuganPageTools.applyScriptlets([
+  { domains: ['news.example'], name: 'set-constant', args: ['canRunAds', 'false'] },
+  { domains: ['other.test'], name: 'set-constant', args: ['skipped', 'true'] },
+  { domains: [], name: 'abort-on-property-read', args: ['pageAd'] },
+  { domains: [], name: 'abort-on-property-write', args: ['adConfig'] },
+  { domains: [], name: 'prevent-fetch', args: ['/ads/'] },
+  { domains: [], name: 'prevent-xhr', args: ['track'] },
+  { domains: [], name: 'json-prune', args: ['ad'] }
+]);
+assert.equal(sandbox.canRunAds, false);
+assert.equal(sandbox.skipped, undefined);
+assert.throws(() => sandbox.pageAd);
+assert.throws(() => { sandbox.adConfig = 1; });
+const blockedFetch = sandbox.fetch('https://cdn.example/ads/a.js');
+blockedFetch.catch(() => {});
+assert.equal(typeof blockedFetch.then, 'function');
+assert.deepEqual(fetched, []);
+sandbox.fetch('https://cdn.example/ok.js');
+assert.deepEqual(fetched, ['https://cdn.example/ok.js']);
+const blockedXHR = new sandbox.XMLHttpRequest();
+blockedXHR.open('GET', 'https://t.example/track');
+blockedXHR.send();
+assert.equal(blockedXHR.sent, undefined);
+const openXHR = new sandbox.XMLHttpRequest();
+openXHR.open('GET', 'https://t.example/ok');
+openXHR.send();
+assert.equal(openXHR.sent, true);
+const pruned = sandbox.JSON.parse('{"ad":1,"title":"x","nested":{"ad":2}}');
+assert.equal(pruned.ad, undefined);
+assert.equal(pruned.title, 'x');
+assert.equal(pruned.nested.ad, undefined);
 assert.equal(classify('example.com#@#.ad'), 'unhide');
 
 console.log('PASS: page tools selector, dark CSS, playlists, find count, adblock subset');

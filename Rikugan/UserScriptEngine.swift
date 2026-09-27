@@ -19,6 +19,14 @@ struct ScriptCommand: Identifiable {
         return source
     }()
 
+    func invokeIsolated(handler: String, id: Int, args: Any, webView: WKWebView) {
+        guard let script = scripts[handler], JSONSerialization.isValidJSONObject(args),
+              let data = try? JSONSerialization.data(withJSONObject: args),
+              let json = String(data: data, encoding: .utf8) else { return }
+        let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
+        webView.evaluateJavaScript("globalThis.__rikuganInvokeIsolated&&globalThis.__rikuganInvokeIsolated(\(id),\(json))", in: nil, in: world) { _, _ in }
+    }
+
     func configure(_ controller: WKUserContentController, scripts enabledScripts: [UserScript]) {
         for handler in handlers { controller.removeScriptMessageHandler(forName: handler.name, contentWorld: handler.world) }
         handlers.removeAll(); scripts.removeAll()

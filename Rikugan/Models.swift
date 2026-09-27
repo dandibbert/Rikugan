@@ -113,7 +113,7 @@ struct UserScript: Codable, Identifiable, Equatable {
         "GM_xmlhttpRequest": "Partial。无 Cookie，按 @connect 检查重定向，onprogress 报告已下载字节，abort() 会取消 URLSession 任务。单次响应 8 MB。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
         "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",
-        "unsafeWindow": "Partial。@grant none 就是页面 window。隔离脚本通过页面里的对象句柄读写 window 和 DOM，可以调用页面函数；不能把隔离世界的函数送进页面。",
+        "unsafeWindow": "Partial。@grant none 就是页面 window。隔离脚本把没有外部绑定的函数源码注入页面，调用和返回都在页面里。闭包会在页面放一个桩：测试里同步回调隔离世界；在 WKContentWorld 里由 rikuganPage 把调用送回该脚本的隔离世界执行。",
         "document-body": "Supported。document-start 注入后等到 body 存在再执行。"
     ]
 

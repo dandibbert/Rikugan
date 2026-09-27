@@ -116,10 +116,12 @@ extension BrowserTab: WKScriptMessageHandler {
         let blockClipboard = clipboard == "block" ? "try{if(navigator.clipboard){navigator.clipboard.readText=()=>Promise.reject(new Error('Blocked by Rikugan'));}}catch(e){}" : ""
         let hostJSON = (session?.hostCSS).flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let procedural = session?.proceduralJSON ?? "[]"
+        let scriptlets = session?.scriptletJSON ?? "[]"
+        let policies = session?.cspJSON ?? "[]"
         let css = PageTools.jsString(session?.globalCosmetic ?? "") ?? "\"\""
         Task { [weak self] in
             guard let self else { return }
-            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installConsole(),\(blockClipboard)true", in: self.webView)
+            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installConsole(),\(blockClipboard)true", in: self.webView)
         }
     }
     func captureThumbnail() {
@@ -211,6 +213,11 @@ extension BrowserTab: WKScriptMessageHandler {
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "rikuganPage", let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        if action == "iso-call", let handler = body["handler"] as? String, let id = (body["id"] as? Int) ?? (body["id"] as? NSNumber)?.intValue {
+            let args: Any = body["args"] ?? ([] as [Any])
+            scriptEngine.invokeIsolated(handler: handler, id: id, args: args, webView: webView)
+            return
+        }
         if action == "console" {
             let line = (body["level"] as? String ?? "log") + ": " + (body["text"] as? String ?? "")
             consoleLines.append(String(line.prefix(2000)))

@@ -120,6 +120,100 @@
       hideNode(node);
     });
   }
+  function propertyChain(path) {
+    const parts = String(path || '').split('.').filter(Boolean);
+    if (!parts.length) return null;
+    let obj = root;
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      if (obj[parts[index]] == null) obj[parts[index]] = {};
+      obj = obj[parts[index]];
+    }
+    return { obj: obj, key: parts[parts.length - 1] };
+  }
+  function constantValue(raw) {
+    if (raw === 'undefined') return undefined;
+    if (raw === 'null') return null;
+    if (raw === 'false') return false;
+    if (raw === 'true') return true;
+    if (raw === 'noopFunc' || raw === 'emptyFunc') return function () {};
+    if (raw === "''" || raw === '""') return '';
+    if (raw != null && /^-?\d+(?:\.\d+)?$/.test(String(raw))) return Number(raw);
+    return raw;
+  }
+  function pruneKeys(value, keys) {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) { value.forEach(item => pruneKeys(item, keys)); return; }
+    keys.forEach(key => { if (Object.prototype.hasOwnProperty.call(value, key)) delete value[key]; });
+    Object.keys(value).forEach(key => pruneKeys(value[key], keys));
+  }
+  function applyScriptlets(rules) {
+    const key = JSON.stringify(rules || []);
+    if (root.__rgScriptletKey === key) return;
+    root.__rgScriptletKey = key;
+    const host = (root.location && root.location.hostname) || '';
+    (rules || []).forEach(rule => {
+      const domains = rule.domains || [];
+      if (domains.length && !domains.some(domain => hostMatches(host, domain))) return;
+      const name = rule.name;
+      const args = rule.args || [];
+      if (name === 'abort-on-property-read' || name === 'abort-on-property-write') {
+        const hit = propertyChain(args[0]);
+        if (!hit) return;
+        const desc = name === 'abort-on-property-read'
+          ? { configurable: true, get() { throw new ReferenceError(args[0]); } }
+          : { configurable: true, set() { throw new TypeError(args[0]); } };
+        try { Object.defineProperty(hit.obj, hit.key, desc); } catch (error) {}
+      } else if (name === 'set-constant') {
+        const hit = propertyChain(args[0]);
+        if (!hit) return;
+        const value = constantValue(args[1]);
+        try { Object.defineProperty(hit.obj, hit.key, { configurable: true, get() { return value; }, set() {} }); } catch (error) {}
+      } else if (name === 'prevent-fetch') {
+        const pattern = args[0] || '';
+        const original = root.fetch;
+        root.fetch = function (input) {
+          const url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (!pattern || String(url).indexOf(pattern) >= 0) return Promise.reject(new Error('blocked'));
+          return original ? original.apply(this, arguments) : Promise.resolve();
+        };
+      } else if (name === 'prevent-xhr') {
+        const pattern = args[0] || '';
+        const XHR = root.XMLHttpRequest;
+        if (!XHR || !XHR.prototype || !XHR.prototype.open) return;
+        const open = XHR.prototype.open;
+        const send = XHR.prototype.send;
+        XHR.prototype.open = function (method, url) {
+          if (!pattern || String(url).indexOf(pattern) >= 0) { this.__rgBlocked = true; return; }
+          return open.apply(this, arguments);
+        };
+        if (send) XHR.prototype.send = function () { if (this.__rgBlocked) return; return send.apply(this, arguments); };
+      } else if (name === 'json-prune') {
+        const keys = String(args[0] || '').split(/[ |]/).filter(Boolean);
+        const json = root.JSON;
+        if (!json || typeof json.parse !== 'function' || !keys.length) return;
+        const original = json.parse;
+        json.parse = function () {
+          const value = original.apply(this, arguments);
+          pruneKeys(value, keys);
+          return value;
+        };
+      }
+    });
+  }
+  function applyCSP(rules) {
+    const doc = root.document;
+    if (!doc || typeof doc.createElement !== 'function') return;
+    const host = (root.location && root.location.hostname) || '';
+    (rules || []).forEach(rule => {
+      const domains = rule.domains || [];
+      if (domains.length && !domains.some(domain => hostMatches(host, domain))) return;
+      if (!rule.policy) return;
+      const meta = doc.createElement('meta');
+      if (meta) { meta.httpEquiv = 'Content-Security-Policy'; meta.content = rule.policy; }
+      const parent = doc.head || doc.documentElement;
+      if (parent && parent.appendChild && meta) parent.appendChild(meta);
+    });
+  }
   function applyBlocking(globalCSS, hostMap, procedural) {
     const host = (root.location && root.location.hostname) || '';
     let extra = '';
@@ -531,7 +625,7 @@
     };
   }
   const api = {
-    selector, setAppearance, setFont, darkCSS: darkRules, applyBlocking, collectTexts, applyTexts, restoreTexts,
+    selector, setAppearance, setFont, darkCSS: darkRules, applyBlocking, applyScriptlets, applyCSP, collectTexts, applyTexts, restoreTexts,
     watchNewText, stopWatch, extractArticle, collectMedia, parseM3U8, parseMPD, installNetHook, installConsole, installNotifications,
     startPicker, countMatches, clearFind, videoAction, fill, ensureStyle
   };

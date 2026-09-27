@@ -1,10 +1,18 @@
 'use strict';
 
-const destructive = new Set(['redirect', 'redirect-rule', 'removeparam', 'csp', 'replace', 'jsonprune']);
+const scriptlets = new Set(['abort-on-property-read', 'abort-on-property-write', 'json-prune', 'set-constant', 'prevent-fetch', 'prevent-xhr']);
+
+function scriptletName(line) {
+  const body = line.includes('#%#') ? line.split('#%#').slice(1).join('#%#') : (line.split('##+js(')[1] || '');
+  const text = body.replace(/^\/\/scriptlet\(/, '').replace(/\)$/, '');
+  const name = text.split(',')[0].replace(/['"\s]/g, '');
+  return scriptlets.has(name) ? name : '';
+}
 
 function classify(raw) {
   const line = String(raw || '').trim();
-  if (!line || line.startsWith('!') || line.startsWith('[') || line.startsWith('#%#')) return 'drop';
+  if (!line || line.startsWith('!') || line.startsWith('[')) return 'drop';
+  if (line.includes('#%#') || line.includes('##+js(')) return scriptletName(line) ? 'scriptlet' : 'drop';
   if (line.includes('#@#') || line.includes('#@?#') || line.includes('#@$#')) return 'unhide';
   if (line.includes('#?#')) {
     const selector = line.split('#?#')[1] || '';
@@ -18,7 +26,10 @@ function classify(raw) {
   const dollar = line.lastIndexOf('$');
   if (dollar > 0) {
     const mods = line.slice(dollar + 1).split(',');
-    if (mods.some(token => destructive.has(token))) return 'drop';
+    if (mods.some(token => token === 'replace' || token.startsWith('replace=') || token === 'jsonprune')) return 'drop';
+    if (mods.some(token => token === 'removeparam' || token.startsWith('removeparam='))) return 'removeparam';
+    if (mods.some(token => token === 'csp' || token.startsWith('csp='))) return 'csp';
+    if (mods.some(token => token === 'redirect' || token.startsWith('redirect=') || token === 'redirect-rule' || token.startsWith('redirect-rule='))) return 'block';
   }
   return 'block';
 }

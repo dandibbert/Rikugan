@@ -22,6 +22,9 @@ import WebKit
     var globalCosmetic = ""
     var hostCSS: [String: String] = [:]
     var proceduralJSON = "[]"
+    var scriptletJSON = "[]"
+    var cspJSON = "[]"
+    var removeParams: [AdBlockEngine.QueryStrip] = []
     var privateScriptValues: [UUID: [String: Any]] = [:]
     var popupPresenter: PopupPresenter?
     private var scriptRefresh: Task<Void, Never>?
@@ -181,7 +184,7 @@ import WebKit
     }
     func installPageTools(on tab: BrowserTab) {
         let hostJSON = (try? JSONSerialization.data(withJSONObject: hostCSS)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic, hostCSS: hostJSON, procedural: proceduralJSON)
+        PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic, hostCSS: hostJSON, procedural: proceduralJSON, scriptlets: scriptletJSON, csp: cspJSON)
         tab.ensurePageHandler()
         tab.syncContentRules()
     }
@@ -360,6 +363,16 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         if let kind = InternalPages.kind(url) {
             decisionHandler(.cancel, preferences)
             session?.requestedPanel = kind
+            return
+        }
+        if navigationAction.targetFrame?.isMainFrame == true,
+           ["http", "https"].contains(url.scheme ?? ""),
+           (session?.profile.settings.contentBlocking ?? true),
+           (site?.contentBlocking ?? true),
+           let cleaned = session.flatMap({ AdBlockEngine.urlByStripping(url, rules: $0.removeParams) }),
+           cleaned.absoluteString != url.absoluteString {
+            decisionHandler(.cancel, preferences)
+            webView.load(URLRequest(url: cleaned))
             return
         }
         if navigationAction.shouldPerformDownload { decisionHandler(.download, preferences); return }

@@ -101,12 +101,33 @@ assert.equal(domOps.sandbox.after, 'set-ok');
 assert.equal(node.textContent, 'set-ok');
 assert.equal(domOps.sandbox.attr, 'p1');
 assert.equal(domOps.sandbox.title, 'T');
-const blockedFn = run('https://example.com/', { isolated: true }, "try { unsafeWindow.document.title = function () { return 1; }; globalThis.sent = true; } catch (error) { globalThis.blocked = String(error.message); }", {
-  document: { createElement() { return { textContent: '', remove() {} }; }, documentElement: domHost }
-});
-assert.equal(blockedFn.sandbox.sent, undefined);
-assert.match(blockedFn.sandbox.blocked, /Partial/);
-assert.equal(domDoc.title, 'T');
+const fnDoc = { title: 'T', querySelector() { return fnNode; } };
+const fnNode = {
+  listeners: {},
+  addEventListener(type, fn) { this.listeners[type] = fn; }
+};
+const fnPage = { document: fnDoc, someHook: null };
+const fnHost = {
+  attrs: {},
+  setAttribute(name, value) { this.attrs[name] = value; },
+  getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+  removeAttribute(name) { delete this.attrs[name]; }
+};
+const fnContext = { window: fnPage, document: { documentElement: fnHost }, JSON };
+fnContext.eval = code => vm.runInContext(code, fnContext);
+vm.createContext(fnContext);
+fnHost.appendChild = el => { vm.runInContext(el.textContent, fnContext); };
+const fnDocument = { createElement() { return { textContent: '', remove() {} }; }, documentElement: fnHost };
+const pureFn = run('https://example.com/', { isolated: true }, "unsafeWindow.someHook = function () { return 7; }; globalThis.out = unsafeWindow.someHook();", { document: fnDocument });
+assert.equal(pureFn.sandbox.out, 7);
+assert.equal(fnPage.someHook(), 7);
+const closedFn = run('https://example.com/', { isolated: true }, "let n = 1; unsafeWindow.someHook = function () { n += 1; return n; }; globalThis.first = unsafeWindow.someHook(); globalThis.second = unsafeWindow.someHook();", { document: fnDocument });
+assert.equal(closedFn.sandbox.first, 2);
+assert.equal(closedFn.sandbox.second, 3);
+assert.equal(fnPage.someHook(), 4);
+const clickFn = run('https://example.com/', { isolated: true }, "let seen = 0; unsafeWindow.document.querySelector('p').addEventListener('click', function () { seen += 1; return seen; }); globalThis.seen = unsafeWindow.document.querySelector('p').listeners.click();", { document: fnDocument });
+assert.equal(clickFn.sandbox.seen, 1);
+assert.equal(fnNode.listeners.click(), 2);
 const pageWindow = {
   webkit: { messageHandlers: { test: { postMessage() { return Promise.resolve(true); } } } },
   document: { title: 'old', querySelector() { return { id: 'p9', getAttribute(name) { return name === 'id' ? this.id : null; } }; } }

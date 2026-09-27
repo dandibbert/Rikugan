@@ -177,7 +177,12 @@ final class CoreTests: XCTestCase {
             "example.com#?#div:has(.ad)",
             "example.com#?#div:has-text(Sponsored)",
             "#%#scriptlet",
-            "||ads.test^$redirect",
+            "example.com#%#//scriptlet('abort-on-property-read', 'alert')",
+            "example.com##+js(set-constant, canRunAds, false)",
+            "||ads.test^$redirect=noopjs",
+            "||news.example^$removeparam=utm_source",
+            "||news.example^$csp=script-src 'none'",
+            "||news.example^$replace=/a/b/",
             "##.adsbygoogle",
             "||tracker.test^$xmlhttprequest",
             "example.com#?#:xpath(//div[@class='ad'])",
@@ -200,8 +205,16 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(compiled.networkJSON.contains("raw"))
         XCTAssertTrue(compiled.proceduralJSON.contains("color:red"))
         XCTAssertTrue(compiled.globalCSS.contains(".adsbygoogle"))
-        XCTAssertFalse(compiled.json.contains("scriptlet"))
+        XCTAssertFalse(compiled.scriptletJSON.contains("\"scriptlet\""))
+        XCTAssertTrue(compiled.scriptletJSON.contains("abort-on-property-read"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("set-constant"))
+        XCTAssertTrue(compiled.networkJSON.contains("block"))
         XCTAssertFalse(compiled.networkJSON.contains("redirect"))
+        XCTAssertEqual(compiled.removeParams.first?.key, "utm_source")
+        XCTAssertTrue(compiled.cspJSON.contains("script-src 'none'"))
+        let stripped = AdBlockEngine.urlByStripping(URL(string: "https://www.news.example/a?utm_source=x&id=1")!, rules: compiled.removeParams)
+        XCTAssertEqual(stripped?.absoluteString, "https://www.news.example/a?id=1")
+        XCTAssertNil(AdBlockEngine.urlByStripping(URL(string: "https://other.example/a?utm_source=x")!, rules: compiled.removeParams))
         XCTAssertGreaterThan(compiled.chunks.count, 1)
         XCTAssertEqual(AdBlockEngine.chunkDefault, 50_000)
     }

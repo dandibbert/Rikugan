@@ -36,7 +36,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 明确的兼容限制：
 
-- 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。两种环境都会安装消息通道，所以 `@grant none` 的 `GM_registerMenuCommand` 能回到宿主。`unsafeWindow` 不是 `@grant`：页面环境下就是 `window`。隔离环境下往页面注入脚本，用对象句柄读写 `window` 和 DOM，并调用页面函数。不能把隔离世界里的函数送进页面。这不是 Tampermonkey 完整实现。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。规格点名的 grant 可以安装。
+- 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。两种环境都会安装消息通道，所以 `@grant none` 的 `GM_registerMenuCommand` 能回到宿主。`unsafeWindow` 不是 `@grant`：页面环境下就是 `window`。隔离环境下往页面注入脚本，用对象句柄读写 `window` 和 DOM，并调用页面函数。没有外部绑定的函数会把源码注入页面；闭包在页面里是一个桩，调用时回到隔离世界执行。这不是 Tampermonkey 完整实现。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。规格点名的 grant 可以安装。
 - `GM_getValue` / `GM_setValue` / `GM_deleteValue` / `GM_listValues` 使用脚本自己的 JSON 存储，不写网页 localStorage。`GM_addValueChangeListener` 在本页立刻回调，并通知同一身份里其他同样私密性的标签。存储不支持函数或循环引用。无痕标签的 GM 值只留在 `BrowserSession.privateScriptValues`，不写入普通身份的脚本存储；最后一个无痕标签关闭后清空。
 - GM 网络使用无 Cookie 的 ephemeral URLSession，不自动附带浏览器登录 Cookie。按 `@connect` 检查首个请求和每次重定向；同源默认允许。系统 ATS 对普通 HTTP 原生请求仍可能限制；建议 HTTPS。
 - `GM_xmlhttpRequest` 有 `onprogress`，`abort()` 会 `task.cancel()`。不支持流式、FormData 和完整同步 readyState。单次响应限制 8 MB。
@@ -50,7 +50,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 另外有：
 
-- 广告规则是 AdGuard 子集，不是内置的完整 EasyList。内置列表只覆盖常见广告域和少量元素隐藏。订阅 URL 会整份下载（单次上限 8 MB）并编译，列表里可以重新下载。网络规则和元素隐藏编译成 `WKContentRuleList`，默认按 5 万条一块（Safari 内容拦截扩展的实际上限；WebKit 没有公开硬顶，编译失败的段会退回纯网络规则）。`@@`、`$script`、`$image`、`$stylesheet`、`$xmlhttprequest`、`$third-party`、`$domain=`、`##`、`#@#` 会进规则。`#$#` 作为 CSS 注入。`#?#` 的 `:has()` 当元素隐藏；`:has-text`、`:contains`、`:xpath`、`:matches-css`、`:upward`、`:remove`、`:style` 由页面脚本执行。丢掉的语法包括 `#%#` scriptlet、`##+js`、`$redirect`、`$removeparam`、`$csp`、`$replace`。元素选择器确认后写入自定义规则并立刻隐藏。
+- 广告规则是 AdGuard 子集，不是内置的完整 EasyList。内置列表只覆盖常见广告域和少量元素隐藏。订阅 URL 会整份下载（单次上限 8 MB）并编译，列表里可以重新下载。网络规则和元素隐藏编译成 `WKContentRuleList`，默认按 5 万条一块（Safari 内容拦截扩展的实际上限；WebKit 没有公开硬顶，编译失败的段会退回纯网络规则）。`@@`、`$script`、`$image`、`$stylesheet`、`$xmlhttprequest`、`$third-party`、`$domain=`、`##`、`#@#` 会进规则。`#$#` 作为 CSS 注入。`#?#` 的 `:has()` 当元素隐藏；`:has-text`、`:contains`、`:xpath`、`:matches-css`、`:upward`、`:remove`、`:style` 由页面脚本执行。`#%#` 和 `##+js` 会跑 abort-on-property-read、abort-on-property-write、json-prune、set-constant、prevent-fetch、prevent-xhr。`$removeparam` 在主框架导航前删掉对应查询参数。`$csp` 插入 meta 策略。WKContentRuleList 没有重定向动作，`$redirect` 和 `$redirect-rule` 因此编译成拦截。`$replace` 改不了响应体。元素选择器确认后写入自定义规则并立刻隐藏。内容拦截页可以一键订阅 `https://easylist.to/easylist/easylist.txt`，下载后的列表会编译并安装，不内置整份 EasyList。
 - 暗黑模式是样式表（Off / Auto / On，站点可覆盖），给文字节点上色，`img` / `video` / `picture` / `canvas` / `svg` 保持 `filter:none`，不用整页 `invert`。
 - 阅读模式抽出标题、作者和带标签的块（标题、段落、图片、链接），字号、字体、行高和主题写进 `ReaderSettings` 并作用到阅读页。
 - 翻译只有 `PageTranslation` 里的 Apple `TranslationSession`。正文会分批译完，翻译页开着时会继续补译新出现的文字。没有第二个网络翻译服务。设备没下载的语言包由系统报错。

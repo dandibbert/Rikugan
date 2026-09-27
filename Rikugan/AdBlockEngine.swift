@@ -1,14 +1,16 @@
 import Foundation
 
-/// Compiles the adblock rule classes the product spec names: built-in rules, user rules,
-/// third-party AdGuard lists, WKContentRuleList network filtering, and CSS cosmetic rules.
-/// `BrowserTab.syncContentRules` installs the compiled chunks. This is not a bundled EasyList.
+/// Compiles built-in rules, user rules, and third-party AdGuard lists.
+/// Network and cosmetic rules become WKContentRuleList chunks installed by `BrowserTab.syncContentRules`.
+/// `#%#` / `##+js` scriptlets in the built-in set run from `PageTools.applyScriptlets`.
+/// `$redirect` and `$redirect-rule` compile as `block` because content rules cannot redirect.
+/// `$removeparam` is applied to main-frame navigations. `$replace` is not compiled.
+/// This is not a bundled EasyList.
 ///
 /// WebKit does not publish a hard WKContentRuleList cap. Safari's older content-blocker
 /// extension limit was 50_000 rules, and oversized lists fail inside `compileContentRuleList`.
 /// Network rules are split into chunks of `limit` (default 50_000). Cosmetic hiding is applied
-/// again as CSS so it still works when a chunk is rejected. Scriptlet (`#%#`, `##+js`) and
-/// `$redirect` lines are outside that rule set and are not compiled.
+/// again as CSS so it still works when a chunk is rejected.
 enum AdBlockEngine {
     static let chunkDefault = 50_000
     static let maxLines = 500_000
@@ -22,8 +24,21 @@ enum AdBlockEngine {
         var hostCSS: [String: String]
         var hostSelectors: [String: [String]]
         var proceduralJSON: String
+        var scriptletJSON: String
+        var cspJSON: String
+        var removeParams: [QueryStrip]
         var blockedSamples: [String]
     }
+
+    struct QueryStrip: Equatable {
+        var domains: [String]
+        var key: String
+        var regex: Bool
+    }
+
+    static let scriptletNames: Set<String> = [
+        "abort-on-property-read", "abort-on-property-write", "json-prune", "set-constant", "prevent-fetch", "prevent-xhr"
+    ]
 
     static let builtin: [String] = [
         "||doubleclick.net^", "||googlesyndication.com^", "||googleadservices.com^",
@@ -76,6 +91,9 @@ enum AdBlockEngine {
         var hostStyle: [String: [String]] = [:]
         var unless: [(String, [String])] = []
         var procedural: [[String: Any]] = []
+        var scriptlets: [[String: Any]] = []
+        var policies: [[String: Any]] = []
+        var strips: [QueryStrip] = []
         var exceptions = Set<String>()
         for raw in input.prefix(maxLines) {
             guard let rule = parse(raw) else { continue }
@@ -86,10 +104,19 @@ enum AdBlockEngine {
                     allows.append(["trigger": trigger, "action": ["type": "ignore-previous-rules"]])
                 }
             case .block(let filter, let options):
-                if var trigger = trigger(filter) {
+                if !options.removeParams.isEmpty {
+                    strips.append(contentsOf: options.removeParams.map { QueryStrip(domains: hosts(of: filter), key: $0.key, regex: $0.regex) })
+                }
+                if let policy = options.csp {
+                    policies.append(["domains": hosts(of: filter), "policy": policy])
+                }
+                let network = options.redirect || (options.removeParams.isEmpty && options.csp == nil)
+                if network, var trigger = trigger(filter) {
                     apply(options, to: &trigger)
                     blocks.append(["trigger": trigger, "action": ["type": "block"]])
                 }
+            case .scriptlet(let domains, let name, let args):
+                scriptlets.append(["domains": domains, "name": name, "args": args])
             case .hide(let include, let exclude, let selector):
                 guard safeSelector(selector) else { continue }
                 if include.isEmpty && exclude.isEmpty { global.append(selector) }
@@ -135,6 +162,8 @@ enum AdBlockEngine {
             hostCSS[host, default: ""] += styles.joined(separator: "\n")
         }
         let proceduralData = (try? JSONSerialization.data(withJSONObject: procedural)) ?? Data("[]".utf8)
+        let scriptletData = (try? JSONSerialization.data(withJSONObject: scriptlets)) ?? Data("[]".utf8)
+        let cspData = (try? JSONSerialization.data(withJSONObject: policies)) ?? Data("[]".utf8)
         return Compiled(
             chunks: pack(full, size: chunk),
             networkChunks: pack(network, size: chunk),
@@ -144,8 +173,30 @@ enum AdBlockEngine {
             hostCSS: hostCSS,
             hostSelectors: hosts,
             proceduralJSON: String(data: proceduralData, encoding: .utf8) ?? "[]",
+            scriptletJSON: String(data: scriptletData, encoding: .utf8) ?? "[]",
+            cspJSON: String(data: cspData, encoding: .utf8) ?? "[]",
+            removeParams: strips,
             blockedSamples: []
         )
+    }
+
+    static func urlByStripping(_ url: URL, rules: [QueryStrip]) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              var items = components.queryItems, !items.isEmpty else { return nil }
+        let host = url.host?.lowercased() ?? ""
+        var changed = false
+        for rule in rules {
+            let domains = rule.domains.map { $0.lowercased() }
+            if !domains.isEmpty && !domains.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { continue }
+            let before = items.count
+            if rule.key.isEmpty { items.removeAll() }
+            else if rule.regex { items.removeAll { $0.name.range(of: rule.key, options: .regularExpression) != nil } }
+            else { items.removeAll { $0.name == rule.key } }
+            if items.count != before { changed = true }
+        }
+        guard changed else { return nil }
+        components.queryItems = items.isEmpty ? nil : items
+        return components.url
     }
 
     static func verdict(url: URL, lines: [String]) -> Verdict {
@@ -172,18 +223,27 @@ enum AdBlockEngine {
         case hide([String], [String], String)
         case style([String], String)
         case procedural([String], String, String, String)
+        case scriptlet([String], String, [String])
         case unhide(String)
+    }
+    private struct ParamRule {
+        var key: String
+        var regex: Bool
     }
     private struct Options {
         var thirdParty: Bool?
         var resourceTypes: [String]?
         var ifDomains: [String] = []
         var unlessDomains: [String] = []
+        var redirect = false
+        var removeParams: [ParamRule] = []
+        var csp: String?
     }
 
     private static func parse(_ raw: String) -> Rule? {
         let line = raw.trimmingCharacters(in: .whitespaces)
-        guard !line.isEmpty, !line.hasPrefix("!"), !line.hasPrefix("["), !line.hasPrefix("#%#") else { return nil }
+        guard !line.isEmpty, !line.hasPrefix("!"), !line.hasPrefix("[") else { return nil }
+        if line.contains("#%#") || line.contains("##+js(") { return scriptletRule(line) }
         if line.contains("#@?#") || line.contains("#@$#") || line.contains("#@#") {
             let selector = line.components(separatedBy: "#@").last?.trimmingCharacters(in: CharacterSet(charactersIn: "#?$ ")) ?? ""
             let cosmetic = selector.split(separator: "#", maxSplits: 1).last.map { String($0).trimmingCharacters(in: .whitespaces) } ?? selector
@@ -220,14 +280,59 @@ enum AdBlockEngine {
         return allow ? .allow(body, options) : .block(body, options)
     }
 
+    private static func scriptletRule(_ line: String) -> Rule? {
+        let domains: [String]
+        let body: String
+        if let range = line.range(of: "#%#") {
+            domains = domainList(String(line[..<range.lowerBound])).include
+            body = String(line[range.upperBound...])
+        } else if let range = line.range(of: "##+js(") {
+            domains = domainList(String(line[..<range.lowerBound])).include
+            body = String(line[range.upperBound...])
+        } else { return nil }
+        guard let parsed = scriptletCall(body) else { return nil }
+        return .scriptlet(domains, parsed.name, parsed.args)
+    }
+
+    private static func scriptletCall(_ body: String) -> (name: String, args: [String])? {
+        var text = body.trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("//scriptlet(") { text = String(text.dropFirst("//scriptlet(".count)) }
+        if text.hasSuffix(")") { text.removeLast() }
+        var args: [String] = []
+        var current = ""
+        var quote: Character?
+        for character in text {
+            if let quote, character == quote { quote = nil; continue }
+            if quote == nil, character == "'" || character == "\"" { quote = character; continue }
+            if quote == nil, character == "," { args.append(current.trimmingCharacters(in: .whitespaces)); current = ""; continue }
+            current.append(character)
+        }
+        let tail = current.trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty || !args.isEmpty { args.append(tail) }
+        guard let name = args.first?.trimmingCharacters(in: .whitespaces), scriptletNames.contains(name) else { return nil }
+        return (name, args.dropFirst().map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+    }
+
+    private static func hosts(of filter: String) -> [String] {
+        var pattern = filter
+        guard pattern.hasPrefix("||") else { return [] }
+        pattern.removeFirst(2)
+        pattern = pattern.replacingOccurrences(of: "^", with: "")
+        let domain = String(pattern.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+        guard !domain.isEmpty, domain != "*", domain.range(of: #"^[A-Za-z0-9.*-]+$"#, options: .regularExpression) != nil else { return [] }
+        return [domain.replacingOccurrences(of: "*.", with: "")]
+    }
+
     private static func splitOptions(_ body: String) -> (pattern: String, modifiers: String?) {
         guard let dollar = body.lastIndex(of: "$") else { return (body, nil) }
         let head = String(body[..<dollar])
         let mods = String(body[body.index(after: dollar)...])
         if head.hasPrefix("/"), head.hasSuffix("/") { return (body, nil) }
         let tokens = mods.split(separator: ",")
+        let known = ["redirect", "redirect-rule", "removeparam", "csp", "replace"]
         let plausible = !mods.isEmpty && tokens.allSatisfy { token in
             let value = String(token)
+            if known.contains(where: { value == $0 || value.hasPrefix($0 + "=") }) { return true }
             return !value.isEmpty && !value.contains(" ") && value.unicodeScalars.allSatisfy { CharacterSet.modifierChars.contains($0) || $0 == "=" || $0 == "|" || $0 == "." || $0 == "*" }
         }
         return plausible ? (head, mods) : (body, nil)
@@ -249,8 +354,25 @@ enum AdBlockEngine {
             case "document", "subdocument": types.append("document")
             case "popup": types.append("popup")
             case "all", "important", "match-case": break
-            case "redirect", "redirect-rule", "removeparam", "csp", "replace", "jsonprune": return false
+            case "redirect", "redirect-rule": options.redirect = true
+            case "replace", "jsonprune": return false
             default:
+                if token.hasPrefix("redirect=") || token.hasPrefix("redirect-rule=") { options.redirect = true; continue }
+                if token == "removeparam" || token.hasPrefix("removeparam=") {
+                    let raw = token.hasPrefix("removeparam=") ? String(token.dropFirst("removeparam=".count)) : ""
+                    if raw.hasPrefix("/"), raw.hasSuffix("/"), raw.count > 2 {
+                        options.removeParams.append(ParamRule(key: String(raw.dropFirst().dropLast()), regex: true))
+                    } else {
+                        options.removeParams.append(ParamRule(key: raw, regex: false))
+                    }
+                    continue
+                }
+                if token.hasPrefix("csp=") {
+                    let policy = String(token.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                    if !policy.isEmpty, policy.count < 500, !policy.lowercased().contains("javascript:") { options.csp = policy }
+                    continue
+                }
+                if token.hasPrefix("replace=") { return false }
                 if token.hasPrefix("domain=") {
                     for domain in token.dropFirst(7).split(separator: "|") {
                         let value = String(domain)

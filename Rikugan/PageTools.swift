@@ -9,12 +9,14 @@ enum PageTools {
         return text
     }()
 
-    static func install(on controller: WKUserContentController, cosmeticCSS: String, hostCSS: String = "{}", procedural: String = "[]") {
+    static func install(on controller: WKUserContentController, cosmeticCSS: String, hostCSS: String = "{}", procedural: String = "[]", scriptlets: String = "[]", csp: String = "[]") {
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         let css = jsString(cosmeticCSS) ?? "\"\""
         let host = hostCSS.isEmpty ? "{}" : hostCSS
         let rules = procedural.isEmpty ? "[]" : procedural
-        let boot = "(function(){try{if(globalThis.RikuganPageTools){RikuganPageTools.applyBlocking(\(css), \(host), \(rules));RikuganPageTools.installConsole();}}catch(e){}})();"
+        let lets = scriptlets.isEmpty ? "[]" : scriptlets
+        let policies = csp.isEmpty ? "[]" : csp
+        let boot = "(function(){try{if(globalThis.RikuganPageTools){RikuganPageTools.applyBlocking(\(css), \(host), \(rules));RikuganPageTools.applyScriptlets(\(lets));RikuganPageTools.applyCSP(\(policies));RikuganPageTools.installConsole();}}catch(e){}})();"
         controller.addUserScript(WKUserScript(source: boot, injectionTime: .atDocumentStart, forMainFrameOnly: false))
     }
 
@@ -39,6 +41,9 @@ enum BlockListCoordinator {
         session.globalCosmetic = compiled.globalCSS
         session.hostCSS = compiled.hostCSS
         session.proceduralJSON = compiled.proceduralJSON
+        session.scriptletJSON = compiled.scriptletJSON
+        session.cspJSON = compiled.cspJSON
+        session.removeParams = compiled.removeParams
         let store = WKContentRuleListStore.default()
         for tab in session.tabs { tab.removeContentRules() }
         session.contentRuleLists = []
