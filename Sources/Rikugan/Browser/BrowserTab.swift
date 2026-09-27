@@ -339,6 +339,8 @@ enum TranslationState: Equatable {
     }
 
     func markInjected(for url: URL) { injectedForURL = url }
+    /// Forces the next navigation to rebuild injected scripts (e.g. after GM values changed).
+    func invalidateInjection() { injectedForURL = nil }
 
     /// Frames reported by the tools world (used by scripting.executeScript allFrames / frameIds).
     private(set) var frameRecords: [LoadedExtension.FrameRecord] = []

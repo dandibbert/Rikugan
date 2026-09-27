@@ -122,7 +122,7 @@ final class LocalHTTPServer: @unchecked Sendable {
         }
         // Wait for the background worker and rule lists.
         let bgReady = await waitUntil(15) { ext.background?.isReady == true }
-        record("后台 Service Worker 启动", bgReady)
+        record("后台 Service Worker 启动", bgReady, ext.background?.diagnostics ?? "no background host")
         _ = await waitUntil(20) { !services.adBlock.isCompiling }
         _ = await waitUntil(10) { !profile.extensions.dnrLists.isEmpty }
 

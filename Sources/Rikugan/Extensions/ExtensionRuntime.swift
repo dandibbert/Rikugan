@@ -612,8 +612,30 @@ import Combine
         webView.reload()
     }
 
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // Do not rely only on the JS ready signal: once the page (and its scripts) finished loading
+        // and the chrome shim is present, the background runtime can receive events.
+        Task {
+            for _ in 0..<20 {
+                let present = (try? await webView.rkCall("return typeof globalThis.__rikuganChrome === 'object' && document.readyState === 'complete';", world: .page)) as? Bool ?? false
+                if present { markReady(); return }
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+            runtime.updateRecord(ext.id) { $0.lastErrors.append("后台运行时未初始化 chrome API") }
+        }
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         runtime.updateRecord(ext.id) { $0.lastErrors.append("后台页面加载失败：\(error.localizedDescription)") }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        runtime.updateRecord(ext.id) { $0.lastErrors.append("后台页面加载失败：\(error.localizedDescription)") }
+    }
+
+    /// Diagnostic description used by the self-test.
+    var diagnostics: String {
+        "url=\(webView?.url?.absoluteString ?? "nil") loading=\(webView?.isLoading ?? false) ready=\(isReady) window=\(webView?.window != nil) errors=\(runtime.records.first { $0.id == ext.id }?.lastErrors.joined(separator: "|") ?? "")"
     }
 }
 

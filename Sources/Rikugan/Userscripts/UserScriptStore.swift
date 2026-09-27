@@ -77,6 +77,8 @@ struct BuiltUserScript {
         current[key] = value
         values[id] = current
         JSONFile<[String: String]>(valuesFile(id)).save(current)
+        // Injected sources embed a value snapshot; rebuild them on the next navigation.
+        for tab in TabRegistry.shared.allTabs { tab.invalidateInjection() }
     }
 
     func replaceValues(_ newValues: [String: String], for id: UUID) {
