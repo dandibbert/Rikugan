@@ -746,5 +746,76 @@ function load(extra) {
   assert.equal(readonlyDemo && readonlyDemo.ok, true);
   assert.equal(readonlyDemo.visits, 1);
 
+  // Xcode 16.4 WebKit drops runtime.sendMessage while the background has never
+  // loaded (empty listener set). The worker WKWebExtension evaluates is the
+  // bridge prepended onto background.js, and only after loadBackgroundContent.
+  function patchWorker(text, bridge) {
+    const marker = '/* rikugan-extension-bridge */';
+    return text.includes(marker) ? text : bridge + '\n' + text;
+  }
+  const workerSource = patchWorker(backgroundSource, source);
+  assert.equal(patchWorker(workerSource, source), workerSource);
+  assert.equal(workerSource.indexOf('/* rikugan-extension-bridge */'), 0);
+  assert.ok(workerSource.includes('api.runtime.onMessage.addListener'));
+  function webkit18Send(state, message) {
+    if (ExtensionRuntimeDrop(state)) return undefined;
+    let reply;
+    let handled = false;
+    state.listeners.forEach(listener => {
+      let replied = false;
+      const value = listener(message, { tab: { id: 4 } }, response => {
+        replied = true;
+        reply = response;
+      });
+      if (value === true && replied) handled = true;
+    });
+    return handled ? reply : undefined;
+  }
+  function ExtensionRuntimeDrop(state) {
+    return !state.loadedOnce && state.listeners.length === 0;
+  }
+  const cold = { loadedOnce: false, listeners: [] };
+  assert.equal(webkit18Send(cold, { type: 'rikugan-probe' }), undefined);
+  const woken = {
+    loadedOnce: false,
+    listeners: [],
+    browser: null
+  };
+  const wokenRuntime = {
+    id: 'demo',
+    sendMessage() { return Promise.resolve(undefined); },
+    onMessage: { addListener(fn) { woken.listeners.push(fn); } },
+    connect() { return {}; }
+  };
+  const wokenHost = {
+    runtime: wokenRuntime,
+    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+    tabs: { query() { return Promise.resolve([{ id: 4 }]); } },
+    scripting: { insertCSS() { return Promise.resolve(); }, executeScript() { return Promise.resolve([]); } },
+    notifications: { create() { return Promise.resolve('id'); }, getAll() { return Promise.resolve({ 'rikugan-demo': { title: 'Rikugan' } }); } }
+  };
+  const wokenBrowser = new Proxy(wokenHost, {
+    set(target, key, value) {
+      if (!Object.prototype.hasOwnProperty.call(target, key)) throw new TypeError('readonly namespace ' + String(key));
+      target[key] = value;
+      return true;
+    }
+  });
+  const wokenSandbox = {
+    browser: wokenBrowser,
+    chrome: wokenBrowser,
+    console,
+    Promise,
+    setTimeout,
+    clearTimeout
+  };
+  wokenSandbox.globalThis = wokenSandbox;
+  vm.runInNewContext(workerSource, wokenSandbox, { filename: 'background.js' });
+  woken.loadedOnce = true;
+  assert.equal(woken.listeners.length, 1);
+  const wokenReply = webkit18Send(woken, { type: 'rikugan-probe' });
+  assert.equal(wokenReply && wokenReply.ok, true);
+  assert.equal(wokenReply.visits, 1);
+
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

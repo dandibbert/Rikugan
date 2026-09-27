@@ -585,6 +585,11 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(ExtensionRuntime.beginLoad(from: .notStarted), .starting)
         XCTAssertEqual(ExtensionRuntime.beginLoad(from: .suspended), .waking)
         XCTAssertEqual(ExtensionRuntime.beginLoad(from: .ready), .waking)
+        XCTAssertTrue(ExtensionRuntime.mustWarmBackground(hasBackgroundContent: true))
+        XCTAssertFalse(ExtensionRuntime.mustWarmBackground(hasBackgroundContent: false))
+        XCTAssertTrue(ExtensionRuntime.backgroundMessageDropped(hasLoadedOnce: false, listenerCount: 0))
+        XCTAssertFalse(ExtensionRuntime.backgroundMessageDropped(hasLoadedOnce: true, listenerCount: 1))
+        XCTAssertFalse(ExtensionRuntime.backgroundMessageDropped(hasLoadedOnce: false, listenerCount: 1))
 
         var profile = BrowserProfile(name: "个人")
         profile.tabGroups = [groupA, groupB]

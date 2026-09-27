@@ -265,6 +265,18 @@ enum ExtensionRuntime {
         default: return .starting
         }
     }
+
+    /// Xcode 16.4 WebKit drops `runtime.sendMessage` while the background listener set is empty.
+    /// `wakeUpBackgroundContentIfNecessaryToFireEvents` treats that as unhandled and does not start
+    /// the service worker (fixed later in WebKit 7682d9817b, 2026-06-28). Load background content
+    /// once before any content-script message.
+    static func mustWarmBackground(hasBackgroundContent: Bool) -> Bool {
+        hasBackgroundContent
+    }
+
+    static func backgroundMessageDropped(hasLoadedOnce: Bool, listenerCount: Int) -> Bool {
+        !hasLoadedOnce && listenerCount == 0
+    }
 }
 
 enum ProfileArchive {

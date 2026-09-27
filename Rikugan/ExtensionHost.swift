@@ -115,6 +115,13 @@ extension BrowserSession {
             let extensionObject = try await WKWebExtension(resourceBaseURL: base)
             guard isActive else { return }
             try activateExtension(extensionObject, record: record)
+            guard isActive else { return }
+            if ExtensionRuntime.mustWarmBackground(hasBackgroundContent: extensionObject.hasBackgroundContent) {
+                guard await warmExtensionBackground(id: record.id) else {
+                    extensionPhase = .failed
+                    return
+                }
+            }
             extensionPhase = .ready
             extensionPhaseError = ""
         } catch {
@@ -160,6 +167,30 @@ extension BrowserSession {
             context.didOpenWindow(self)
             for tab in tabs { context.didOpenTab(tab) }
             if let tab = activeTab { context.didActivateTab(tab, previousActiveTab: nil) }
+        }
+    }
+    /// Starts the MV3 service worker before a content script can call `runtime.sendMessage`.
+    /// On Xcode 16.4 that first message is dropped while the listener set is still empty.
+    @available(iOS 18.4, *)
+    @discardableResult
+    func warmExtensionBackground(id: UUID) async -> Bool {
+        guard let context = extensionContext(id: id) else { return false }
+        guard ExtensionRuntime.mustWarmBackground(hasBackgroundContent: context.webExtension.hasBackgroundContent) else { return true }
+        let gate = BackgroundWarmGate()
+        return await withCheckedContinuation { continuation in
+            context.loadBackgroundContent { [weak self] error in
+                Task { @MainActor in
+                    guard gate.claim() else { return }
+                    if let error {
+                        self?.extensionErrors[id] = error.localizedDescription
+                        self?.extensionPhaseError = error.localizedDescription
+                        self?.model?.noteRuntime("extension background failed: \(error.localizedDescription)")
+                        continuation.resume(returning: false)
+                    } else {
+                        continuation.resume(returning: true)
+                    }
+                }
+            }
         }
     }
     func toggleExtension(_ record: ExtensionRecord, enabled: Bool) async {
@@ -254,6 +285,7 @@ extension BrowserSession {
                     if let index = profile.extensions.firstIndex(where: { $0.id == record.id }) { profile.extensions[index] = updated }
                 }
                 try? self.activateExtension(prepared.webExtension, record: updated)
+                Task { await self.warmExtensionBackground(id: updated.id) }
             }
             if added.isEmpty { install() }
             else {
@@ -434,4 +466,17 @@ extension BrowserTab: WKWebExtensionTab {
     }
     func shouldGrantPermissionsOnUserGesture(for context: WKWebExtensionContext) -> Bool { true }
     func shouldBypassPermissions(for context: WKWebExtensionContext) -> Bool { false }
+}
+
+/// `loadBackgroundContent` can invoke its completion more than once on error.
+private final class BackgroundWarmGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
+    }
 }
