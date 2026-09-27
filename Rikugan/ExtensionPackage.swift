@@ -6,7 +6,7 @@ enum ChromeAPIMatrix {
     static let entries: [Entry] = [
         .init(api: "runtime", level: "Supported", note: "由 WKWebExtension 实现 onMessage、sendMessage、connect、getURL、id。不是自研 chrome.runtime。sendNativeMessage / connectNative 明确禁用。"),
         .init(api: "storage", level: "Supported", note: "由 WKWebExtension 的扩展存储提供 local / sync / session，按身份隔离。"),
-        .init(api: "scripting", level: "Partial", note: "executeScript 与 insertCSS 取决于 WebKit；不支持的目标会返回错误而不是崩溃。"),
+        .init(api: "scripting", level: "Partial", note: "扩展详情调用 BrowserSession.insertExtensionCSS 与 executeExtensionScript，把 CSS 写进当前标签页并在页面世界执行脚本字符串。这不是第二套 chrome.scripting。WebKit 自己的 chrome.scripting 仍取决于系统。"),
         .init(api: "tabs", level: "Partial", note: "query、create、update、reload、remove、activate。窗口管理只覆盖 App 内窗口。"),
         .init(api: "permissions", level: "Supported", note: "安装确认、可选权限与网站权限变更都会再次询问。"),
         .init(api: "content_scripts", level: "Supported", note: "matches、exclude_matches、js、css、run_at、all_frames。"),
@@ -16,7 +16,7 @@ enum ChromeAPIMatrix {
         .init(api: "cookies", level: "Partial", note: "只能访问当前身份网站存储里 WebKit 暴露的 cookie。"),
         .init(api: "downloads", level: "Partial", note: "浏览器自己的下载管理器可用；chrome.downloads 取决于 WebKit。"),
         .init(api: "i18n", level: "Partial", note: "跟随扩展包内的 _locales，缺少的文案不会伪造。"),
-        .init(api: "notifications", level: "Unsupported", note: "已列入 WKWebExtensionContext.unsupportedAPIs。没有持久通知后端，调用不会被记成成功。"),
+        .init(api: "notifications", level: "Partial", note: "页面 Notification 和 App 内通知列表会提交 UNUserNotificationCenter，并在用户允许时申请系统通知授权。notifications 已从 unsupportedAPIs 移除。没有自研 chrome.notifications；若 WebKit 不转发 chrome.notifications.create，扩展调用不会被记成成功。"),
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
         .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带 DNR 由 WebKit 执行。Rikugan 的广告拦截是独立引擎，不把扩展改写成用户脚本。"),
         .init(api: "debugger", level: "Unsupported", note: "已列入 unsupportedAPIs。不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),

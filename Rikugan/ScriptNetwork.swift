@@ -1,34 +1,36 @@
 import Foundation
 
-/// Cookie-free networking for GM_xmlhttpRequest. Redirects use the same @connect policy.
-/// `cancel()` aborts the URLSession task. Download progress is reported before the final body.
+/// GM_xmlhttpRequest networking. Same-origin Cookie headers are attached by the caller.
+/// Redirects that leave that host drop the Cookie header. `cancel()` aborts the URLSession task.
 final class ScriptExchange: NSObject, URLSessionDataDelegate {
     private var session: URLSession?
     private var task: URLSessionDataTask?
     private var response: HTTPURLResponse?
     private var bytes = Data()
     private let limit: Int
+    private let sameOriginHost: String?
     private let permits: (URL) -> Bool
     private var completion: ((Result<[String: Any], Error>) -> Void)?
     private var failure: Error?
     private var aborted = false
     var onProgress: ((Int, Int) -> Void)?
 
-    private init(limit: Int, permits: @escaping (URL) -> Bool, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+    private init(limit: Int, sameOriginHost: String?, permits: @escaping (URL) -> Bool, completion: @escaping (Result<[String: Any], Error>) -> Void) {
         self.limit = limit
+        self.sameOriginHost = sameOriginHost
         self.permits = permits
         self.completion = completion
     }
 
     @discardableResult
-    static func start(_ request: URLRequest, limit: Int = 8 * 1024 * 1024,
+    static func start(_ request: URLRequest, limit: Int = 8 * 1024 * 1024, sameOriginHost: String? = nil,
                       permits: @escaping (URL) -> Bool,
                       completion: @escaping (Result<[String: Any], Error>) -> Void) -> ScriptExchange? {
         guard let url = request.url, permits(url) else {
             completion(.failure(RikuganError.message("请求不在 @connect 授权范围内。")))
             return nil
         }
-        let worker = ScriptExchange(limit: limit, permits: permits, completion: completion)
+        let worker = ScriptExchange(limit: limit, sameOriginHost: sameOriginHost, permits: permits, completion: completion)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
@@ -90,7 +92,11 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
             task.cancel()
             return
         }
-        completionHandler(request)
+        var next = request
+        if let sameOriginHost, let host = request.url?.host?.lowercased(), host != sameOriginHost {
+            next.setValue(nil, forHTTPHeaderField: "Cookie")
+        }
+        completionHandler(next)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
@@ -149,6 +155,18 @@ final class ScriptExchange: NSObject, URLSessionDataDelegate {
 
 enum ScriptVault {
     static func persists(isPrivate: Bool) -> Bool { !isPrivate }
+    static func commit(isPrivate: Bool, scriptID: UUID, stored: [String: Any], json: String, memory: inout [UUID: [String: Any]]) -> String? {
+        if persists(isPrivate: isPrivate) { return json }
+        memory[scriptID] = stored
+        return nil
+    }
+}
+
+enum ScriptRequestCookies {
+    static func shouldAttach(page: URL, request: URL, permitted: Bool) -> Bool {
+        guard permitted, let pageHost = page.host?.lowercased(), let host = request.host?.lowercased() else { return false }
+        return page.scheme?.lowercased() == request.scheme?.lowercased() && pageHost == host
+    }
 }
 
 typealias ScriptNetwork = ScriptExchange

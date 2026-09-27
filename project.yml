@@ -2,7 +2,7 @@ name: Rikugan
 options:
   bundleIdPrefix: com.dandibbert
   deploymentTarget:
-    iOS: "18.4"
+    iOS: "17.0"
   createIntermediateGroups: true
 settings:
   base:
@@ -39,6 +39,7 @@ targets:
         link: false
       - sdk: WebKit.framework
       - sdk: CloudKit.framework
+      - sdk: UserNotifications.framework
   RikuganShare:
     type: app-extension
     platform: iOS

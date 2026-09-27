@@ -63,4 +63,33 @@ enum AutofillVault {
             return "iCloud 没有接上：\(error.localizedDescription)。自动填充仍只在钥匙串，没有写入 UserDefaults。"
         }
     }
+    static func pullFromCloud(profile: UUID) async -> [AutofillItem]? {
+        let container = CKContainer(identifier: "iCloud.com.dandibbert.Rikugan")
+        do {
+            let status = try await container.accountStatus()
+            guard status == .available else { return nil }
+            let record = try await container.privateCloudDatabase.record(for: CKRecord.ID(recordName: "autofill-" + profile.uuidString))
+            guard let payload = record["payload"] as? String, let data = payload.data(using: .utf8) else { return nil }
+            return try JSONDecoder().decode([AutofillItem].self, from: data)
+        } catch {
+            return nil
+        }
+    }
+    static func merge(local: [AutofillItem], remote: [AutofillItem]) -> [AutofillItem] {
+        var map = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+        for item in remote { map[item.id] = item }
+        return map.values.sorted { $0.title.localizedCompare($1.title) == .orderedAscending }
+    }
+    static func fillPayload(_ item: AutofillItem) -> [String: String] {
+        [
+            "username": item.username,
+            "password": item.kind == "password" ? item.secret : "",
+            "name": item.name,
+            "email": item.email,
+            "phone": item.phone,
+            "address": item.address,
+            "cardNumber": item.kind == "payment" ? item.secret : "",
+            "paymentLast4": item.paymentLast4
+        ]
+    }
 }

@@ -87,11 +87,9 @@ struct ScriptCommand: Identifiable {
             if operation == "deleteValue" { stored.removeValue(forKey: key) } else { stored[key] = args["value"] ?? NSNull() }
             guard JSONSerialization.isValidJSONObject(stored), let data = try? JSONSerialization.data(withJSONObject: stored), data.count <= 2_000_000,
                   let json = String(data: data, encoding: .utf8) else { replyHandler(nil, "脚本存储必须为 JSON，且不能超过 2 MB。"); return }
-            if !ScriptVault.persists(isPrivate: tab.isPrivate) {
-                session.privateScriptValues[script.id] = stored
-            } else {
+            if let saved = ScriptVault.commit(isPrivate: tab.isPrivate, scriptID: script.id, stored: stored, json: json, memory: &session.privateScriptValues) {
                 session.model?.updateProfile(session.profileID) { profile in
-                    if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].storageJSON = json }
+                    if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].storageJSON = saved }
                 }
             }
             broadcastValue(script: script, key: key, value: operation == "deleteValue" ? nil : stored[key], except: tab, session: session)
@@ -119,21 +117,37 @@ struct ScriptCommand: Identifiable {
             replyHandler(operation == "getResourceURL" ? resource.dataURL : resource.text, nil)
         case "xmlHttpRequest":
             guard let raw = args["url"] as? String, let url = URL(string: raw, relativeTo: origin)?.absoluteURL else { replyHandler(nil, "无效的请求 URL。"); return }
-            var request = URLRequest(url: url)
-            request.httpMethod = args["method"] as? String ?? "GET"
-            request.httpBody = (args["data"] as? String)?.data(using: .utf8)
-            if let headers = args["headers"] as? [String: String] {
-                for (key, value) in headers where !["host", "content-length", "connection"].contains(key.lowercased()) { request.setValue(value, forHTTPHeaderField: key) }
-            }
             let rules = script.connects + ["self"]
             let requestID = args["id"] as? String ?? UUID().uuidString
             let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
-            let exchange = ScriptExchange.start(request, permits: { URLRules.connectionAllowed($0, origin: origin, rules: rules) }) { [weak self] result in
-                self?.exchanges[requestID] = nil
-                switch result { case .success(let value): replyHandler(value, nil); case .failure(let error): replyHandler(nil, error.localizedDescription) }
+            let method = args["method"] as? String ?? "GET"
+            let body = (args["data"] as? String)?.data(using: .utf8)
+            let headers = args["headers"] as? [String: String]
+            let store = tab.isPrivate ? session.privateStore : session.dataStore
+            Task { @MainActor [weak self] in
+                guard let self else { replyHandler(nil, "脚本已关闭。"); return }
+                var request = URLRequest(url: url)
+                request.httpMethod = method
+                request.httpBody = body
+                if let headers {
+                    for (key, value) in headers where !["host", "content-length", "connection"].contains(key.lowercased()) { request.setValue(value, forHTTPHeaderField: key) }
+                }
+                let permitted = URLRules.connectionAllowed(url, origin: origin, rules: rules)
+                var cookieHost: String?
+                if ScriptRequestCookies.shouldAttach(page: origin, request: url, permitted: permitted), request.value(forHTTPHeaderField: "Cookie") == nil {
+                    let cookies: [HTTPCookie] = await withCheckedContinuation { continuation in store.httpCookieStore.getAllCookies { continuation.resume(returning: $0) } }
+                    if let header = CookieHeader.value(cookies: cookies, url: url) {
+                        request.setValue(header, forHTTPHeaderField: "Cookie")
+                        cookieHost = url.host?.lowercased()
+                    }
+                }
+                let exchange = ScriptExchange.start(request, sameOriginHost: cookieHost, permits: { URLRules.connectionAllowed($0, origin: origin, rules: rules) }) { [weak self] result in
+                    self?.exchanges[requestID] = nil
+                    switch result { case .success(let value): replyHandler(value, nil); case .failure(let error): replyHandler(nil, error.localizedDescription) }
+                }
+                exchange?.onProgress = { [weak self] loaded, total in self?.reportProgress(id: requestID, loaded: loaded, total: total, world: world) }
+                if let exchange { self.exchanges[requestID] = exchange }
             }
-            exchange?.onProgress = { [weak self] loaded, total in self?.reportProgress(id: requestID, loaded: loaded, total: total, world: world) }
-            if let exchange { exchanges[requestID] = exchange }
         case "abortRequest":
             if let id = args["id"] as? String { exchanges.removeValue(forKey: id)?.cancel() }
             replyHandler(true, nil)

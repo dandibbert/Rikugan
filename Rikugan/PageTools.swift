@@ -35,6 +35,14 @@ enum PageTools {
     }
 }
 
+enum ExtensionScripting {
+    static func insertCSSExpression(_ css: String) -> String? {
+        guard let literal = PageTools.jsString(css) else { return nil }
+        return "RikuganPageTools.insertExtensionCSS(\(literal))"
+    }
+    static func executeScriptSource(_ source: String) -> String { source }
+}
+
 enum BlockListCoordinator {
     @MainActor static func rebuild(_ session: BrowserSession, announce: Bool = false) async {
         let settings = session.profile.settings

@@ -113,7 +113,7 @@ extension BrowserTab: WKScriptMessageHandler {
         let familyJS = PageTools.jsString(family) ?? "\"\""
         let faceJS = PageTools.jsString(face) ?? "\"\""
         let notifyJS = PageTools.jsString(notifications) ?? "\"ask\""
-        let blockClipboard = clipboard == "block" ? "try{if(navigator.clipboard){navigator.clipboard.readText=()=>Promise.reject(new Error('Blocked by Rikugan'));}}catch(e){}" : ""
+        let clipboardJS = PageTools.jsString(clipboard) ?? "\"ask\""
         let hostJSON = (session?.hostCSS).flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let procedural = session?.proceduralJSON ?? "[]"
         let scriptlets = session?.scriptletJSON ?? "[]"
@@ -123,7 +123,7 @@ extension BrowserTab: WKScriptMessageHandler {
         let css = PageTools.jsString(session?.globalCosmetic ?? "") ?? "\"\""
         Task { [weak self] in
             guard let self else { return }
-            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.applyReplace(\(replacements), \(href)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installConsole(),\(blockClipboard)true", in: self.webView)
+            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.applyReplace(\(replacements), \(href)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installClipboard(\(clipboardJS)),RikuganPageTools.installConsole(),true", in: self.webView)
         }
     }
     func captureThumbnail() {
@@ -241,6 +241,28 @@ extension BrowserTab: WKScriptMessageHandler {
             if !rows.isEmpty { liveTexts = rows }
             return
         }
+        if action == "clipboard-read", let id = body["id"] as? String {
+            let host = webView.url?.host ?? ""
+            let saved = session?.profile.permission(host: host, kind: "clipboard") ?? "ask"
+            let finish: (String) -> Void = { [weak self] decision in
+                let literal = PageTools.jsString(decision) ?? "\"block\""
+                let idJS = PageTools.jsString(id) ?? "\"\""
+                self?.webView.evaluateJavaScript("window.__rgClipboardDone && window.__rgClipboardDone(\(idJS), \(literal))", in: nil, in: .page) { _, _ in }
+            }
+            if saved == "allow" { finish("allow"); return }
+            if saved == "block" { finish("block"); return }
+            BrowserPresentation.choice(title: host.isEmpty ? "剪贴板" : host, message: "剪贴板权限") { [weak self] choice in
+                guard let self else { return }
+                if choice != "ask" {
+                    self.session?.model?.updateProfile(self.session?.profileID ?? UUID()) { profile in
+                        profile.webPermissions.removeAll { $0.host == host && $0.kind == "clipboard" }
+                        profile.webPermissions.append(WebPermission(host: host, kind: "clipboard", decision: choice))
+                    }
+                }
+                finish(choice == "allow" ? "allow" : "block")
+            }
+            return
+        }
         if action == "show-notification" {
             let title = body["title"] as? String ?? "通知"
             let text = body["body"] as? String ?? ""
@@ -253,11 +275,12 @@ extension BrowserTab: WKScriptMessageHandler {
         if action == "notification", let id = body["id"] as? String {
             let host = webView.url?.host ?? ""
             let saved = session?.profile.permission(host: host, kind: "notification") ?? "ask"
-            if saved != "ask" {
-                resolveNotification(id, decision: saved == "allow" ? "granted" : "denied")
+            if saved == "block" { resolveNotification(id, decision: "denied"); return }
+            if saved == "allow" {
+                SystemNotifications.authorize { [weak self] in self?.resolveNotification(id, decision: "granted") }
                 return
             }
-            BrowserPresentation.choice(title: host.isEmpty ? "通知" : host, message: "这个网页想显示通知。允许后会出现在 App 内通知列表，iOS 不会弹出系统横幅。") { [weak self] choice in
+            BrowserPresentation.choice(title: host.isEmpty ? "通知" : host, message: "通知权限") { [weak self] choice in
                 guard let self else { return }
                 if choice != "ask" {
                     self.session?.model?.updateProfile(self.session?.profileID ?? UUID()) { profile in
@@ -265,7 +288,11 @@ extension BrowserTab: WKScriptMessageHandler {
                         profile.webPermissions.append(WebPermission(host: host, kind: "notification", decision: choice))
                     }
                 }
-                self.resolveNotification(id, decision: choice == "allow" ? "granted" : "denied")
+                if choice == "allow" {
+                    SystemNotifications.authorize { [weak self] in self?.resolveNotification(id, decision: "granted") }
+                } else {
+                    self.resolveNotification(id, decision: "denied")
+                }
             }
             return
         }

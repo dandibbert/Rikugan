@@ -267,6 +267,12 @@ enum SearchSuggest {
         if lower.contains("google.") { return URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(encoded)") }
         if lower.contains("bing.") { return URL(string: "https://api.bing.com/osjson.aspx?query=\(encoded)") }
         if lower.contains("duckduckgo.") { return URL(string: "https://duckduckgo.com/ac/?q=\(encoded)&type=list") }
+        if lower.contains("brave.") { return URL(string: "https://search.brave.com/api/suggest?q=\(encoded)") }
+        if lower.contains("yahoo.") { return URL(string: "https://search.yahoo.com/sugg/gossip/gossip-us-ura/?output=fxjson&command=\(encoded)") }
+        if lower.contains("baidu.") { return URL(string: "https://www.baidu.com/sugrec?prod=pc&wd=\(encoded)") }
+        if lower.contains("startpage.") { return URL(string: "https://www.startpage.com/suggestions?q=\(encoded)&segment=startpage.udog") }
+        if lower.contains("naver.") { return URL(string: "https://ac.search.naver.com/nx/ac?q=\(encoded)&q_enc=UTF-8&st=100&r_format=json&r_enc=UTF-8") }
+        if lower.contains("yandex.") { return URL(string: "https://suggest.yandex.com/suggest-ff.cgi?part=\(encoded)") }
         return nil
     }
     static func parse(_ data: Data) -> [String] {
@@ -275,6 +281,18 @@ enum SearchSuggest {
         }
         if let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             return Array(rows.compactMap { $0["phrase"] as? String }.prefix(8))
+        }
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let gossip = object["gossip"] as? [String: Any], let results = gossip["results"] as? [[String: Any]] {
+                return Array(results.compactMap { $0["key"] as? String }.prefix(8))
+            }
+            if let groups = object["g"] as? [[String: Any]] {
+                return Array(groups.compactMap { $0["q"] as? String }.prefix(8))
+            }
+            if let items = object["items"] as? [Any] {
+                if let first = items.first as? [String] { return Array(first.prefix(8)) }
+                if let first = items.first as? [Any] { return Array(first.compactMap { $0 as? String }.prefix(8)) }
+            }
         }
         return []
     }

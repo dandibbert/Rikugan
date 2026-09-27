@@ -34,7 +34,7 @@ struct AddonsView: View {
                                 HStack {
                                     Button("打开扩展", systemImage: "arrow.up.forward.app") { dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { session.performExtension(record.id) } }
                                     Button("检查更新") { Task { await session.updateExtension(record) } }.font(.subheadline)
-                                        .font(.subheadline).buttonStyle(.bordered).disabled(!record.enabled || session.contexts[record.id] == nil)
+                                        .font(.subheadline).buttonStyle(.bordered).disabled(!record.enabled || !session.extensionLoaded(record.id))
                                         .accessibilityIdentifier("extension.run.\(record.name)")
                                     Spacer()
                                     Toggle("启用", isOn: Binding(get: { record.enabled }, set: { enabled in
@@ -62,6 +62,7 @@ struct AddonsView: View {
                                             Text("v\(script.version) · \(script.author.isEmpty ? script.namespace : script.author)").font(.caption2).foregroundStyle(.secondary)
                                             Text(script.matches.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                                             Text((script.isolated ? "隔离环境" : "页面环境") + " · \(script.runAt)").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                            Text(script.grants.isEmpty ? "无 @grant" : script.grants.joined(separator: ", ")).font(.caption2).foregroundStyle(.secondary).lineLimit(3)
                                             Text("更新于 " + script.updatedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary)
                                         }
                                     }
@@ -75,7 +76,11 @@ struct AddonsView: View {
                             .contextMenu {
                                 Button("编辑") { model.scriptDraft = ScriptDraft(source: script.source, existingID: script.id) }
                                 Button("检查更新") { Task { if let text = await model.checkScriptUpdate(script) { model.scriptDraft = ScriptDraft(source: text, existingID: script.id) } } }
-                                Button("重新安装") { Task { let address = script.downloadURL.isEmpty ? script.updateURL : script.downloadURL; if !address.isEmpty { await model.importScriptURL(address) } } }
+                                Button("重新安装") {
+                                    let address = script.downloadURL.isEmpty ? script.updateURL : script.downloadURL
+                                    guard !address.isEmpty else { model.message = "这个脚本没有 @downloadURL 或 @updateURL，无法重新安装。"; return }
+                                    Task { await model.importScriptURL(address) }
+                                }
                                 Button("导出") {
                                     let url = FileManager.default.temporaryDirectory.appendingPathComponent(script.name + ".user.js")
                                     try? script.source.write(to: url, atomically: true, encoding: .utf8)
@@ -143,8 +148,20 @@ struct ExtensionDetails: View {
                 Form {
                     Section { Text(record.name).font(.title2.bold()); Text(record.detail).foregroundStyle(.secondary); LabeledContent("版本", value: record.version) }
                     Section("功能") {
-                        Button("打开扩展弹窗") { onClose(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.performExtension(record.id) } }.disabled(session.contexts[record.id] == nil)
-                        Button("打开扩展设置页") { onClose(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.openOptions(record.id) } }.disabled(session.contexts[record.id]?.optionsPageURL == nil)
+                        Button("打开扩展弹窗") { onClose(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.performExtension(record.id) } }.disabled(!session.extensionLoaded(record.id))
+                        Button("打开扩展设置页") { onClose(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.openOptions(record.id) } }.disabled(!session.extensionHasOptions(record.id))
+                        Button("向当前页面插入 CSS") {
+                            BrowserPresentation.input(title: "插入 CSS", message: "写入当前标签页", initial: "body{outline:2px solid #c45c26}") { css in
+                                guard let css, !css.isEmpty else { return }
+                                session.insertExtensionCSS(css)
+                            }
+                        }.disabled(!session.extensionLoaded(record.id))
+                        Button("在当前页面执行脚本") {
+                            BrowserPresentation.input(title: "执行脚本", message: "在当前标签页的页面世界运行", initial: "document.title") { source in
+                                guard let source, !source.isEmpty else { return }
+                                session.executeExtensionScript(source)
+                            }
+                        }.disabled(!session.extensionLoaded(record.id))
                     }
                     Section("网站权限") {
                         if record.requestedPatterns.isEmpty { Text("未申请固定网站权限").foregroundStyle(.secondary) }
@@ -156,7 +173,7 @@ struct ExtensionDetails: View {
                     Section("身份") { LabeledContent("扩展 ID", value: record.storeID.isEmpty ? record.id.uuidString : record.storeID); if !record.updateURL.isEmpty { Text(record.updateURL).font(.caption2) } }
                     NavigationLink("API 兼容矩阵") { CapabilityView() }
                     Button("检查更新") { Task { await session.updateExtension(record) } }
-                    if let context = session.contexts[record.id], !context.errors.isEmpty { Section("运行时诊断") { Text(context.errors.map(\.localizedDescription).joined(separator: "\n")).font(.footnote).textSelection(.enabled) } }
+                    if !session.extensionDiagnostics(record.id).isEmpty { Section("运行时诊断") { Text(session.extensionDiagnostics(record.id)).font(.footnote).textSelection(.enabled) } }
                     if let error = session.extensionErrors[record.id] { Section("加载错误") { Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled) } }
                     Section { Button("删除扩展", role: .destructive) { deleting = true } }
                 }.navigationTitle("扩展详情").navigationBarTitleDisplayMode(.inline)
@@ -186,7 +203,7 @@ struct ExtensionInstaller: View {
     var body: some View {
         NavigationStack {
             List {
-                Section { Label(prepared.name, systemImage: "puzzlepiece.extension.fill").font(.title2.bold()); Text(prepared.webExtension.displayDescription ?? "").foregroundStyle(.secondary) }
+                Section { Label(prepared.name, systemImage: "puzzlepiece.extension.fill").font(.title2.bold()); Text(prepared.detail).foregroundStyle(.secondary) }
                 Section("将获得以下 API 权限") {
                     if prepared.permissions.isEmpty { Text("无额外 API 权限") }
                     ForEach(prepared.permissions, id: \.self) { Text($0).font(.system(.subheadline, design: .monospaced)) }

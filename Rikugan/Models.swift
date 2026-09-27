@@ -110,10 +110,10 @@ struct UserScript: Codable, Identifiable, Equatable {
 
     static let capabilityNotes: [String: String] = [
         "GM_getValue": "Supported。同步读取本页缓存，写入后其他标签用 GM.getValue 或刷新。",
-        "GM_xmlhttpRequest": "Partial。无 Cookie，按 @connect 检查重定向，onprogress 报告已下载字节，abort() 会取消 URLSession 任务。单次响应 8 MB。",
+        "GM_xmlhttpRequest": "Partial。同源请求会带上当前身份 WKWebsiteDataStore 的 Cookie；跨源不带。按 @connect 检查重定向，onprogress 报告已下载字节，abort() 会取消 URLSession 任务。单次响应 8 MB。菜单命令只在顶层页面注册。",
         "GM_getResourceText": "Supported。安装时下载 @resource，文本以缓存提供。",
         "GM_getResourceURL": "Supported。返回 data URL，不是 blob: 临时地址。",
-        "unsafeWindow": "Partial。@grant none 就是页面 window。没有外部绑定的函数，以及只闭合 JSON 可序列化局部变量的函数，会把局部变量内联后把源码注入页面，调用和返回都在页面里同步完成。其余闭包在页面放桩，通过 rikuganPage 的 iso-call 在隔离世界执行，结果写入 window.__rgResults 和 data-rg-iso-result。不使用同步自定义协议请求。",
+        "unsafeWindow": "Partial。@grant none 就是页面 window。没有外部绑定的函数，以及只闭合 JSON 可序列化局部变量（含脚本 try 里的 const/let）的函数，会把那些值内联后在页面里执行并同步返回，包括 JSON 对象。不能序列化的闭包仍走 iso-call，JSON 对象返回值会写回页面。不使用同步自定义协议请求。",
         "document-body": "Supported。document-start 注入后等到 body 存在再执行。"
     ]
 

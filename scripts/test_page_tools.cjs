@@ -187,4 +187,21 @@ sandbox.document = { querySelectorAll() { return []; } };
 const navigated = sandbox.RikuganPageTools.collectMedia();
 assert.equal(navigated.some(item => item.url === 'https://cdn.example/clip.mp4' && item.kind === 'video' && item.size === 9), true);
 
+const head = { children: [], appendChild(node) { this.children.push(node); } };
+sandbox.document = { createElement() { return { attrs: {}, textContent: '', setAttribute(name, value) { this.attrs[name] = value; } }; }, head, documentElement: head };
+assert.equal(sandbox.RikuganPageTools.insertExtensionCSS('body{color:red}'), true);
+assert.equal(head.children[0].textContent, 'body{color:red}');
+assert.equal(head.children[0].attrs['data-rikugan-extension'], 'css');
+
+const clip = { readText() { return Promise.resolve('secret'); } };
+sandbox.navigator = { clipboard: clip };
+const originalRead = clip.readText;
+assert.equal(sandbox.RikuganPageTools.installClipboard('allow'), 'allow');
+assert.equal(clip.readText, originalRead);
+sandbox.RikuganPageTools.installClipboard('block');
+assert.notEqual(clip.readText, originalRead);
+let blocked = false;
+clip.readText().catch(() => { blocked = true; });
+setImmediate(() => assert.equal(blocked, true));
+
 console.log('PASS: page tools selector, dark CSS, playlists, find count, adblock subset');

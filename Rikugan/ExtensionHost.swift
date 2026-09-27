@@ -1,21 +1,39 @@
 import UIKit
 import WebKit
 
-@MainActor struct PreparedExtension: Identifiable {
+@MainActor final class PreparedExtension: Identifiable {
     let id: UUID
     let profileID: UUID
     let relativePath: String
-    let webExtension: WKWebExtension
+    let name: String
+    let version: String
+    let detail: String
+    let permissions: [String]
+    let patterns: [String]
+    let warnings: String
     var updateURL = ""
     var storeID = ""
-    var name: String { webExtension.displayName ?? "未命名扩展" }
-    var permissions: [String] { webExtension.requestedPermissions.map(\.rawValue).sorted() }
-    var patterns: [String] { webExtension.allRequestedMatchPatterns.map(\.string).sorted() }
-    var warnings: String { webExtension.errors.map(\.localizedDescription).joined(separator: "\n") }
+    private let object: Any
+    @available(iOS 18.4, *)
+    var webExtension: WKWebExtension { object as! WKWebExtension }
+    @available(iOS 18.4, *)
+    init(id: UUID, profileID: UUID, relativePath: String, webExtension: WKWebExtension) {
+        self.id = id
+        self.profileID = profileID
+        self.relativePath = relativePath
+        self.object = webExtension
+        name = webExtension.displayName ?? "未命名扩展"
+        version = webExtension.version ?? "1.0"
+        detail = webExtension.displayDescription ?? ""
+        permissions = webExtension.requestedPermissions.map(\.rawValue).sorted()
+        patterns = webExtension.allRequestedMatchPatterns.map(\.string).sorted()
+        warnings = webExtension.errors.map(\.localizedDescription).joined(separator: "\n")
+    }
 }
 
 extension BrowserSession {
     func prepareExtension(_ input: URL) async throws -> PreparedExtension {
+        guard #available(iOS 18.4, *) else { throw RikuganError.message(Self.extensionOSMessage) }
         guard let model else { throw RikuganError.message("身份已关闭。") }
         let id = UUID()
         var source = input
@@ -70,9 +88,10 @@ extension BrowserSession {
         try? FileManager.default.removeItem(at: model.directory(prepared.profileID).appendingPathComponent(prepared.relativePath))
     }
     func installExtension(_ prepared: PreparedExtension) throws {
+        guard #available(iOS 18.4, *) else { throw RikuganError.message(Self.extensionOSMessage) }
         guard prepared.profileID == profileID, isActive else { throw RikuganError.message("身份已切换，请重新导入扩展。") }
-        var record = ExtensionRecord(id: prepared.id, name: prepared.name, version: prepared.webExtension.version ?? "1.0",
-                                     detail: prepared.webExtension.displayDescription ?? "", relativePath: prepared.relativePath,
+        var record = ExtensionRecord(id: prepared.id, name: prepared.name, version: prepared.version,
+                                     detail: prepared.detail, relativePath: prepared.relativePath,
                                      allowedPermissions: prepared.permissions, allowedPatterns: prepared.patterns, requestedPatterns: prepared.patterns)
         record.updateURL = prepared.updateURL
         record.storeID = prepared.storeID
@@ -80,6 +99,7 @@ extension BrowserSession {
         model?.updateProfile(profileID) { $0.extensions.append(record) }
     }
     func loadExtension(_ record: ExtensionRecord) async {
+        guard #available(iOS 18.4, *) else { extensionErrors[record.id] = Self.extensionOSMessage; return }
         guard let model else { return }
         do {
             let extensionObject = try await WKWebExtension(resourceBaseURL: model.directory(profileID).appendingPathComponent(record.relativePath))
@@ -87,8 +107,9 @@ extension BrowserSession {
             try activateExtension(extensionObject, record: record)
         } catch { extensionErrors[record.id] = error.localizedDescription }
     }
+    @available(iOS 18.4, *)
     private func activateExtension(_ webExtension: WKWebExtension, record: ExtensionRecord) throws {
-        if let previous = contexts.removeValue(forKey: record.id) { try? extensionController.unload(previous) }
+        if let previous = removeExtensionContext(id: record.id) { try? extensionController.unload(previous) }
         let context = WKWebExtensionContext(for: webExtension)
         context.uniqueIdentifier = record.id.uuidString
         context.baseURL = URL(string: "webkit-extension://" + record.id.uuidString.lowercased() + "/")!
@@ -96,7 +117,6 @@ extension BrowserSession {
         context.hasAccessToPrivateData = false
         context.unsupportedAPIs = [
             "runtime.sendNativeMessage", "runtime.connectNative",
-            "notifications", "notifications.create", "notifications.clear", "notifications.getAll", "notifications.update",
             "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand"
         ]
         for permission in record.allowedPermissions { context.setPermissionStatus(.grantedExplicitly, for: WKWebExtension.Permission(rawValue: permission)) }
@@ -104,7 +124,7 @@ extension BrowserSession {
             if let match = try? WKWebExtension.MatchPattern(string: pattern) { context.setPermissionStatus(.grantedExplicitly, for: match) }
         }
         try extensionController.load(context)
-        contexts[record.id] = context; extensionErrors.removeValue(forKey: record.id)
+        storeExtensionContext(context, id: record.id); extensionErrors.removeValue(forKey: record.id)
         if ready {
             context.didOpenWindow(self)
             for tab in tabs { context.didOpenTab(tab) }
@@ -112,20 +132,25 @@ extension BrowserSession {
         }
     }
     func toggleExtension(_ record: ExtensionRecord, enabled: Bool) async {
+        guard #available(iOS 18.4, *) else { extensionErrors[record.id] = Self.extensionOSMessage; model?.message = Self.extensionOSMessage; return }
         model?.updateProfile(profileID) { profile in
             if let index = profile.extensions.firstIndex(where: { $0.id == record.id }) { profile.extensions[index].enabled = enabled }
         }
         if enabled { await loadExtension(record) }
-        else if let context = contexts.removeValue(forKey: record.id) { try? extensionController.unload(context) }
+        else if let context = removeExtensionContext(id: record.id) { try? extensionController.unload(context) }
         objectWillChange.send()
     }
     func removeExtension(_ record: ExtensionRecord) {
-        if let context = contexts.removeValue(forKey: record.id) {
-            let types = WKWebExtensionController.allExtensionDataTypes
-            extensionController.fetchDataRecord(ofTypes: types, for: context) { [weak self] dataRecord in
-                if let dataRecord { self?.extensionController.removeData(ofTypes: types, from: [dataRecord]) {} }
+        if #available(iOS 18.4, *) {
+            if let context = removeExtensionContext(id: record.id) {
+                let types = WKWebExtensionController.allExtensionDataTypes
+                extensionController.fetchDataRecord(ofTypes: types, for: context) { [weak self] dataRecord in
+                    guard #available(iOS 18.4, *), let self, let dataRecord else { return }
+                    let stored = WKWebExtensionController.allExtensionDataTypes
+                    self.extensionController.removeData(ofTypes: stored, from: [dataRecord]) {}
+                }
+                try? extensionController.unload(context)
             }
-            try? extensionController.unload(context)
         }
         model?.updateProfile(profileID) { $0.extensions.removeAll { $0.id == record.id } }
         if let model { try? FileManager.default.removeItem(at: model.directory(profileID).appendingPathComponent(record.relativePath)) }
@@ -137,18 +162,22 @@ extension BrowserSession {
             profile.extensions[index].allowedPatterns.removeAll { $0 == pattern }
             if allowed { profile.extensions[index].allowedPatterns.append(pattern) }
         }
-        if let match = try? WKWebExtension.MatchPattern(string: pattern) {
-            contexts[record.id]?.setPermissionStatus(allowed ? .grantedExplicitly : .deniedExplicitly, for: match)
+        if #available(iOS 18.4, *) {
+            if let match = try? WKWebExtension.MatchPattern(string: pattern) {
+                extensionContext(id: record.id)?.setPermissionStatus(allowed ? .grantedExplicitly : .deniedExplicitly, for: match)
+            }
         }
     }
     func actionPresentation(_ id: UUID) -> (icon: UIImage?, badge: String) {
-        guard let context = contexts[id] else { return (nil, "") }
+        guard #available(iOS 18.4, *) else { return (nil, "") }
+        guard let context = extensionContext(id: id) else { return (nil, "") }
         let action = context.action(for: activeTab)
         let icon = action.icon(for: CGSize(width: 22, height: 22)) ?? context.webExtension.actionIcon(for: CGSize(width: 22, height: 22))
         return (icon, action.badgeText)
     }
     func performExtension(_ id: UUID) {
-        guard let context = contexts[id], let tab = activeTab else { model?.message = "扩展没有载入，请检查扩展详情里的错误。"; return }
+        guard #available(iOS 18.4, *) else { model?.message = Self.extensionOSMessage; return }
+        guard let context = extensionContext(id: id), let tab = activeTab else { model?.message = "扩展没有载入，请检查扩展详情里的错误。"; return }
         context.userGesturePerformed(in: tab)
         context.performAction(for: tab)
     }
@@ -177,11 +206,12 @@ extension BrowserSession {
             let temp = FileManager.default.temporaryDirectory.appendingPathComponent(record.id.uuidString + ".crx")
             try data.write(to: temp)
             let prepared = try await prepareExtension(temp)
-            let version = prepared.webExtension.version ?? record.version
+            let version = prepared.version
             guard VersionComparator.isNewer(version, than: record.version) else { model?.message = "已是最新版本 \(record.version)。"; discardExtension(prepared); return }
             let added = ChromeAPIMatrix.additions(old: record.allowedPermissions + record.requestedPatterns, new: prepared.permissions + prepared.patterns)
             let install = { [weak self] in
                 guard let self else { return }
+                guard #available(iOS 18.4, *) else { self.model?.message = Self.extensionOSMessage; return }
                 self.discardInstalledFiles(record)
                 var updated = record
                 updated.version = version
@@ -230,9 +260,11 @@ extension BrowserSession {
         try? FileManager.default.removeItem(at: model.directory(profileID).appendingPathComponent(record.relativePath))
     }
     func openOptions(_ id: UUID) {
-        guard let context = contexts[id], let url = context.optionsPageURL else { model?.message = "这个扩展没有选项页面。"; return }
+        guard #available(iOS 18.4, *) else { model?.message = Self.extensionOSMessage; return }
+        guard let context = extensionContext(id: id), let url = context.optionsPageURL else { model?.message = "这个扩展没有选项页面。"; return }
         addTab(url: url, configuration: context.webViewConfiguration)
     }
+    @available(iOS 18.4, *)
     private func saveOptionalPermissions(context: WKWebExtensionContext, permissions: [String] = [], patterns: [String] = []) {
         model?.updateProfile(profileID) { profile in
             guard let index = profile.extensions.firstIndex(where: { $0.id.uuidString == context.uniqueIdentifier }) else { return }
@@ -243,6 +275,7 @@ extension BrowserSession {
     }
 }
 
+@available(iOS 18.4, *)
 extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow {
     func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] { tabs }
     func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { activeTab }
@@ -296,6 +329,7 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
     }
 }
 
+@available(iOS 18.4, *)
 @MainActor final class PopupPresenter: NSObject, UIAdaptivePresentationControllerDelegate {
     let action: WKWebExtension.Action
     let navigation: UINavigationController
@@ -312,6 +346,7 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { action.closePopup() }
 }
 
+@available(iOS 18.4, *)
 extension BrowserTab: WKWebExtensionTab {
     func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { session }
     func indexInWindow(for context: WKWebExtensionContext) -> Int { session?.tabs.firstIndex(where: { $0.id == id }) ?? 0 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 import WebKit
 
 struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var existingID: UUID? }
@@ -57,6 +58,7 @@ struct PageNotice: Identifiable, Equatable {
         notices.insert(notice, at: 0)
         if notices.count > 40 { notices.removeLast(notices.count - 40) }
         noticeToast = notice
+        SystemNotifications.deliver(title: title, body: body.isEmpty ? host : body)
     }
     func start() {
         guard session == nil else { return }
@@ -278,6 +280,38 @@ struct PageNotice: Identifiable, Equatable {
         let name = profile.settings.wallpaperFile
         updateProfile(profile.id) { $0.settings.wallpaperFile = "" }
         if !name.isEmpty { try? FileManager.default.removeItem(at: directory(profile.id).appendingPathComponent(name)) }
+    }
+}
+
+enum SystemNotifications {
+    static func authorize(_ done: @escaping () -> Void = {}) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            if settings.authorizationStatus == .notDetermined {
+                center.requestAuthorization(options: [.alert, .sound]) { _, _ in DispatchQueue.main.async(execute: done) }
+            } else {
+                DispatchQueue.main.async(execute: done)
+            }
+        }
+    }
+    static func deliver(title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            let post = {
+                let content = UNMutableNotificationContent()
+                content.title = String(title.prefix(120))
+                content.body = String(body.prefix(500))
+                center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            }
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                post()
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in if granted { post() } }
+            default:
+                break
+            }
+        }
     }
 }
 

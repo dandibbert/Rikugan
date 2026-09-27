@@ -229,6 +229,7 @@ struct ImageSheet: View {
     @EnvironmentObject var model: AppModel
     @State private var urls: [String] = []
     @State private var selected = Set<String>()
+    @State private var viewing: String?
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -239,13 +240,16 @@ struct ImageSheet: View {
                             .onTapGesture { if selected.contains(url) { selected.remove(url) } else { selected.insert(url) } }
                             .contextMenu {
                                 Button("复制链接") { UIPasteboard.general.string = url }
-                                Button("打开原图") { if let link = URL(string: url) { tab.navigate(link) } }
+                                Button("打开原图") { viewing = url }
                                 Button("保存") { Task { await save([url]) } }
                                 if let link = URL(string: url) { ShareLink(item: link) { Text("分享") } }
                             }
                     }
                 }.padding(8)
             }.navigationTitle("图片 \(selected.count)/\(urls.count)")
+                .fullScreenCover(isPresented: Binding(get: { viewing != nil }, set: { if !$0 { viewing = nil } })) {
+                    if let viewing { OriginalImageViewer(urlString: viewing, tab: tab) { self.viewing = nil } }
+                }
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button(selected.count == urls.count ? "取消" : "全选") { selected = selected.count == urls.count ? [] : Set(urls) } }
                     ToolbarItem(placement: .topBarTrailing) { Button("保存所选") { Task { await save(Array(selected)) } }.disabled(selected.isEmpty) }
@@ -264,6 +268,48 @@ struct ImageSheet: View {
         let saver = PhotoSaver()
         for image in images { await saver.write(image) }
         model.message = images.isEmpty ? "没有保存任何图片。" : "已保存 \(images.count) 张图片。"
+    }
+}
+
+struct OriginalImageViewer: View {
+    let urlString: String
+    @ObservedObject var tab: BrowserTab
+    var back: () -> Void
+    @State private var image: UIImage?
+    @State private var failed = false
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFit()
+                } else if failed {
+                    Text("原图没有加载。").foregroundStyle(.white)
+                } else {
+                    ProgressView().tint(.white)
+                }
+            }
+            .navigationTitle("原图")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("返回") { back() } } }
+        }
+        .task { await load() }
+    }
+    private func load() async {
+        guard let url = URL(string: urlString) else { failed = true; return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        if let store = tab.isPrivate ? tab.session?.privateStore : tab.session?.dataStore {
+            let cookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+                store.httpCookieStore.getAllCookies { continuation.resume(returning: $0) }
+            }
+            if let header = CookieHeader.value(cookies: cookies, url: url) { request.setValue(header, forHTTPHeaderField: "Cookie") }
+        }
+        if let page = tab.webView.url { request.setValue(page.absoluteString, forHTTPHeaderField: "Referer") }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let picture = UIImage(data: data) else { failed = true; return }
+        image = picture
     }
 }
 
@@ -376,13 +422,15 @@ final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 }
 
+@available(iOS 18.0, *)
 enum PageTranslation {
-    static let backend = "apple"
-    static func configuration(target: String) -> TranslationSession.Configuration {
-        TranslationSession.Configuration(target: Locale.Language(identifier: target))
+    static func configuration(target: String, backend: String) -> TranslationSession.Configuration? {
+        guard backend.isEmpty || backend == "apple" else { return nil }
+        return TranslationSession.Configuration(target: Locale.Language(identifier: target))
     }
 }
 
+@available(iOS 18.0, *)
 struct TranslateSheet: View {
     @ObservedObject var tab: BrowserTab
     @EnvironmentObject var model: AppModel
@@ -396,13 +444,17 @@ struct TranslateSheet: View {
         NavigationStack {
             Form {
                 Text(status).font(.footnote)
+                Picker("翻译后端", selection: Binding(get: { model.profile.settings.translationBackend }, set: { value in
+                    model.updateProfile(model.profile.id) { $0.settings.translationBackend = value }
+                    Task { await rearm() }
+                })) { Text("Apple 设备端").tag("apple") }
                 Picker("目标语言", selection: Binding(get: { model.profile.settings.translateTarget }, set: { value in
                     model.updateProfile(model.profile.id) { $0.settings.translateTarget = value }
                 })) {
                     ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
                 }
                 Button(original ? "显示译文" : "显示原文") { Task { await toggle() } }.disabled(rows.isEmpty)
-                Text("翻译后端是 Apple 设备端 Translation（PageTranslation.backend）。没有第二家网络服务。语言列表是可以交给系统的目标语言；没下载的语言包由系统报错。打开这个页面期间会把正文分批译完，并持续补译新出现的文字。").font(.footnote).foregroundStyle(.secondary)
+                Text("翻译使用设置里的 translationBackend。目前只有 Apple 设备端 TranslationSession 可以在没有密钥时运行。语言列表是可以交给系统的目标语言；没下载的语言包由系统报错。").font(.footnote).foregroundStyle(.secondary)
             }.navigationTitle("翻译网页")
                 .translationTask(configuration) { session in await translate(session) }
                 .onChange(of: tab.liveTexts) { _, items in Task { await translateIncoming(items) } }
@@ -431,7 +483,16 @@ struct TranslateSheet: View {
         let sample = rows.prefix(8).map(\.text).joined(separator: " ")
         let recognizer = NLLanguageRecognizer(); recognizer.processString(sample)
         status = "检测语言：\(recognizer.dominantLanguage?.rawValue ?? "未知") · \(rows.count) 段"
-        configuration = PageTranslation.configuration(target: model.profile.settings.translateTarget)
+        await rearm()
+    }
+    private func rearm() async {
+        let backend = model.profile.settings.translationBackend
+        guard let next = PageTranslation.configuration(target: model.profile.settings.translateTarget, backend: backend) else {
+            configuration = nil
+            status = "翻译后端「\(backend)」没有可用实现，没有开始翻译。"
+            return
+        }
+        configuration = next
     }
     private func translate(_ session: TranslationSession) async {
         guard !translating else { return }
@@ -461,7 +522,7 @@ struct TranslateSheet: View {
             index += batch.count
         }
         if rows.contains(where: { !applied.contains($0.id) }) {
-            configuration = PageTranslation.configuration(target: model.profile.settings.translateTarget)
+            await rearm()
             return
         }
         status = "已翻译 \(done) 段。这个页面打开时会继续补译。"
@@ -476,7 +537,7 @@ struct TranslateSheet: View {
         rows.append(contentsOf: fresh)
         status = "页面有新文字，正在补译 \(fresh.count) 段"
         guard !translating else { return }
-        configuration = PageTranslation.configuration(target: model.profile.settings.translateTarget)
+        await rearm()
     }
     private func apply(_ pairs: [[String: String]]) async throws {
         guard let data = try? JSONSerialization.data(withJSONObject: pairs), let json = String(data: data, encoding: .utf8) else { return }
@@ -486,7 +547,7 @@ struct TranslateSheet: View {
         original.toggle()
         let call = original ? "RikuganPageTools.restoreTexts()" : "RikuganPageTools.applyTexts([])"
         if original { _ = await PageTools.call(call, in: tab.webView) }
-        else { configuration = PageTranslation.configuration(target: model.profile.settings.translateTarget) }
+        else { await rearm() }
     }
 }
 
@@ -589,29 +650,34 @@ struct AutofillSheet: View {
                     Button("同步到 iCloud 私有数据库") {
                         Task { model.message = await AutofillVault.pushToCloud(profile: model.profile.id, items: items) }
                     }
+                    Button("从 iCloud 合并") { Task { await pullCloud() } }
                 }
                 ForEach(items) { item in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.title.isEmpty ? item.kind : item.title).font(.headline)
                         Text(item.host).font(.caption).foregroundStyle(.secondary)
+                        if item.kind == "payment", !item.paymentLast4.isEmpty { Text("•••• \(item.paymentLast4)").font(.caption).foregroundStyle(.secondary) }
+                        if !item.address.isEmpty { Text(item.address).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                         if tab != nil { Button("填入当前网页") { Task { await fill(item) } }.font(.subheadline) }
                     }
                 }.onDelete { index in items.remove(atOffsets: index); try? AutofillVault.save(profile: model.profile.id, items: items) }
             }.navigationTitle("自动填充")
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("添加", systemImage: "plus") { editing = true } } }
-                .onAppear { items = AutofillVault.load(profile: model.profile.id) }
+                .onAppear { items = AutofillVault.load(profile: model.profile.id); Task { await pullCloud() } }
                 .sheet(isPresented: $editing) { AutofillEditor(draft: $draft) { items.append(draft); try? AutofillVault.save(profile: model.profile.id, items: items); draft = AutofillItem(kind: "password", title: "", host: "", username: "", secret: "") } }
         }
     }
     private func fill(_ item: AutofillItem) async {
         guard let tab else { return }
-        let payload: [String: String] = [
-            "username": item.username, "password": item.kind == "password" ? item.secret : "", "name": item.name,
-            "email": item.email, "phone": item.phone, "address": item.address,
-            "paymentLast4": item.paymentLast4
-        ]
+        let payload = AutofillVault.fillPayload(item)
         guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
         _ = await PageTools.call("RikuganPageTools.fill(\(json))", in: tab.webView)
+    }
+    private func pullCloud() async {
+        guard let remote = await AutofillVault.pullFromCloud(profile: model.profile.id) else { return }
+        let merged = AutofillVault.merge(local: items, remote: remote)
+        items = merged
+        try? AutofillVault.save(profile: model.profile.id, items: merged)
     }
 }
 
@@ -627,6 +693,7 @@ struct AutofillEditor: View {
                 TextField("用户名", text: $draft.username).textInputAutocapitalization(.never)
                 SecureField("密码或卡号", text: $draft.secret)
                 TextField("姓名", text: $draft.name); TextField("邮箱", text: $draft.email); TextField("电话", text: $draft.phone)
+                TextField("地址", text: $draft.address)
                 TextField("支付标签", text: $draft.paymentLabel); TextField("末四位", text: $draft.paymentLast4)
             }.navigationTitle("钥匙串条目")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("保存") { save(); dismiss() } }; ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }

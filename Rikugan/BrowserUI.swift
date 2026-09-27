@@ -221,7 +221,9 @@ struct BrowserPage: View {
             case .media: MediaSheet(tab: tab)
             case .images: ImageSheet(tab: tab)
             case .qr: QRSheet(address: tab.webView.url?.absoluteString ?? tab.address, open: { value in tool = nil; openQR(value, search: false) }, search: { value in tool = nil; openQR(value, search: true) })
-            case .translate: TranslateSheet(tab: tab)
+            case .translate:
+                if #available(iOS 18.0, *) { TranslateSheet(tab: tab) }
+                else { Text("网页翻译需要 iOS 18。").padding() }
             case .site: SiteSettingsSheet(tab: tab)
             case .console: ConsoleSheet(tab: tab)
             case .autofill: AutofillSheet(tab: tab)
@@ -256,10 +258,12 @@ struct BrowserPage: View {
                 Button { tab.webView.goForward() } label: { Image(systemName: "chevron.right").frame(width: 32, height: 30) }
                     .disabled(!tab.canGoForward).accessibilityLabel("前进")
                     .contextMenu { shortcutMenu }
+                ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
                 ForEach(model.profile.settings.shortcuts, id: \.self) { id in
                     Button { shortcut(id) } label: { Image(systemName: ShortcutCatalog.symbol(id)).frame(width: 30, height: 30) }.accessibilityLabel(ShortcutCatalog.title(id))
                 }
-                ForEach(toolbarExtensions.prefix(3)) { record in
+                ForEach(toolbarExtensions) { record in
                     let presentation = session.actionPresentation(record.id)
                     Button { session.performExtension(record.id) } label: {
                         ZStack(alignment: .topTrailing) {
@@ -279,6 +283,8 @@ struct BrowserPage: View {
                     .accessibilityLabel(record.name)
                     .accessibilityIdentifier("extension.toolbar.\(record.name)")
                 }
+                }
+                }.frame(maxWidth: .infinity)
                 Spacer(minLength: 8)
                 Button { openPanel(.profiles) } label: { Image(systemName: model.profile.symbol).frame(width: 36, height: 30) }.accessibilityLabel("身份空间").accessibilityIdentifier("browser.profiles")
                 Spacer(minLength: 8)
@@ -354,7 +360,7 @@ struct BrowserPage: View {
         tab.applyDecorations()
     }
     private var toolbarExtensions: [ExtensionRecord] {
-        model.profile.extensions.filter { $0.enabled && session.contexts[$0.id] != nil }
+        model.profile.extensions.filter { $0.enabled && session.extensionLoaded($0.id) }
     }
     private var shortcutMenu: some View {
         ForEach(ShortcutCatalog.all, id: \.id) { item in Button(item.title) { shortcut(item.id) } }
@@ -619,6 +625,7 @@ struct LibraryView: View {
     @State private var folderName = ""
     @State private var addingFolder = false
     @State private var folder: UUID?
+    @State private var editingBookmark: PageRecord?
     var body: some View {
         NavigationStack {
             List {
@@ -638,10 +645,7 @@ struct LibraryView: View {
                         Button { open(page.url) } label: { HStack { BookmarkIcon(session: session, url: page.url); VStack(alignment: .leading) { Text(page.title).lineLimit(1); Text(page.url).font(.caption).foregroundStyle(.secondary).lineLimit(1) } } }
                             .swipeActions {
                                 Button("删除", role: .destructive) { model.updateProfile(session.profileID) { $0.bookmarks.removeAll { $0.id == page.id } } }
-                                Button("编辑") { BrowserPresentation.input(title: "编辑书签", message: page.url, initial: page.title) { title in
-                                    guard let title else { return }
-                                    model.updateProfile(session.profileID) { if let index = $0.bookmarks.firstIndex(where: { $0.id == page.id }) { $0.bookmarks[index].title = title } }
-                                } }
+                                Button("编辑") { editingBookmark = page }
                             }
                             .contextMenu {
                                 Menu("移动到") {
@@ -672,6 +676,16 @@ struct LibraryView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { if selection == 0 { Button("文件夹", systemImage: "folder.badge.plus") { addingFolder = true } } }
                     ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
+                }
+                .sheet(item: $editingBookmark) { page in
+                    BookmarkEditor(page: page) { title, url in
+                        model.updateProfile(session.profileID) { profile in
+                            if let index = profile.bookmarks.firstIndex(where: { $0.id == page.id }) {
+                                profile.bookmarks[index].title = title
+                                profile.bookmarks[index].url = url
+                            }
+                        }
+                    }
                 }
                 .alert("新建文件夹", isPresented: $addingFolder) {
                     TextField("名称", text: $folderName)
@@ -712,6 +726,39 @@ struct LibraryView: View {
         return buckets.map { (title: $0.0, pages: $0.1) }
     }
     private func open(_ raw: String) { if let url = URL(string: raw) { session.activeTab?.navigate(url) }; dismiss() }
+}
+
+struct BookmarkEditor: View {
+    let page: PageRecord
+    var save: (String, String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title: String
+    @State private var url: String
+    init(page: PageRecord, save: @escaping (String, String) -> Void) {
+        self.page = page
+        self.save = save
+        _title = State(initialValue: page.title)
+        _url = State(initialValue: page.url)
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("标题", text: $title)
+                TextField("网址", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+            }.navigationTitle("编辑书签")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("保存") {
+                            let next = url.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard URL(string: next) != nil, next.contains("://") else { return }
+                            save(title.trimmingCharacters(in: .whitespacesAndNewlines), next)
+                            dismiss()
+                        }
+                    }
+                }
+        }
+    }
 }
 
 struct CommandsView: View {
@@ -796,7 +843,7 @@ struct SettingsView: View {
                     Button("导入备份") { importing = true }
                 }
                 Section("网页通知") {
-                    if model.notices.isEmpty { Text("还没有网页通知。允许通知后，页面的 Notification 会出现在这里，不会变成系统横幅。").font(.footnote).foregroundStyle(.secondary) }
+                    if model.notices.isEmpty { Text("还没有网页通知。允许后会出现在这里，并提交系统本地通知。").font(.footnote).foregroundStyle(.secondary) }
                     ForEach(model.notices) { notice in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(notice.title).font(.subheadline)
@@ -808,7 +855,7 @@ struct SettingsView: View {
                 Section("本身份的下载") { DownloadList(center: model.downloadCenter) }
                 Section("关于 Rikugan") {
                     LabeledContent("版本", value: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0") + " (" + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1") + ")")
-                    Text("扩展运行时使用 iOS 18.4 的 WKWebExtension，而不是一套假装完整的自研 chrome.*。未实现的 API 会标明 Unsupported，不会静默当成成功。").font(.footnote).foregroundStyle(.secondary)
+                    Text("浏览、用户脚本和广告拦截可以在 iOS 17 运行。扩展安装使用 iOS 18.4 的 WKWebExtension；更低系统会显示「需要 iOS 18.4」，不会另做一套 chrome.*。未实现的 API 会标明 Unsupported，不会静默当成成功。").font(.footnote).foregroundStyle(.secondary)
                     Text("工程包含 com.apple.developer.web-browser entitlement。未签名 IPA 没有有效签名，不会出现在「设置 → App → 默认 App → 浏览器 App」。用带这项权限的描述文件重签之后，系统才可能把它列出来。分享扩展需要同一个 App Group：\(AppGroupID.suite)。").font(.footnote).foregroundStyle(.secondary)
                     Link("源代码与问题反馈", destination: URL(string: "https://github.com/dandibbert/Rikugan")!)
                 }

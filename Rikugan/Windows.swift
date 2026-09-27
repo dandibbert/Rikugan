@@ -110,6 +110,6 @@ struct AuxiliaryWindowPage: View {
     private func focus(_ tab: BrowserTab) {
         windows.select(tab.id, in: windowID)
         let previous = session.tabs.first { $0.id == session.selectedID }
-        session.extensionController.didActivateTab(tab, previousActiveTab: previous)
+        session.activateFromWindow(tab)
     }
 }

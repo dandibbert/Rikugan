@@ -5,7 +5,10 @@ import WebKit
     weak var model: AppModel?
     let profileID: UUID
     let dataStore: WKWebsiteDataStore
-    let extensionController: WKWebExtensionController
+    var extensionControllerBox: AnyObject?
+    var extensionContextBox: [UUID: AnyObject] = [:]
+    var popupPresenterBox: AnyObject?
+    static let extensionOSMessage = "需要 iOS 18.4"
     @Published var tabs: [BrowserTab] = []
     @Published var selectedID: UUID?
     @Published var ready = false
@@ -15,7 +18,6 @@ import WebKit
     @Published var favicons: [UUID: UIImage] = [:]
     @Published var hostIcons: [String: UIImage] = [:]
     @Published var requestedPanel: String?
-    var contexts: [UUID: WKWebExtensionContext] = [:]
     var privateStore: WKWebsiteDataStore = .nonPersistent()
     var contentRuleList: WKContentRuleList?
     var contentRuleLists: [WKContentRuleList] = []
@@ -27,7 +29,6 @@ import WebKit
     var replaceJSON = "[]"
     var removeParams: [AdBlockEngine.QueryStrip] = []
     var privateScriptValues: [UUID: [String: Any]] = [:]
-    var popupPresenter: PopupPresenter?
     private var scriptRefresh: Task<Void, Never>?
     private var stopped = false
     var profile: BrowserProfile { model?.state.profiles.first { $0.id == profileID } ?? BrowserProfile(name: "个人") }
@@ -46,26 +47,29 @@ import WebKit
     init(model: AppModel, profileID: UUID) {
         self.model = model; self.profileID = profileID
         dataStore = WKWebsiteDataStore(forIdentifier: profileID)
-        let config = WKWebExtensionController.Configuration(identifier: profileID)
-        config.defaultWebsiteDataStore = dataStore
-        extensionController = WKWebExtensionController(configuration: config)
         super.init()
-        extensionController.delegate = self
         loadFaviconCache()
         let saved = profile.tabs.isEmpty ? [SavedTab()] : profile.tabs
         tabs = saved.map { BrowserTab(saved: $0, session: self) }
         selectedID = saved.contains(where: { $0.id == profile.selectedTabID }) ? profile.selectedTabID : saved.first?.id
     }
     func start() async {
-        for record in profile.extensions where record.enabled {
+        if #available(iOS 18.4, *) {
+            for record in profile.extensions where record.enabled {
+                guard isActive else { return }
+                await loadExtension(record)
+            }
             guard isActive else { return }
-            await loadExtension(record)
+            extensionController.didOpenWindow(self)
+            extensionController.didFocusWindow(self)
+            for tab in tabs { extensionController.didOpenTab(tab) }
+            if let tab = activeTab { extensionController.didActivateTab(tab, previousActiveTab: nil); tab.restoreIfNeeded() }
+        } else {
+            for record in profile.extensions where record.enabled {
+                extensionErrors[record.id] = Self.extensionOSMessage
+            }
+            activeTab?.restoreIfNeeded()
         }
-        guard isActive else { return }
-        extensionController.didOpenWindow(self)
-        extensionController.didFocusWindow(self)
-        for tab in tabs { extensionController.didOpenTab(tab) }
-        if let tab = activeTab { extensionController.didActivateTab(tab, previousActiveTab: nil); tab.restoreIfNeeded() }
         loadThumbnails()
         for tab in tabs where tab.autoRefreshSeconds > 0 { tab.setAutoRefresh(tab.autoRefreshSeconds) }
         ready = true; persistTabs()
@@ -78,25 +82,28 @@ import WebKit
     func shutdown() {
         guard !stopped else { return }
         persistTabs(); stopped = true; scriptRefresh?.cancel()
-        popupPresenter?.dismiss()
-        extensionController.didCloseWindow(self)
-        for context in contexts.values { try? extensionController.unload(context) }
-        contexts.removeAll()
+        dismissExtensionPopup()
+        if #available(iOS 18.4, *) {
+            extensionController.didCloseWindow(self)
+            for context in allExtensionContexts() { try? extensionController.unload(context) }
+            extensionContextBox.removeAll()
+            extensionController.delegate = nil
+        }
         for tab in tabs { tab.teardown() }
         tabs.removeAll()
-        extensionController.delegate = nil
     }
     @discardableResult func addTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false, groupID: UUID? = nil, windowID: UUID? = nil) -> BrowserTab {
         var saved = SavedTab(isPrivate: isPrivate, groupID: groupID)
         if let groupID { saved.groupID = groupID }
         let tab = BrowserTab(saved: saved, session: self, configuration: configuration)
         tab.windowID = windowID
-        tabs.append(tab); extensionController.didOpenTab(tab)
+        tabs.append(tab)
+        if #available(iOS 18.4, *) { extensionController.didOpenTab(tab) }
         if let windowID {
             model?.windows.select(tab.id, in: windowID)
             if activate {
                 let previous = tabs.first { $0.id == selectedID }
-                extensionController.didActivateTab(tab, previousActiveTab: previous)
+                if #available(iOS 18.4, *) { extensionController.didActivateTab(tab, previousActiveTab: previous) }
             }
         } else if activate { select(tab) }
         installPageTools(on: tab)
@@ -108,7 +115,7 @@ import WebKit
     }
     func select(_ tab: BrowserTab) {
         let previous = activeTab; selectedID = tab.id
-        extensionController.didActivateTab(tab, previousActiveTab: previous)
+        if #available(iOS 18.4, *) { extensionController.didActivateTab(tab, previousActiveTab: previous) }
         tab.restoreIfNeeded(); persistTabs()
     }
     func close(_ tab: BrowserTab) {
@@ -124,7 +131,7 @@ import WebKit
         let wasPrivate = tab.isPrivate
         let windowID = tab.windowID
         tabs.remove(at: index); thumbnails[tab.id] = nil; favicons[tab.id] = nil
-        extensionController.didCloseTab(tab, windowIsClosing: false)
+        if #available(iOS 18.4, *) { extensionController.didCloseTab(tab, windowIsClosing: false) }
         commands.removeAll { $0.tabID == tab.id }; tab.teardown()
         removeThumbnail(tab.id)
         if wasPrivate, !tabs.contains(where: \.isPrivate) {
@@ -220,6 +227,61 @@ import WebKit
         model?.updateProfile(profileID) { $0.history.removeAll() }
         for tab in tabs where !tab.isHome { tab.webView.reload() }
     }
+    func extensionLoaded(_ id: UUID) -> Bool { extensionContextBox[id] != nil }
+    func dismissExtensionPopup() {
+        guard #available(iOS 18.4, *) else { return }
+        popupPresenter?.dismiss()
+        popupPresenter = nil
+    }
+    func activateFromWindow(_ tab: BrowserTab) {
+        guard #available(iOS 18.4, *) else { return }
+        let previous = tabs.first { $0.id == selectedID }
+        extensionController.didActivateTab(tab, previousActiveTab: previous)
+    }
+    func extensionHasOptions(_ id: UUID) -> Bool {
+        guard #available(iOS 18.4, *) else { return false }
+        return extensionContext(id: id)?.optionsPageURL != nil
+    }
+    func extensionDiagnostics(_ id: UUID) -> String {
+        guard #available(iOS 18.4, *) else { return "" }
+        return extensionContext(id: id)?.errors.map(\.localizedDescription).joined(separator: "\n") ?? ""
+    }
+    func insertExtensionCSS(_ css: String) {
+        guard let tab = activeTab, let expression = ExtensionScripting.insertCSSExpression(css) else {
+            model?.message = "没有可以插入样式的当前标签页。"
+            return
+        }
+        Task { _ = await PageTools.call(expression, in: tab.webView) }
+    }
+    func executeExtensionScript(_ source: String) {
+        guard let tab = activeTab, !source.isEmpty else { model?.message = "没有可以执行脚本的当前标签页。"; return }
+        tab.webView.evaluateJavaScript(source, in: nil, in: .page) { [weak self] _, error in
+            if let error { self?.model?.message = error.localizedDescription }
+        }
+    }
+}
+
+@available(iOS 18.4, *)
+extension BrowserSession {
+    var extensionController: WKWebExtensionController {
+        if let existing = extensionControllerBox as? WKWebExtensionController { return existing }
+        let config = WKWebExtensionController.Configuration(identifier: profileID)
+        config.defaultWebsiteDataStore = dataStore
+        let controller = WKWebExtensionController(configuration: config)
+        controller.delegate = self
+        extensionControllerBox = controller
+        return controller
+    }
+    var popupPresenter: PopupPresenter? {
+        get { popupPresenterBox as? PopupPresenter }
+        set { popupPresenterBox = newValue }
+    }
+    func extensionContext(id: UUID) -> WKWebExtensionContext? { extensionContextBox[id] as? WKWebExtensionContext }
+    func storeExtensionContext(_ context: WKWebExtensionContext, id: UUID) { extensionContextBox[id] = context }
+    @discardableResult func removeExtensionContext(id: UUID) -> WKWebExtensionContext? {
+        extensionContextBox.removeValue(forKey: id) as? WKWebExtensionContext
+    }
+    func allExtensionContexts() -> [WKWebExtensionContext] { extensionContextBox.values.compactMap { $0 as? WKWebExtensionContext } }
 }
 
 @MainActor final class BrowserTab: NSObject, ObservableObject, Identifiable {
@@ -264,7 +326,7 @@ import WebKit
         isPrivate = saved.isPrivate; groupID = saved.groupID; autoRefreshSeconds = saved.autoRefreshSeconds
         let configuration = supplied ?? WKWebViewConfiguration()
         configuration.websiteDataStore = saved.isPrivate ? session.privateStore : session.dataStore
-        configuration.webExtensionController = session.extensionController
+        if #available(iOS 18.4, *) { configuration.webExtensionController = session.extensionController }
         configuration.userContentController = WKUserContentController()
         configuration.allowsInlineMediaPlayback = true
         configuration.allowsPictureInPictureMediaPlayback = true
@@ -280,15 +342,15 @@ import WebKit
         webView.isInspectable = session.profile.settings.inspectable
         webView.scrollView.keyboardDismissMode = .onDrag
         observations = [
-            webView.observe(\.title, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .title) } },
-            webView.observe(\.url, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .URL) } },
-            webView.observe(\.estimatedProgress, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .loading) } },
-            webView.observe(\.isLoading, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .loading) } },
-            webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: []) } },
-            webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: []) } }
+            webView.observe(\.title, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionTitle: true) } },
+            webView.observe(\.url, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionURL: true) } },
+            webView.observe(\.estimatedProgress, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionLoading: true) } },
+            webView.observe(\.isLoading, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionLoading: true) } },
+            webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState() } },
+            webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState() } }
         ]
     }
-    func syncState(properties: WKWebExtension.TabChangedProperties) {
+    func syncState(extensionTitle: Bool = false, extensionURL: Bool = false, extensionLoading: Bool = false) {
         progress = webView.estimatedProgress; isLoading = webView.isLoading
         canGoBack = webView.canGoBack; canGoForward = webView.canGoForward
         if let url = webView.url {
@@ -296,7 +358,13 @@ import WebKit
             session?.noteURLChange(self)
         }
         if let title = webView.title, !title.isEmpty { pageTitle = title }
-        if !properties.isEmpty { session?.extensionController.didChangeTabProperties(properties, for: self) }
+        guard extensionTitle || extensionURL || extensionLoading else { return }
+        guard #available(iOS 18.4, *) else { return }
+        var properties = WKWebExtension.TabChangedProperties()
+        if extensionTitle { properties.insert(.title) }
+        if extensionURL { properties.insert(.URL) }
+        if extensionLoading { properties.insert(.loading) }
+        session?.extensionController.didChangeTabProperties(properties, for: self)
     }
     func restoreIfNeeded() {
         guard !restored else { return }
@@ -345,7 +413,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         pageError = nil; session?.commands.removeAll { $0.tabID == id }
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        syncState(properties: [.loading, .URL, .title]); session?.recordVisit(self); applyDecorations(); captureThumbnail(); captureIcon()
+        syncState(extensionTitle: true, extensionURL: true, extensionLoading: true); session?.recordVisit(self); applyDecorations(); captureThumbnail(); captureIcon()
     }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { applyDecorations() }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -386,7 +454,13 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
             decisionHandler(.cancel, preferences)
             Task { await session?.model?.importScriptURL(url.absoluteString) }; return
         }
-        if ["http", "https", "about", "blob", "data"].contains(url.scheme ?? "") || session?.extensionController.extensionContext(for: url) != nil {
+        var webExtensionPage = ["http", "https", "about", "blob", "data"].contains(url.scheme ?? "")
+        if !webExtensionPage {
+            if #available(iOS 18.4, *) {
+                webExtensionPage = session?.extensionController.extensionContext(for: url) != nil
+            }
+        }
+        if webExtensionPage {
             decisionHandler(.allow, preferences); return
         }
         decisionHandler(.cancel, preferences)

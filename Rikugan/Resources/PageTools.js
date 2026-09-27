@@ -51,6 +51,47 @@
     }
     style.textContent = css;
   }
+  function insertExtensionCSS(css) {
+    const doc = root.document;
+    if (!doc || typeof doc.createElement !== 'function') return false;
+    const node = doc.createElement('style');
+    node.setAttribute('data-rikugan-extension', 'css');
+    node.textContent = String(css || '');
+    const parent = doc.head || doc.documentElement;
+    if (!parent || typeof parent.appendChild !== 'function') return false;
+    parent.appendChild(node);
+    return true;
+  }
+  function installClipboard(decision) {
+    const mode = decision || 'ask';
+    const clip = root.navigator && root.navigator.clipboard;
+    if (!clip || typeof clip.readText !== 'function') return mode;
+    if (mode === 'allow') return 'allow';
+    if (mode === 'block') {
+      clip.readText = () => Promise.reject(new Error('Blocked by Rikugan'));
+      return 'block';
+    }
+    if (clip.__rgAsk) return 'ask';
+    const original = clip.readText.bind(clip);
+    clip.__rgOriginalRead = original;
+    clip.__rgAsk = true;
+    clip.readText = () => new Promise((resolve, reject) => {
+      const id = 'c' + Math.random().toString(36).slice(2);
+      root.__rgClipboard = root.__rgClipboard || {};
+      root.__rgClipboard[id] = decisionName => {
+        if (decisionName === 'allow') {
+          clip.readText = clip.__rgOriginalRead;
+          original().then(resolve, reject);
+        } else reject(new Error('Blocked by Rikugan'));
+      };
+      post({ action: 'clipboard-read', id: id });
+    });
+    root.__rgClipboardDone = (id, decisionName) => {
+      const fn = root.__rgClipboard && root.__rgClipboard[id];
+      if (typeof fn === 'function') fn(decisionName);
+    };
+    return 'ask';
+  }
   const darkRules = [
     'html{color-scheme:dark!important;background-color:#111111!important}',
     'body,article,main,section,header,footer,nav,aside,div,p,li,td,th,span,h1,h2,h3,h4,h5,h6,label,button,input,textarea,select,blockquote,pre,code,ul,ol,table,form,figcaption,summary{background-color:#161616!important;color:#e8e8e8!important;border-color:#3a3a3a!important}',
@@ -694,13 +735,13 @@
       email: set(one('input[autocomplete="email"],input[type="email"],input[name*="email" i]'), values.email),
       phone: set(one('input[autocomplete="tel"],input[type="tel"],input[name*="phone" i],input[name*="tel" i]'), values.phone),
       address: set(one('textarea[autocomplete="street-address"],input[autocomplete="street-address"],textarea[name*="address" i],input[name*="address" i]'), values.address),
-      paymentLast4: set(one('input[autocomplete="cc-number"],input[name*="card" i],input[name*="cc" i]'), values.paymentLast4)
+      paymentLast4: set(one('input[autocomplete="cc-number"],input[name*="card" i],input[name*="cc" i]'), values.cardNumber || values.paymentLast4)
     };
   }
   const api = {
     selector, setAppearance, setFont, darkCSS: darkRules, applyBlocking, applyScriptlets, applyCSP, applyReplace, collectTexts, applyTexts, restoreTexts,
     watchNewText, stopWatch, extractArticle, collectMedia, parseM3U8, parseMPD, installNetHook, installConsole, installNotifications,
-    startPicker, countMatches, clearFind, videoAction, fill, ensureStyle
+    startPicker, countMatches, clearFind, videoAction, fill, ensureStyle, insertExtensionCSS, installClipboard
   };
   root.RikuganPageTools = api;
   try { installNetHook(); } catch (error) {}

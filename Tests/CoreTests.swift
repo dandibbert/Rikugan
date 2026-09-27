@@ -250,6 +250,15 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(suggestions, ["cats food", "cats toys"])
         XCTAssertTrue(SearchSuggest.endpoint(template: "https://www.google.com/search?q=", query: "cats")?.host?.contains("google.com") == true)
         XCTAssertTrue(SearchSuggest.endpoint(template: "https://www.bing.com/search?q=", query: "cats")?.host?.contains("bing.com") == true)
+        XCTAssertTrue(SearchSuggest.endpoint(template: "https://search.brave.com/search?q=", query: "cats")?.absoluteString.contains("search.brave.com/api/suggest") == true)
+        XCTAssertTrue(SearchSuggest.endpoint(template: "https://search.yahoo.com/search?p=", query: "cats")?.absoluteString.contains("gossip") == true)
+        XCTAssertTrue(SearchSuggest.endpoint(template: "https://www.baidu.com/s?wd=", query: "cats")?.absoluteString.contains("sugrec") == true)
+        XCTAssertTrue(SearchSuggest.endpoint(template: "https://www.startpage.com/search?q=", query: "cats")?.absoluteString.contains("startpage.com/suggestions") == true)
+        XCTAssertTrue(SearchSuggest.endpoint(template: "https://search.naver.com/search.naver?query=", query: "cats")?.host?.contains("naver.com") == true)
+        XCTAssertTrue(SearchSuggest.endpoint(template: "https://yandex.com/search/?text=", query: "cats")?.absoluteString.contains("suggest.yandex.com") == true)
+        XCTAssertEqual(SearchSuggest.parse(Data("{\"gossip\":{\"results\":[{\"key\":\"cats food\"}]}}".utf8)), ["cats food"])
+        XCTAssertEqual(SearchSuggest.parse(Data("{\"g\":[{\"q\":\"baidu cats\"}]}".utf8)), ["baidu cats"])
+        XCTAssertEqual(SearchSuggest.parse(Data("{\"items\":[[\"naver cats\"]]}".utf8)), ["naver cats"])
         XCTAssertNil(SearchSuggest.endpoint(template: "https://example.com/?q=", query: "cats"))
         let xml = """
         <gupdate><app appid="abcdefghijklmnop"><updatecheck codebase="https://example.com/ext.crx" version="1.2.3" /></app></gupdate>
@@ -266,7 +275,34 @@ final class CoreTests: XCTestCase {
         let settings = try JSONDecoder().decode(BrowserSettings.self, from: Data("{}".utf8))
         XCTAssertTrue(settings.searchSuggestions)
         XCTAssertEqual(settings.homepageURL, "")
-        XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "notifications" }?.level, "Unsupported")
+        XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "notifications" }?.level, "Partial")
+        XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "scripting" }?.level, "Partial")
+        XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "debugger" }?.level, "Unsupported")
+        let css = try XCTUnwrap(ExtensionScripting.insertCSSExpression("body{color:red}"))
+        XCTAssertTrue(css.contains("insertExtensionCSS"))
+        XCTAssertTrue(css.contains("color:red"))
+        XCTAssertEqual(ExtensionScripting.executeScriptSource("document.title='fixture'"), "document.title='fixture'")
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://ads.example/banner.js")!, lines: ["||ads.example^"]), .block)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://news.example/")!, lines: ["||ads.example^"]), .none)
+        var memory: [UUID: [String: Any]] = [:]
+        let scriptID = UUID()
+        XCTAssertNil(ScriptVault.commit(isPrivate: true, scriptID: scriptID, stored: ["secret": "x"], json: "{\"secret\":\"x\"}", memory: &memory))
+        XCTAssertEqual(memory[scriptID]?["secret"] as? String, "x")
+        var untouched = memory
+        XCTAssertEqual(ScriptVault.commit(isPrivate: false, scriptID: scriptID, stored: ["secret": "y"], json: "{\"secret\":\"y\"}", memory: &untouched), "{\"secret\":\"y\"}")
+        XCTAssertEqual(untouched[scriptID]?["secret"] as? String, "x")
+        let page = URL(string: "https://example.com/a")!
+        let same = URL(string: "https://example.com/b")!
+        let other = URL(string: "https://cdn.example/b")!
+        XCTAssertTrue(ScriptRequestCookies.shouldAttach(page: page, request: same, permitted: true))
+        XCTAssertFalse(ScriptRequestCookies.shouldAttach(page: page, request: other, permitted: true))
+        XCTAssertFalse(ScriptRequestCookies.shouldAttach(page: page, request: same, permitted: false))
+        let card = AutofillItem(kind: "payment", title: "卡", host: "shop.example", username: "", secret: "4242424242424242", paymentLast4: "4242")
+        let payload = AutofillVault.fillPayload(card)
+        XCTAssertEqual(payload["cardNumber"], "4242424242424242")
+        XCTAssertEqual(payload["paymentLast4"], "4242")
+        let merged = AutofillVault.merge(local: [card], remote: [AutofillItem(id: card.id, kind: "payment", title: "新卡", host: "shop.example", username: "", secret: "4000000000000002", paymentLast4: "0002")])
+        XCTAssertEqual(merged.first?.secret, "4000000000000002")
     }
     func testGrantNonePageWorldAndRequire() throws {
         let page = """
