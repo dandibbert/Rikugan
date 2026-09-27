@@ -27,6 +27,7 @@ if (location.hostname === '127.0.0.1') {
       if (!css) throw new Error('content CSS');
       const api = await browser.runtime.sendMessage({type: 'rikugan-api-probe'});
       if (!api.allowed || api.denied || !api.scripting || document.documentElement.dataset.rikuganScripting !== 'passed') throw new Error('permissions/scripting: ' + JSON.stringify(api));
+      if (!api.mutableDNRDisabled) throw new Error('unimplemented DNR mutation API is still advertised');
       await new Promise((resolve, reject) => {
         const port = browser.runtime.connect({name: 'rikugan-port'});
         const timer = setTimeout(() => { port.disconnect(); reject(new Error('Port timed out')); }, 10000);

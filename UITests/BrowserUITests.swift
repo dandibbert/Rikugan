@@ -60,6 +60,7 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["本身份已保存"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.webViews.staticTexts["扩展运行成功"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.webViews.staticTexts["GM 存储计数：2"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.webViews.staticTexts["扩展完整自检通过"].waitForExistence(timeout: 30))
     }
     @MainActor private func navigate(_ app: XCUIApplication) {
         let address = app.textFields["browser.address"]

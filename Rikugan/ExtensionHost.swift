@@ -13,7 +13,8 @@ import WebKit
     var permissions: [String] { webExtension.requestedPermissions.map(\.rawValue).sorted() }
     var patterns: [String] { webExtension.allRequestedMatchPatterns.map(\.string).sorted() }
     var warnings: String {
-        (webExtension.errors.map(\.localizedDescription) + (backgroundMode == "document" ? [ExtensionCompatibility.notice] : [])).joined(separator: "\n")
+        (webExtension.errors.map(\.localizedDescription) + (backgroundMode == "document" ? [ExtensionCompatibility.notice] : [])
+            + (permissions.contains(where: { $0.hasPrefix("declarativeNetRequest") }) ? [StaticDNR.notice] : [])).joined(separator: "\n")
     }
 }
 
@@ -99,12 +100,17 @@ extension BrowserSession {
     }
     private func activateExtension(_ webExtension: WKWebExtension, record: ExtensionRecord, retryOriginInitialization: Bool = true) async throws {
         if let previous = contexts.removeValue(forKey: record.id) { try? extensionController.unload(previous) }
+        removeStaticDNR(record.id)
         let context = WKWebExtensionContext(for: webExtension)
         context.uniqueIdentifier = record.id.uuidString
         context.baseURL = URL(string: "webkit-extension://" + record.id.uuidString.lowercased() + "/")!
         context.isInspectable = true
         context.hasAccessToPrivateData = false
-        context.unsupportedAPIs = ["runtime.sendNativeMessage", "runtime.connectNative"]
+        context.unsupportedAPIs = Set([
+            "browser.runtime.sendNativeMessage", "browser.runtime.connectNative",
+            "chrome.runtime.sendNativeMessage", "chrome.runtime.connectNative",
+            "runtime.sendNativeMessage", "runtime.connectNative"
+        ] + StaticDNR.unsupportedAPIs)
         for permission in record.allowedPermissions { context.setPermissionStatus(.grantedExplicitly, for: WKWebExtension.Permission(rawValue: permission)) }
         for pattern in record.allowedPatterns {
             if let match = try? WKWebExtension.MatchPattern(string: pattern) { context.setPermissionStatus(.grantedExplicitly, for: match) }
@@ -121,13 +127,18 @@ extension BrowserSession {
             if let tab = activeTab, !tab.isPrivate { context.didActivateTab(tab, previousActiveTab: nil) }
         }
         do {
+            let (dnrList, count) = try await prepareStaticDNR(record)
             if webExtension.hasBackgroundContent {
                 try await ExtensionBackgroundLoader.load(context)
             }
-            guard isActive else { throw RikuganError.message("扩展加载期间身份已关闭。") }
+            guard isActive, contexts[record.id] === context else { throw RikuganError.message("扩展加载期间身份或启用状态已改变。") }
+            if let dnrList {
+                extensionDNRLists[record.id] = dnrList; extensionDNRCounts[record.id] = count
+                for tab in tabs { tab.syncExtensionDNR() }
+            }
         } catch {
             try? extensionController.unload(context)
-            contexts.removeValue(forKey: record.id)
+            if contexts[record.id] === context { contexts.removeValue(forKey: record.id); removeStaticDNR(record.id) }
             // Older WebKit versions can stall their first origin migration from an
             // empty previous base URL. load/unload has now persisted the stable base
             // URL, so one NEW context can skip that migration. Use public APIs only;
@@ -145,10 +156,14 @@ extension BrowserSession {
             if let index = profile.extensions.firstIndex(where: { $0.id == record.id }) { profile.extensions[index].enabled = enabled }
         }
         if enabled { await loadExtension(record) }
-        else if let context = contexts.removeValue(forKey: record.id) { try? extensionController.unload(context) }
+        else {
+            if let context = contexts.removeValue(forKey: record.id) { try? extensionController.unload(context) }
+            removeStaticDNR(record.id)
+        }
         objectWillChange.send()
     }
     func removeExtension(_ record: ExtensionRecord) {
+        removeStaticDNR(record.id)
         if let context = contexts.removeValue(forKey: record.id) {
             let types = WKWebExtensionController.allExtensionDataTypes
             extensionController.fetchDataRecord(ofTypes: types, for: context) { [weak self] dataRecord in

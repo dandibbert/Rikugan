@@ -17,6 +17,8 @@ import Combine
     @Published var requestedPanel: String?
     @Published var contentRuleError: String?
     var contexts: [UUID: WKWebExtensionContext] = [:]
+    var extensionDNRLists: [UUID: WKContentRuleList] = [:]
+    @Published var extensionDNRCounts: [UUID: Int] = [:]
     var privateStore: WKWebsiteDataStore = .nonPersistent()
     var contentRuleList: WKContentRuleList?
     var globalCosmetic = ""
@@ -78,6 +80,7 @@ import Combine
         extensionController.didCloseWindow(self)
         for context in contexts.values { try? extensionController.unload(context) }
         contexts.removeAll()
+        extensionDNRLists.removeAll(); extensionDNRCounts.removeAll()
         for tab in tabs { tab.teardown() }
         tabs.removeAll()
         extensionController.delegate = nil
@@ -217,6 +220,7 @@ import Combine
     var groupID: UUID?
     var autoRefreshSeconds: Int
     var contentRulesOn = false
+    var appliedExtensionDNR: [UUID: WKContentRuleList] = [:]
     var pageHandlerInstalled = false
     var refreshTask: Task<Void, Never>?
     var lastActiveAt = Date()
@@ -252,7 +256,7 @@ import Combine
         existingWebView = webView
         scriptEngine.configure(configuration.userContentController, scripts: session?.profile.scripts ?? [])
         PageTools.install(on: configuration.userContentController, cosmeticCSS: session?.globalCosmetic ?? "")
-        ensurePageHandler(); syncContentRules()
+        ensurePageHandler(); syncContentRules(); syncExtensionDNR()
         webView.navigationDelegate = self; webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webView.isInspectable = session?.profile.settings.inspectable ?? true
@@ -330,6 +334,7 @@ import Combine
         webView.navigationDelegate = nil; webView.uiDelegate = nil
         webView.removeFromSuperview()
         existingWebView = nil; contentRulesOn = false
+        appliedExtensionDNR.removeAll()
     }
     func discardRecoveryState() { recoveryState = nil }
     func suspendIfIdle() {

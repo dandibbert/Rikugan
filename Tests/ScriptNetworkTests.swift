@@ -14,6 +14,8 @@ final class ScriptNetworkTests: XCTestCase {
             XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "headers": ["X-Test": invalid]], origin: origin))
         }
         XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "headers": ["Host": "evil.test"]], origin: origin))
+        XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "headers": ["X-Test\n": "value"]], origin: origin))
+        XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "method": "GET\n"], origin: origin))
         XCTAssertThrowsError(try ScriptRequest.build(["url": "/", "timeout": -1], origin: origin))
         XCTAssertTrue(URLRules.connectionAllowed(origin, origin: origin, rules: ["self"]))
         XCTAssertFalse(URLRules.connectionAllowed(URL(string: "http://127.0.0.1:9999/")!, origin: origin, rules: ["self"]))

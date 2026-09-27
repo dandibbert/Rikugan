@@ -18,7 +18,7 @@ enum ChromeAPIMatrix {
         .init(api: "i18n", level: "Partial", note: "跟随扩展包内的 _locales，缺少的文案不会伪造。"),
         .init(api: "notifications", level: "Unsupported", note: "未实现持久通知后端。调用会由 WebKit 返回不支持，而不是静默成功。"),
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
-        .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带 DNR 由 WebKit 执行。Rikugan 的广告拦截是独立引擎，不把扩展改写成用户脚本。"),
+        .init(api: "declarativeNetRequest", level: "Partial", note: StaticDNR.notice),
         .init(api: "debugger", level: "Unsupported", note: "不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),
         .init(api: "nativeMessaging", level: "Unsupported", note: "runtime.sendNativeMessage 与 connectNative 已列入 unsupportedAPIs。")
     ]

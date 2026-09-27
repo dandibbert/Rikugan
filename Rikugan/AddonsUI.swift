@@ -148,6 +148,12 @@ struct ExtensionDetails: View {
                     }
                     Section("已授权 API") { ForEach(Array(Set(record.allowedPermissions + record.allowedPatterns)).sorted(), id: \.self) { Text(ChromeAPIMatrix.describe($0)).font(.subheadline) } }
                     if record.backgroundMode == "document" { Section("后台兼容模式") { Text(ExtensionCompatibility.notice).font(.footnote) } }
+                    if record.allowedPermissions.contains(where: { $0.hasPrefix("declarativeNetRequest") }) {
+                        Section("网络规则") {
+                            Text(StaticDNR.notice).font(.footnote)
+                            LabeledContent("已编译静态规则", value: String(session.extensionDNRCounts[record.id] ?? 0))
+                        }
+                    }
                     Section("身份") { LabeledContent("扩展 ID", value: record.storeID.isEmpty ? record.id.uuidString : record.storeID); if !record.updateURL.isEmpty { Text(record.updateURL).font(.caption2) } }
                     NavigationLink("API 兼容矩阵") { CapabilityView() }
                     NavigationLink("查看 manifest.json") { ExtensionManifestView(record: record, session: session) }

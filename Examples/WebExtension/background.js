@@ -1,12 +1,13 @@
 browser.runtime.onMessage.addListener((message, sender, reply) => {
   if (message.type === 'rikugan-api-probe') {
+    const mutableDNRDisabled = typeof browser.declarativeNetRequest.updateDynamicRules === 'undefined';
     Promise.all([
       browser.permissions.contains({origins: ['http://127.0.0.1/*']}),
       browser.permissions.contains({origins: ['http://localhost/*']}),
       browser.scripting.executeScript({target: {tabId: sender.tab.id}, func: () => {
         document.documentElement.dataset.rikuganScripting = 'passed'; return 'executed';
       }})
-    ]).then(([allowed, denied, result]) => reply({allowed, denied, scripting: result.some(item => item.result === 'executed')}))
+    ]).then(([allowed, denied, result]) => reply({allowed, denied, mutableDNRDisabled, scripting: result.some(item => item.result === 'executed')}))
       .catch(error => reply({error: String(error)}));
     return true;
   }

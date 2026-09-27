@@ -8,7 +8,7 @@ enum ScriptRequest {
             throw RikuganError.message("GM XHR 只允许没有嵌入凭证的 HTTP(S) 地址。")
         }
         let method = (args["method"] as? String ?? "GET").uppercased()
-        guard method.range(of: #"^[A-Z]{1,24}$"#, options: .regularExpression) != nil,
+        guard method.range(of: #"\A[A-Z]{1,24}\z"#, options: .regularExpression) != nil,
               !["CONNECT", "TRACE", "TRACK"].contains(method) else { throw RikuganError.message("不支持的 HTTP 方法。") }
         let milliseconds = (args["timeout"] as? NSNumber)?.doubleValue ?? 0
         guard milliseconds.isFinite, (0...120000).contains(milliseconds) else { throw RikuganError.message("timeout 必须为 0–120000 毫秒。") }
@@ -25,7 +25,7 @@ enum ScriptRequest {
         let headers = args["headers"] as? [String: String] ?? [:]
         guard headers.count <= 64 else { throw RikuganError.message("请求头超过限制。") }
         for (key, value) in headers {
-            guard key.range(of: #"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"#, options: .regularExpression) != nil,
+            guard key.range(of: #"\A[A-Za-z0-9!#$%&'*+.^_`|~-]+\z"#, options: .regularExpression) != nil,
                   value.utf8.count <= 8192, value.unicodeScalars.allSatisfy({ $0.value == 9 || ($0.value >= 32 && $0.value != 127 && !CharacterSet.newlines.contains($0)) }),
                   !["host", "content-length", "connection", "transfer-encoding"].contains(key.lowercased()) else {
                 throw RikuganError.message("不支持或不安全的请求头：\(key)")

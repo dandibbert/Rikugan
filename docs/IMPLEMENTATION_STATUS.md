@@ -13,6 +13,8 @@ GM XHR 新增原生 URLSessionDataTask 取消、总超时、下载进度与 read
 
 扩展增加独立可横向滚动的工具栏动作条（图标/标题/徽标/启用状态），点击直接打开原生 popup；无痕不展示。详情页可查看运行时与原始 manifest.json。固定测试扩展增加 document_start/end + CSS、background messaging/Port、storage、popup 当前标签、scripting.executeScript、host permissions、DNR 实际阻断；UI 验证实际效果。后台沿用普通证书非持久页面，不宣称完整 Worker 生命周期。
 
+静态 DNR 改为独立宿主规则列表执行：每个扩展单独编译、挂载和卸载 block/allow 规则，支持优先级、URL/glob/可编译正则和资源类型；关闭扩展/切换身份释放规则，无痕不挂载。真实测试确认原生扩展 API 接受静态规则但没有拦截，因此不再仅依赖原生声明。每个扩展最多 5000 条静态规则；redirect/modifyHeaders、request/initiator domains、WithHostAccess 等未实现条件会阻止加载并展示具体原因，绝不丢弃条件扩大拦截。动态/session 规则修改及运行时启停规则集列为 unsupportedAPIs，不能报告成功却不生效。不是完整 DNR 兼容。
+
 ## 0.3.0 已交付
 
 | 规格/缺口 | 实现 | 验证入口 |
