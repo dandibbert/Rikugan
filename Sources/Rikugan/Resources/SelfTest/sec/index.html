@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Hostile page</title>
+<script>
+  // Runs before any injected document-end script: try to intercept everything posted to native
+  // from the page world (a page-world credential would be captured here).
+  window.__captured = [];
+  try {
+    const h = window.webkit.messageHandlers.rikugan;
+    const original = h.postMessage.bind(h);
+    h.postMessage = function (m) { window.__captured.push(m); return original(m); };
+  } catch (_) {}
+  const origBind = Function.prototype.bind;
+  Function.prototype.bind = function (...a) {
+    const f = origBind.apply(this, a);
+    try { if (a[0] && a[0] === window.webkit.messageHandlers.rikugan) window.__captured.push({ boundPostMessage: true }); } catch (_) {}
+    return f;
+  };
+
+  window.__attack = async (p) => {
+    const R = {};
+    const h = window.webkit && window.webkit.messageHandlers;
+    R.handlers = h ? ['rikugan', 'gm', 'chrome', 'tools', 'userscript'].filter((n) => { try { return !!h[n]; } catch (_) { return false; } }).join(',') : 'none';
+    R.suspiciousGlobals = Object.getOwnPropertyNames(window).filter((k) => /rikugan|__rk|^GM|token/i.test(k)).join(',');
+    R.htmlHasSecret = String(document.documentElement.outerHTML.includes('victim-secret'));
+    R.capturedGM = String(window.__captured.filter((m) => m && (m.ch === 'gm' || m.token)).length);
+    const post = (m) => {
+      try { return h.rikugan.postMessage(m).then((v) => 'resolved:' + JSON.stringify(v), (e) => 'rejected:' + (e && e.message || e)); }
+      catch (e) { return Promise.resolve('threw:' + e.message); }
+    };
+    R.gmGetAll = await post({ ch: 'gm', sid: p.sid, op: 'getAll', args: null });
+    R.gmGetAllGuessToken = await post({ ch: 'gm', sid: p.sid, token: 'deadbeef'.repeat(4), op: 'getAll', args: null });
+    R.gmSetValue = await post({ ch: 'gm', sid: p.sid, op: 'setValue', args: { key: 'attacker', value: '"pwned"' } });
+    R.gmXhr = await post({ ch: 'gm', sid: p.sid, op: 'xhr', args: { url: location.origin + '/sec/secret.json', id: 'x1' } });
+    R.gmXhrAbortForgedId = await post({ ch: 'gm', sid: p.sid, op: 'xhrAbort', args: { id: 'x1' } });
+    R.gmOpenTab = await post({ ch: 'gm', sid: p.sid, op: 'openInTab', args: { url: 'https://evil.example/' } });
+    R.gmMenu = await post({ ch: 'gm', sid: p.sid, op: 'menuRegister', args: { id: 'evil', name: 'Evil' } });
+    R.gmNotify = await post({ ch: 'gm', sid: p.sid, op: 'notification', args: { text: 'x' } });
+    R.gmImpersonatePageScript = await post({ ch: 'gm', sid: p.pageSid, op: 'getAll', args: null });
+    R.gmUnknownScript = await post({ ch: 'gm', sid: '00000000-0000-0000-0000-000000000000', op: 'getAll', args: null });
+    R.dispatchFunction = typeof window['__rikuganGM_' + p.sid.replace(/-/g, '')];
+    for (const name of ['rikugan', 'rikugan-gm', '__rikugan', 'rk-gm', 'gm-bridge', 'message']) {
+      document.dispatchEvent(new CustomEvent(name, { detail: { ch: 'gm', op: 'setValue', sid: p.sid, args: { key: 'attacker', value: '"evt"' } } }));
+      window.dispatchEvent(new CustomEvent(name, { detail: { ch: 'gm', op: 'setValue', sid: p.sid, args: { key: 'attacker', value: '"evt"' } } }));
+    }
+    window.postMessage({ ch: 'gm', op: 'setValue', sid: p.sid, args: { key: 'attacker', value: '"pm"' } }, '*');
+    R.chromeAsContentA = await post({ ch: 'chrome', ext: p.extA, ctx: 'content', api: 'storage.get', args: {} });
+    R.chromeAsPageA = await post({ ch: 'chrome', ext: p.extA, ctx: 'page', api: 'storage.get', args: {} });
+    R.chromeAsBackgroundA = await post({ ch: 'chrome', ext: p.extA, ctx: 'background', api: 'tabs.create', args: { args: [{ url: 'https://evil.example/' }] } });
+    R.chromeScriptingA = await post({ ch: 'chrome', ext: p.extA, ctx: 'content', api: 'scripting.executeScript', args: { target: { tabId: 1 }, func: '() => 1' } });
+    R.chromeRuntimeA = await post({ ch: 'chrome', ext: p.extA, ctx: 'content', api: 'runtime.sendMessage', args: { message: { type: 'evil' } } });
+    R.chromePortA = await post({ ch: 'chrome', ext: p.extA, ctx: 'content', api: 'port.post', args: { portId: p.aPort, message: { say: 'evil-from-page' } } });
+    R.toolsPicker = await post({ ch: 'tools', op: 'pickerDone', args: { selector: 'body', host: '127.0.0.1' } });
+    R.toolsCredential = await post({ ch: 'tools', op: 'credentialCaptured', args: { username: 'u', password: 'p' } });
+    R.forgedHistory = await post({ ch: 'page', op: 'historyStateUpdated', args: { url: 'https://forged.example/phish' } });
+    return R;
+  };
+</script>
+</head>
+<body><h1>Hostile page</h1><p>Tries to reach privileged Rikugan APIs from page JavaScript.</p></body>
+</html>

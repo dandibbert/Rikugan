@@ -60,7 +60,9 @@ import WebKit
                 let t = Date()
                 watch.reset()
                 if let failure = await body() {
-                    failures.append("\(name): \(failure) [mainThreadMaxGap=\(String(format: "%.2f", watch.maxGap))s webViews=\(RikuganWebView.liveByPurpose) bgTimeline=\(bg.timeline.suffix(6).joined(separator: "; "))]")
+                    // Evidence first (the summary table truncates long details).
+                    let timelineText = (bg.timeline.isEmpty ? bg.lastFailureTimeline : bg.timeline).suffix(12).joined(separator: "; ")
+                    failures.append("\(name): [mainThreadMaxGap=\(String(format: "%.2f", watch.maxGap))s webViews=\(RikuganWebView.liveByPurpose) bgTimeline=\(timelineText)] \(failure)")
                 }
                 timings[name] = (Date().timeIntervalSince(t) * 1000).rounded() / 1000
                 timings["mainThreadMaxGap " + name] = (watch.maxGap * 1000).rounded() / 1000

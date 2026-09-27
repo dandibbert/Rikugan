@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Rikugan Security Victim A",
+  "version": "1.0.0",
+  "description": "Victim extension for the security suite: secret storage and a content-script port.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "bg.js" },
+  "content_scripts": [{ "matches": ["http://127.0.0.1/sec/*"], "js": ["cs.js"], "run_at": "document_end" }]
+}

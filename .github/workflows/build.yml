@@ -27,6 +27,8 @@ jobs:
         run: swift test 2>&1 | tee core-tests.log
       - name: JavaScript runtime tests (GM API, chrome.* shim, page tools)
         run: node scripts/test_js.cjs
+      - name: Self-test result verifier rejects stale / fake results
+        run: python3 scripts/test_verify_selftest.py
       - name: Chrome API matrix document is generated from the verified JSON
         run: python3 scripts/gen_api_matrix.py --check
       - uses: actions/upload-artifact@v4
@@ -132,13 +134,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { suite: core, test: testSelfTestSuitePasses }
-          - { suite: pageworld, test: testPageWorldSuite }
-          - { suite: fonts, test: testFontSuite }
-          - { suite: dnr, test: testDNRSuite }
-          - { suite: lifecycle, test: testTabLifecycleSuite }
-          - { suite: stress, test: testBackgroundStressSuite }
-          - { suite: archive, test: testArchiveRoundTripSuite }
+          - { suite: core, test: testSelfTestSuitePasses, min: 28 }
+          - { suite: pageworld, test: testPageWorldSuite, min: 40 }
+          - { suite: security, test: testSecuritySuite, min: 40 }
+          - { suite: fonts, test: testFontSuite, min: 18 }
+          - { suite: dnr, test: testDNRSuite, min: 18 }
+          - { suite: lifecycle, test: testTabLifecycleSuite, min: 22 }
+          - { suite: stress, test: testBackgroundStressSuite, min: 33 }
+          - { suite: archive, test: testArchiveRoundTripSuite, min: 14 }
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/sim-test
@@ -146,6 +149,7 @@ jobs:
           suite: ${{ matrix.suite }}
           test: ${{ matrix.test }}
           stress-rounds: "30"
+          min-checks: ${{ matrix.min }}
 
   compat:
     name: "Simulator: real extension compatibility (report)"
@@ -163,6 +167,8 @@ jobs:
           suite: compat
           test: testRealExtensionCompatReport
           compat-dir: compat-packages
+          min-checks: "3"
+          allow-fail: "true"
 
   release:
     name: Publish prerelease

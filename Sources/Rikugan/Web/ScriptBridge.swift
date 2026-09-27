@@ -27,7 +27,10 @@ import UserNotifications
                 case "chrome":
                     result = try await profile.extensions.bridge.handle(body, message: message, worldName: worldName)
                 case "tools":
-                    guard worldName == Worlds.tools.name else { throw RikuganError("tools channel is only available to the tools world") }
+                    guard worldName == Worlds.tools.name else {
+                        SecurityLog.shared.record("tools channel rejected from world '\(worldName)'")
+                        throw RikuganError("tools channel is only available to the tools world")
+                    }
                     result = try await ToolsChannel.handle(body, message: message, profile: profile)
                 case "page":
                     result = try await PageChannel.handle(body, message: message, profile: profile)
@@ -125,9 +128,16 @@ extension WKScriptMessage {
             tab.addSniffedMedia(MediaItem(url: url, kind: kind, source: args["via"] as? String ?? "network", contentType: contentType))
             return nil
         case "historyStateUpdated":
-            if let raw = args["url"] as? String, let url = URL(string: raw), message.frameInfo.isMainFrame {
+            // This channel is reachable by page JavaScript. pushState cannot change the origin, so a
+            // URL from another origin is forged (it would plant history / webNavigation entries).
+            let origin = message.frameInfo.securityOrigin
+            if let raw = args["url"] as? String, let url = URL(string: raw), message.frameInfo.isMainFrame,
+               url.scheme?.lowercased() == origin.protocol.lowercased(), url.host?.lowercased() == origin.host.lowercased(),
+               (url.port ?? 0) == origin.port || (url.port == nil && origin.port == 0) {
                 profile.extensions.webNavigation(.historyStateUpdated, tab: tab, url: url, frameID: 0)
                 if !tab.isPrivate { profile.history.record(url: url, title: tab.webView?.title ?? "") }
+            } else if args["url"] != nil {
+                SecurityLog.shared.record("page channel: cross-origin historyStateUpdated rejected (\(origin.host))")
             }
             return nil
         case "console":

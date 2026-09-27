@@ -689,6 +689,8 @@ enum BackgroundState: String {
     /// intermittently in the iOS 26 simulator). Each one is recovered once with a new web view and
     /// counted here — visible in Diagnostics and the self-test reports, never silent.
     private(set) var stuckStartRecoveries = 0
+    /// Timeline of the last failed start (kept after the failure resets the live timeline).
+    private(set) var lastFailureTimeline: [String] = []
     private var navigationStarted = false
     private var recoveredThisAttempt = false
     private var startWatchdog: Task<Void, Never>?
@@ -775,11 +777,19 @@ enum BackgroundState: String {
     /// WebKit never started the navigation: replace the web view once (bounded, counted, logged).
     private func recoverStuckStart(url: URL) {
         guard !recoveredThisAttempt else {
+            let loadingTabs = TabRegistry.shared.allTabs.filter { $0.webView?.isLoading == true }.count
+            note("second stall snapshot: isLoading=\(webView?.isLoading ?? false) progress=\(String(format: "%.2f", webView?.estimatedProgress ?? -1)) otherTabsLoading=\(loadingTabs)")
+            lastFailureTimeline = timeline
             fail("navigation of the background page never started (also after one fresh web view)")
             return
         }
         recoveredThisAttempt = true
         stuckStartRecoveries += 1
+        // Evidence for diagnosing the stall (no page content): the stuck view's own state and what
+        // else was loading at that moment.
+        let stuck = webView
+        let loadingTabs = TabRegistry.shared.allTabs.filter { $0.webView?.isLoading == true }.count
+        note("stall snapshot: isLoading=\(stuck?.isLoading ?? false) progress=\(String(format: "%.2f", stuck?.estimatedProgress ?? -1)) url=\(stuck?.url?.lastPathComponent ?? "nil") window=\(stuck?.window != nil) otherTabsLoading=\(loadingTabs) webViews=\(RikuganWebView.liveByPurpose)")
         note("navigation not started after \(Int(Self.navigationStartTimeout)) s → fresh web view (recovery #\(stuckStartRecoveries))")
         ErrorLog.shared.record("background navigation did not start; replaced the web view (recovery #\(stuckStartRecoveries))", source: ext.displayName)
         tearDownWebView()

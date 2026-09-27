@@ -6,7 +6,8 @@ import WebKit
 /// `unsafeWindow` → the real page window (read, write, call); `@inject-into page`;
 /// and reload / pushState / iframe / popup navigation.
 @MainActor enum PageWorldSuite {
-    static let scripts = ["pageworld/none.user.js", "pageworld/isolated.user.js", "pageworld/unsafe.user.js", "pageworld/inject.user.js"]
+    static let scripts = ["pageworld/none.user.js", "pageworld/isolated.user.js", "pageworld/unsafe.user.js", "pageworld/inject.user.js",
+                          "pageworld/privileged-unsafe.user.js"]
 
     static func run(_ ctx: SelfTestContext) async {
         var installed: [InstalledUserScript] = []
@@ -21,13 +22,14 @@ import WebKit
         ctx.extras["worlds"] = worlds
         ctx.record("世界选择：@grant none → page", worlds["PW grant none"] == "page", worlds["PW grant none"] ?? "missing")
         ctx.record("世界选择：GM_* 无 unsafeWindow → isolated", worlds["PW isolated (granted)"] == "isolated", worlds["PW isolated (granted)"] ?? "missing")
-        ctx.record("世界选择：使用 unsafeWindow → page", worlds["PW unsafeWindow"] == "page", worlds["PW unsafeWindow"] ?? "missing")
+        ctx.record("世界选择：仅无特权 grant（unsafeWindow + GM_addStyle）→ page", worlds["PW unsafeWindow"] == "page", worlds["PW unsafeWindow"] ?? "missing")
         ctx.record("世界选择：@inject-into page → page", worlds["PW inject-into page"] == "page", worlds["PW inject-into page"] ?? "missing")
+        ctx.record("世界选择：特权 GM + unsafeWindow → isolated（安全）", worlds["PW privileged unsafeWindow"] == "isolated", worlds["PW privileged unsafeWindow"] ?? "missing")
 
         let tab = await ctx.open("/pageworld/index.html")
-        let markers = ["data-none-value", "data-iso-value", "data-unsafe-value", "data-inject-value"]
+        let markers = ["data-none-value", "data-iso-value", "data-unsafe-value", "data-inject-value", "data-pu-value"]
         let allRan = await ctx.waitUntil(10) { let a = await ctx.attrs(tab); return markers.allSatisfy { a[$0] != nil } }
-        ctx.record("四个脚本均已注入", allRan, (await ctx.attrs(tab)).keys.filter { $0.hasPrefix("data-") }.sorted().joined(separator: ","))
+        ctx.record("五个脚本均已注入", allRan, (await ctx.attrs(tab)).keys.filter { $0.hasPrefix("data-") }.sorted().joined(separator: ","))
         await checkDocument(ctx, tab, label: "首次加载", expectRuns: "1")
 
         // Events: page → scripts (all worlds share the DOM).
@@ -69,7 +71,7 @@ import WebKit
         // Reload: everything re-runs, GM storage persists across documents.
         tab.reload()
         _ = await ctx.waitLoaded(tab, path: "/pageworld/index.html")
-        _ = await ctx.waitUntil(10) { await ctx.attr(tab, "data-unsafe-runs") == "2" }
+        _ = await ctx.waitUntil(10) { await ctx.attr(tab, "data-iso-runs") == "2" }
         await checkDocument(ctx, tab, label: "刷新后", expectRuns: "2")
 
         // Popup / new tab opened by the page.
@@ -93,7 +95,7 @@ import WebKit
         let a = await ctx.attrs(tab)
         let page = await ctx.eval(tab, """
             return { none: String(window.fromGrantNone), unsafe: String(window.fromUnsafe), inject: String(window.fromInjectPage),
-                     leak: typeof window.isolatedLeak, nested: String(window.pageObject.nested.n) };
+                     leak: typeof window.isolatedLeak, nested: String(window.pageObject.nested.n), privileged: typeof window.fromPrivileged };
             """) as? [String: String] ?? [:]
         ctx.record("\(label)：@grant none 读页面变量 / 调用函数 / 读对象",
                    a["data-none-value"] == "41" && a["data-none-fn"] == "pf:a" && a["data-none-obj"] == "2",
@@ -106,10 +108,15 @@ import WebKit
                    "value=\(a["data-unsafe-value"] ?? "nil") fn=\(a["data-unsafe-fn"] ?? "nil")")
         ctx.record("\(label)：unsafeWindow 写入对页面可见（全局 + 对象修改）", page["unsafe"] == "unsafe" && page["nested"] == "2",
                    "global=\(page["unsafe"] ?? "nil") nested=\(page["nested"] ?? "nil")")
-        ctx.record("\(label)：unsafeWindow 脚本 GM API 可用", a["data-unsafe-gm"] == "ok", a["data-unsafe-gm"] ?? "nil")
+        ctx.record("\(label)：页面环境脚本 GM_addStyle（无特权）可用", a["data-unsafe-gm"] == "ok", a["data-unsafe-gm"] ?? "nil")
         if let expectRuns {
-            ctx.record("\(label)：GM 值跨文档持久（运行次数）", a["data-unsafe-runs"] == expectRuns, a["data-unsafe-runs"] ?? "nil")
+            ctx.record("\(label)：GM 值跨文档持久（隔离脚本运行次数）", a["data-iso-runs"] == expectRuns, a["data-iso-runs"] ?? "nil")
         }
+        ctx.record("\(label)：特权脚本在隔离环境，unsafeWindow 看不到页面变量（Partial，安全）", a["data-pu-value"] == "undefined" && a["data-pu-same"] == "true",
+                   "pageValue=\(a["data-pu-value"] ?? "nil") unsafeWindow===window: \(a["data-pu-same"] ?? "nil")")
+        ctx.record("\(label)：特权脚本 GM API 可用", a["data-pu-gm"] == "ok", a["data-pu-gm"] ?? "nil")
+        ctx.record("\(label)：特权脚本经 unsafeWindow 写入不会泄漏到页面", page["privileged"] == "undefined", page["privileged"] ?? "nil")
+        ctx.record("\(label)：@inject-into page 的特权 GM API 被明确拒绝", a["data-inject-gm"] == "denied", a["data-inject-gm"] ?? "nil")
         ctx.record("\(label)：@inject-into page 读页面变量 + GM_info", a["data-inject-value"] == "41" && a["data-inject-info"] == "ok" && page["inject"] == "inject",
                    "value=\(a["data-inject-value"] ?? "nil") info=\(a["data-inject-info"] ?? "nil") write=\(page["inject"] ?? "nil")")
     }

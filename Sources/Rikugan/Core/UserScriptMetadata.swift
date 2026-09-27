@@ -58,25 +58,38 @@ public struct UserScriptMetadata: Codable, Hashable {
     public var usesGMAPIs: Bool { grants.contains { $0 != "none" } }
     public var grantsNone: Bool { grants.isEmpty || grants == ["none"] }
 
-    /// Page world is used for `@grant none` (like Tampermonkey), `@inject-into page`,
-    /// or scripts that explicitly request `unsafeWindow` so they can reach page globals.
+    /// Grants that need no native capability. A script that only uses these can run as plain page
+    /// JavaScript (real `unsafeWindow`), because nothing privileged has to be reachable from there.
+    public static let pageSafeGrants: Set<String> = [
+        "none", "unsafeWindow", "GM_info", "GM.info", "GM_log", "GM.log",
+        "GM_addStyle", "GM.addStyle", "GM_addElement", "GM.addElement", "window.onurlchange",
+    ]
+
+    /// Whether any requested grant needs the native GM bridge.
+    public var needsPrivilegedBridge: Bool { grants.contains { !Self.pageSafeGrants.contains($0) } }
+
+    /// Security rule: the native GM bridge is only reachable from the script's own isolated
+    /// WKContentWorld, never from the page world (page JavaScript could forge anything a page-world
+    /// script can send). Therefore:
+    /// - `@inject-into content` → isolated world;
+    /// - `@inject-into page` → page world, privileged GM APIs unavailable (explicit errors);
+    /// - `auto` → page world only when no grant needs the bridge; otherwise isolated, where
+    ///   `unsafeWindow` is the isolated window (shared DOM, page JS globals not visible).
     public var runsInPageWorld: Bool {
         switch injectInto {
         case .page: return true
         case .content: return false
-        case .auto: return grantsNone || grants.contains("unsafeWindow")
+        case .auto: return !needsPrivilegedBridge
         }
     }
 
-    /// World selection including the script body: scripts that *use* `unsafeWindow` (without
-    /// `@inject-into content`) run in the page world so `unsafeWindow` is the real page window —
-    /// the isolated world cannot see page JS globals.
-    public func runsInPageWorld(source: String) -> Bool {
-        switch injectInto {
-        case .page: return true
-        case .content: return false
-        case .auto: return runsInPageWorld || Self.referencesUnsafeWindow(source)
-        }
+    /// Kept for call sites that pass the source; the body no longer influences world selection
+    /// (using `unsafeWindow` in a privileged script must not move it into the page world).
+    public func runsInPageWorld(source: String) -> Bool { runsInPageWorld }
+
+    /// Grants the script asked for but cannot use because it runs in the page world.
+    public var unavailableInPageWorld: [String] {
+        runsInPageWorld ? grants.filter { !Self.pageSafeGrants.contains($0) } : []
     }
 
     public static func referencesUnsafeWindow(_ source: String) -> Bool {
@@ -124,7 +137,8 @@ public enum GMCompatibility {
         ("GM_log", .supported, ""),
         ("GM_notification / GM.notification", .partial, "应用内横幅 + 本地通知，不支持 highlight / 进度"),
         ("GM_getTab / GM_saveTab / GM_getTabs", .partial, "仅在应用运行期间保存"),
-        ("unsafeWindow", .partial, "页面环境脚本（@grant none、@inject-into page 或声明 unsafeWindow）完全可用；隔离环境中等同 window，看不到页面 JS 全局变量"),
+        ("unsafeWindow", .partial, "只申请无特权 @grant（none / unsafeWindow / GM_info / GM_addStyle / GM_addElement / GM_log）的脚本运行在页面环境，unsafeWindow 是真正的页面 window；同时申请特权 GM API 的脚本出于安全运行在隔离环境，unsafeWindow 等同隔离环境的 window（共享 DOM，看不到页面 JS 全局变量）"),
+        ("@inject-into page + 特权 GM API", .partial, "页面环境中不提供原生 GM 桥（网页脚本可伪造其中的任何调用），这些 API 调用时明确报错；需要特权 API 时请改用 @inject-into content / auto"),
         ("window.onurlchange", .partial, "通过 history API 钩子实现"),
         ("window.close / window.focus", .supported, ""),
         ("GM_cookie", .unsupported, "调用时返回 Unsupported API 错误"),

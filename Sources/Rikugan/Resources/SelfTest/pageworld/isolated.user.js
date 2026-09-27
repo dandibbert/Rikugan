@@ -14,6 +14,11 @@
   window.isolatedLeak = 'leak';
   GM_setValue('iso', 1);
   r.setAttribute('data-iso-gm', GM_getValue('iso') === 1 ? 'ok' : 'fail');
+  if (window.top === window) {
+    const runs = GM_getValue('runs', 0) + 1;
+    GM_setValue('runs', runs);
+    r.setAttribute('data-iso-runs', String(runs));
+  }
   // The DOM is shared, so DOM events still cross worlds.
   document.addEventListener('rk-page-event', function (e) { r.setAttribute('data-iso-event', String(e.detail)); });
 })();

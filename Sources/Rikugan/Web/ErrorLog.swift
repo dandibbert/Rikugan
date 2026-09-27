@@ -26,3 +26,26 @@ import Foundation
         return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1/…")
     }
 }
+
+/// Privileged calls that were rejected (wrong content world, missing @grant, foreign extension
+/// identity, port not owned by the caller …). Evidence for the adversarial self-tests and the
+/// Diagnostics export; contains no page content.
+@MainActor final class SecurityLog: ObservableObject {
+    struct Entry: Identifiable, Codable {
+        var id = UUID()
+        let date: Date
+        let message: String
+    }
+
+    static let shared = SecurityLog()
+    @Published private(set) var entries: [Entry] = []
+    private(set) var totalRejected = 0
+
+    func record(_ message: String) {
+        totalRejected += 1
+        entries.append(Entry(date: Date(), message: ErrorLog.scrub(String(message.prefix(300)))))
+        if entries.count > 200 { entries.removeFirst(entries.count - 200) }
+    }
+
+    func clear() { entries.removeAll(); totalRejected = 0 }
+}

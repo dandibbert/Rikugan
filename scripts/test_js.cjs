@@ -48,7 +48,7 @@ function makeEnv(bridge, extra = {}) {
 function runUserscript(body, config, bridge) {
   const { window, appended } = makeEnv(bridge);
   const cfg = Object.assign({
-    id: 'script-1', token: 'tok123', handler: 'rikugan', name: 'Test', grants: ['GM_getValue', 'GM_setValue', 'GM_xmlhttpRequest'],
+    id: 'script-1', handler: 'rikugan', name: 'Test', grants: ['GM_getValue', 'GM_setValue', 'GM_xmlhttpRequest'],
     values: { counter: '41' }, resources: { txt: { mime: 'text/plain', data: Buffer.from('hello resource').toString('base64') } },
     runAt: 'document-start', frameMode: 'main', include: [], exclude: [], meta: { name: 'Test', version: '1' }, metaStr: '', appVersion: '1.0',
     world: 'content', incognito: false,
@@ -89,7 +89,8 @@ test('GM values: preloaded, set, delete, list, listeners', async () => {
   assert.deepStrictEqual(r.slice(8), ['object', 'Rikugan', 'Test']);
   const set = calls.find((c) => c.op === 'setValue' && c.args.key === 'counter');
   assert.strictEqual(set.args.value, '42');
-  assert.strictEqual(set.token, 'tok123');
+  // No credential travels with bridge messages: authentication is the isolated content world.
+  assert.ok(calls.every((c) => !('token' in c)), 'no token field in any bridge message');
   assert.ok(calls.some((c) => c.op === 'deleteValue' && c.args.key === 'obj'));
 });
 
@@ -100,9 +101,40 @@ test('GM remote value change and menu commands dispatch', async () => {
     GM_addValueChangeListener('k', (key, o, n, remote) => window.hits.push([n, remote]));
     GM_registerMenuCommand('Do it', () => window.hits.push('menu'));
   `, {}, bridge);
-  window['__rikuganGM_tok123']({ type: 'valueChanged', key: 'k', value: '"v"' });
-  window['__rikuganGM_tok123']({ type: 'menu', id: '1' });
+  window['__rikuganGM_script1']({ type: 'valueChanged', key: 'k', value: '"v"' });
+  window['__rikuganGM_script1']({ type: 'menu', id: '1' });
   assert.deepStrictEqual(JSON.parse(JSON.stringify(window.hits)), [['v', true], 'menu']);
+});
+
+test('page-world scripts get no bridge, no credential, no stored values; privileged GM throws', async () => {
+  const calls = [];
+  const bridge = async (msg) => { calls.push(msg); return null; };
+  const { window } = runUserscript(`
+    window.out = {};
+    const tryIt = (name, f) => { try { f(); window.out[name] = 'allowed'; } catch (e) { window.out[name] = /page-world/.test(e.message) ? 'denied' : 'other:' + e.message; } };
+    tryIt('GM_getValue', () => GM_getValue('counter'));
+    tryIt('GM_setValue', () => GM_setValue('x', 1));
+    tryIt('GM_xmlhttpRequest', () => GM_xmlhttpRequest({ url: '/x' }));
+    tryIt('GM_openInTab', () => GM_openInTab('https://evil.example/'));
+    tryIt('GM_registerMenuCommand', () => GM_registerMenuCommand('m', () => {}));
+    tryIt('GM_setClipboard', () => GM_setClipboard('x'));
+    tryIt('GM.xmlHttpRequest', () => GM.xmlHttpRequest({ url: '/x' }));
+    window.out.info = GM_info.script.name;
+    window.out.style = GM_addStyle('a{}') ? 'ok' : 'no';
+    window.out.unsafe = unsafeWindow === window;
+    window.gmValue = GM.getValue('counter').then(() => 'allowed', (e) => /page-world/.test(e.message) ? 'denied' : 'other');
+  `, { world: 'page', handler: '', values: {}, grants: ['GM_getValue', 'GM_setValue', 'GM_xmlhttpRequest', 'GM_openInTab'] }, bridge);
+  await new Promise((r) => setTimeout(r, 10));
+  const o = JSON.parse(JSON.stringify(window.out));
+  for (const k of ['GM_getValue', 'GM_setValue', 'GM_xmlhttpRequest', 'GM_openInTab', 'GM_registerMenuCommand', 'GM_setClipboard', 'GM.xmlHttpRequest']) {
+    assert.strictEqual(o[k], 'denied', k);
+  }
+  assert.strictEqual(await window.gmValue, 'denied');
+  assert.deepStrictEqual([o.info, o.style, o.unsafe], ['Test', 'ok', true]);
+  assert.strictEqual(calls.length, 0, 'page-world runtime must not post anything to the native bridge');
+  // Nothing privileged is published on the page's window.
+  const leaked = Object.getOwnPropertyNames(window).filter((k) => /__rikuganGM|token/i.test(k));
+  assert.deepStrictEqual(leaked, []);
 });
 
 test('GM_xmlhttpRequest: callbacks, json response, headers', async () => {

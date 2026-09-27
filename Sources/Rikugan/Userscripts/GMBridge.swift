@@ -13,25 +13,35 @@ import UserNotifications
 
     func handle(_ body: [String: Any], message: WKScriptMessage, worldName: String) async throws -> Any? {
         guard let sidText = body["sid"] as? String, let sid = UUID(uuidString: sidText), let script = store.script(sid) else {
+            SecurityLog.shared.record("GM call rejected: unknown userscript id from world '\(worldName)'")
             throw RikuganError("Unknown userscript")
         }
-        // Authenticate: isolated scripts must come from their own world; page-world scripts need the token.
-        let expectedWorld = script.usesPageWorld ? "" : Worlds.userscript(sid).name ?? ""
-        if script.usesPageWorld {
-            guard body["token"] as? String == store.token(for: sid) else { throw RikuganError("GM bridge authentication failed") }
-        } else {
-            guard worldName == expectedWorld else { throw RikuganError("GM bridge world mismatch") }
+        // Authenticate by content world only. WebKit reports the world a message came from; page
+        // JavaScript (world "") and other scripts' worlds cannot produce "us-<this script's id>".
+        // Page-world scripts never get the bridge, so there is no page-world credential to steal.
+        guard !script.usesPageWorld, let expectedWorld = Worlds.userscript(sid).name, worldName == expectedWorld else {
+            SecurityLog.shared.record("GM call rejected: world '\(worldName)' for script \(script.name)")
+            throw RikuganError("GM bridge world mismatch")
         }
+        guard script.enabled else { throw RikuganError("Userscript is disabled") }
         let op = body["op"] as? String ?? ""
         let args = body["args"] as? [String: Any] ?? [:]
         let tab = message.tab
         let pageURL = message.frameInfo.request.url ?? tab?.webView?.url
-        func requireGrant(_ names: String...) throws {
+        func requireGrant(_ names: String...) throws { try requireGrant(names) }
+        func requireGrant(_ names: [String]) throws {
             let grants = Set(script.metadata.grants)
             guard names.contains(where: grants.contains) else {
+                SecurityLog.shared.record("GM op '\(op)' rejected for \(script.name): missing @grant \(names.first ?? "")")
                 throw RikuganError("Missing @grant \(names.first ?? "")")
             }
         }
+        let storageRead = ["GM_getValue", "GM.getValue", "GM_listValues", "GM.listValues", "GM_getValues", "GM.getValues",
+                           "GM_addValueChangeListener", "GM.addValueChangeListener", "GM_setValue", "GM.setValue",
+                           "GM_deleteValue", "GM.deleteValue", "GM_setValues", "GM.setValues", "GM_deleteValues", "GM.deleteValues"]
+        let storageWrite = ["GM_setValue", "GM.setValue", "GM_deleteValue", "GM.deleteValue", "GM_setValues", "GM.setValues",
+                            "GM_deleteValues", "GM.deleteValues"]
+        let tabGrants = ["GM_getTab", "GM.getTab", "GM_saveTab", "GM.saveTab", "GM_getTabs", "GM.getTabs"]
 
         switch op {
         case "injected":
@@ -41,14 +51,17 @@ import UserNotifications
             tab?.appendConsole(level: "error", text: "[\(script.name)] " + (args["message"] as? String ?? ""))
             return nil
         case "getAll":
+            try requireGrant(storageRead)
             return store.values(for: sid)
         case "setValue":
+            try requireGrant(storageWrite)
             guard let key = args["key"] as? String else { return nil }
             let value = args["value"] as? String
             store.setValue(value, key: key, for: sid)
             broadcastValueChange(script: script, key: key, value: value, except: message.webView)
             return nil
         case "deleteValue":
+            try requireGrant(storageWrite)
             guard let key = args["key"] as? String else { return nil }
             store.setValue(nil, key: key, for: sid)
             broadcastValueChange(script: script, key: key, value: nil, except: message.webView)
@@ -73,6 +86,7 @@ import UserNotifications
             }
             return nil
         case "focusTab":
+            try requireGrant(["window.focus"])
             if let tab { tab.manager?.select(tab) }
             return nil
         case "notification":
@@ -103,6 +117,7 @@ import UserNotifications
             AppServices.shared.downloads.download(url: url, suggestedName: name, from: tab, headers: args["headers"] as? [String: String] ?? [:])
             return ["url": raw]
         case "menuRegister":
+            try requireGrant(["GM_registerMenuCommand", "GM.registerMenuCommand"])
             guard let tab, message.frameInfo.isMainFrame else { return nil }
             let id = args["id"] as? String ?? UUID().uuidString
             let command = ScriptMenuCommand(scriptID: sid, commandID: id, scriptName: script.name, title: args["name"] as? String ?? id)
@@ -114,13 +129,16 @@ import UserNotifications
             tab?.menuCommands.removeAll { $0.scriptID == sid && $0.commandID == id }
             return nil
         case "getTab":
+            try requireGrant(tabGrants)
             guard let tab else { return [:] }
             return tabValues[tab.numericID]?[sid] ?? [:]
         case "saveTab":
+            try requireGrant(tabGrants)
             guard let tab else { return nil }
             tabValues[tab.numericID, default: [:]][sid] = args["value"] ?? [:]
             return nil
         case "getTabs":
+            try requireGrant(tabGrants)
             var result: [String: Any] = [:]
             for (tabID, entries) in tabValues { if let v = entries[sid] { result[String(tabID)] = v } }
             return result
@@ -128,7 +146,7 @@ import UserNotifications
             try requireGrant("GM_xmlhttpRequest", "GM.xmlHttpRequest", "GM.xmlhttpRequest")
             return try await performXHR(args, script: script, pageURL: pageURL, isPrivate: tab?.isPrivate ?? false, profile: tab?.profile)
         case "xhrAbort":
-            if let id = args["id"] as? String { xhrTasks.removeValue(forKey: id)?.cancel() }
+            if let id = args["id"] as? String { xhrTasks.removeValue(forKey: sid.uuidString + "|" + id)?.cancel() }
             return nil
         default:
             throw RikuganError("Unsupported API: GM op \(op)")
@@ -136,10 +154,11 @@ import UserNotifications
     }
 
     private func broadcastValueChange(script: InstalledUserScript, key: String, value: String?, except origin: WKWebView?) {
-        let fn = "__rikuganGM_" + store.token(for: script.id)
+        guard !script.usesPageWorld else { return }
+        let fn = UserScriptStore.dispatchFunctionName(script.id)
         let payload = JSONText.encode(["type": "valueChanged", "key": key, "value": value.map { $0 as Any } ?? NSNull()])
         let js = "window[\(fn.jsLiteral)] && window[\(fn.jsLiteral)](\(payload))"
-        let world = script.usesPageWorld ? WKContentWorld.page : Worlds.userscript(script.id)
+        let world = Worlds.userscript(script.id)
         for tab in TabRegistry.shared.allTabs {
             guard let webView = tab.webView, webView !== origin, tab.injectedScripts.contains(script.id) else { continue }
             webView.rkEval(js, world: world)
@@ -172,7 +191,8 @@ import UserNotifications
         guard connectAllowed(url, script: script, pageURL: pageURL) else {
             return ["error": "Blocked by @connect: \(url.host ?? raw) is not declared in the script metadata"]
         }
-        let id = args["id"] as? String ?? UUID().uuidString
+        // Task keys are namespaced by script so one script cannot abort another's request.
+        let id = script.id.uuidString + "|" + (args["id"] as? String ?? UUID().uuidString)
         var request = URLRequest(url: url)
         request.httpMethod = (args["method"] as? String ?? "GET").uppercased()
         let timeout = args["timeout"] as? Double ?? 0

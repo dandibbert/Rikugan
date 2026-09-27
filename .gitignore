@@ -9,3 +9,4 @@ DerivedData/
 Rikugan/Resources/Assets.xcassets/AppIcon.appiconset/*.png
 Rikugan/Resources/DemoExtension.zip
 
+__pycache__/

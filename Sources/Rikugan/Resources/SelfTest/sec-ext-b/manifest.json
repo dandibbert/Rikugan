@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Rikugan Security Attacker B",
+  "version": "1.0.0",
+  "description": "Attacker extension for the security suite: tries to act as extension A from its own content world.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "bg.js" },
+  "content_scripts": [{ "matches": ["http://127.0.0.1/sec/*"], "js": ["cs.js"], "run_at": "document_end" }]
+}

@@ -10,7 +10,7 @@ import WebKit
 @MainActor final class SelfTestRunner: ObservableObject {
     static let shared = SelfTestRunner()
     struct Result: Identifiable { let id = UUID(); let name: String; let passed: Bool; let detail: String }
-    static let suites = ["core", "pageworld", "fonts", "dnr", "lifecycle", "stress", "archive", "compat"]
+    static let suites = ["core", "pageworld", "security", "fonts", "dnr", "lifecycle", "stress", "archive", "compat"]
 
     @Published private(set) var results: [Result] = []
     @Published private(set) var running = false
@@ -18,6 +18,10 @@ import WebKit
     @Published var suite = "core"
     static var autoRun = false
     static var launchSuite = "core"
+    /// Per-invocation nonce from the test runner (`-RikuganRunID`); echoed in the summary and the
+    /// JSON report so a stale or foreign result can never be mistaken for this run's result.
+    static var runID = "manual-" + UUID().uuidString
+    static let processLaunchedAt = Date()
 
     static func configureFromLaunchArguments() {
         let args = ProcessInfo.processInfo.arguments
@@ -26,6 +30,7 @@ import WebKit
             autoRun = true
         }
         if args.contains("-RikuganSelfTest") { autoRun = true }
+        if let index = args.firstIndex(of: "-RikuganRunID"), index + 1 < args.count { runID = args[index + 1] }
         if autoRun {
             // Deterministic environment for UI tests.
             AppServices.shared.prefs.restoreTabs = false
@@ -41,6 +46,10 @@ import WebKit
         summary = nil
         defer { running = false }
         let name = suite
+        // Remove any previous report for this suite first: a crash before the first write must
+        // leave no report at all rather than an older (possibly passing) one.
+        let reports = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("SelfTestReports", isDirectory: true)
+        try? FileManager.default.removeItem(at: reports.appendingPathComponent("\(name).json"))
         guard let root = Bundle.main.url(forResource: "SelfTest", withExtension: nil) else {
             results = [Result(name: "fixtures", passed: false, detail: "SelfTest resources missing")]
             finish(nil); return
@@ -55,6 +64,7 @@ import WebKit
         switch name {
         case "core": await CoreSuite.run(ctx)
         case "pageworld": await PageWorldSuite.run(ctx)
+        case "security": await SecuritySuite.run(ctx)
         case "fonts": await FontSuite.run(ctx)
         case "dnr": await DNRSuite.run(ctx)
         case "lifecycle": await LifecycleSuite.run(ctx)
@@ -71,7 +81,7 @@ import WebKit
     private func finish(_ ctx: SelfTestContext?) {
         let passed = results.filter(\.passed).count
         let failures = results.filter { !$0.passed }.map { "\($0.name)（\($0.detail)）" }.joined(separator: "；")
-        summary = "SELFTEST \(suite) \(passed == results.count && !results.isEmpty ? "PASS" : "FAIL") \(passed)/\(results.count)" + (failures.isEmpty ? "" : " — " + failures)
+        summary = "SELFTEST \(suite) \(passed == results.count && !results.isEmpty ? "PASS" : "FAIL") \(passed)/\(results.count) run=\(Self.runID)" + (failures.isEmpty ? "" : " — " + failures)
         for result in results where !result.passed { print("SELFTEST FAILED: \(result.name) – \(result.detail)") }
         print(summary ?? "")
         ctx?.writeReport(summary: summary ?? "")

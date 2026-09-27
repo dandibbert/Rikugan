@@ -17,11 +17,17 @@
   if (window[registryKey]) return; // already injected in this world/frame
   Object.defineProperty(window, registryKey, { value: true, enumerable: false });
 
-  const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers[__RK.handler];
+  // Security boundary: the native GM bridge is only used from the script's own isolated
+  // WKContentWorld, where page JavaScript cannot see or call it. A page-world script is plain page
+  // JavaScript — it gets no bridge, no credentials and no stored values; privileged GM APIs throw.
+  const privileged = __RK.world !== 'page';
+  const handler = privileged && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers[__RK.handler];
   const postRaw = handler ? handler.postMessage.bind(handler) : null;
+  const pageWorldError = (name) => new Error('Rikugan: ' + name + ' is not available to page-world userscripts (the page could forge any privileged call made from there). Use @inject-into content or remove @inject-into page.');
   const post = (op, args) => {
+    if (!privileged) return Promise.reject(pageWorldError('GM ' + op));
     if (!postRaw) return Promise.reject(new Error('Rikugan bridge unavailable'));
-    return postRaw({ ch: 'gm', sid: __RK.id, token: __RK.token, op, args: args === undefined ? null : args });
+    return postRaw({ ch: 'gm', sid: __RK.id, op, args: args === undefined ? null : args });
   };
   const logPrefix = '[' + __RK.name + ']';
   const unsupported = (name) => function () {
@@ -345,8 +351,8 @@
   const closeWindow = () => post('closeTab', null);
   const focusWindow = () => post('focusTab', null);
 
-  // ---- Native → script dispatch ------------------------------------------------------------
-  Object.defineProperty(window, '__rikuganGM_' + __RK.token, {
+  // ---- Native → script dispatch (isolated world only; the world itself is the boundary) ------
+  if (privileged) Object.defineProperty(window, '__rikuganGM_' + __RK.id.replace(/-/g, ''), {
     enumerable: false,
     value: (event) => {
       if (!event) return;
@@ -409,11 +415,48 @@
   const GM_audio = { setMute: unsupported('GM_audio.setMute'), getState: unsupported('GM_audio.getState') };
   const unsafeWindow = window;
 
+  // Page-world scripts see explicit stubs for every privileged API (shadowing the implementations
+  // above). The body sits in its own inner function so it may still declare its own polyfills.
+  const denied = (name) => function () { throw pageWorldError(name); };
+  const pageGM = Object.freeze({
+    info: GM_info, log: GM_log,
+    addStyle: async (css) => GM_addStyle(css), addElement: async (...a) => GM_addElement(...a),
+    getResourceText: async (n) => GM_getResourceText(n), getResourceUrl: async (n) => GM_getResourceURL(n),
+    getValue: () => Promise.reject(pageWorldError('GM.getValue')), setValue: () => Promise.reject(pageWorldError('GM.setValue')),
+    deleteValue: () => Promise.reject(pageWorldError('GM.deleteValue')), listValues: () => Promise.reject(pageWorldError('GM.listValues')),
+    getValues: () => Promise.reject(pageWorldError('GM.getValues')), setValues: () => Promise.reject(pageWorldError('GM.setValues')),
+    deleteValues: () => Promise.reject(pageWorldError('GM.deleteValues')),
+    xmlHttpRequest: denied('GM.xmlHttpRequest'), xmlhttpRequest: denied('GM.xmlhttpRequest'),
+    setClipboard: () => Promise.reject(pageWorldError('GM.setClipboard')), openInTab: denied('GM.openInTab'),
+    notification: () => Promise.reject(pageWorldError('GM.notification')), download: () => Promise.reject(pageWorldError('GM.download')),
+    registerMenuCommand: () => Promise.reject(pageWorldError('GM.registerMenuCommand')),
+    unregisterMenuCommand: () => Promise.reject(pageWorldError('GM.unregisterMenuCommand')),
+    getTab: () => Promise.reject(pageWorldError('GM.getTab')), saveTab: () => Promise.reject(pageWorldError('GM.saveTab')),
+    getTabs: () => Promise.reject(pageWorldError('GM.getTabs')),
+    addValueChangeListener: () => Promise.reject(pageWorldError('GM.addValueChangeListener')),
+    removeValueChangeListener: () => Promise.reject(pageWorldError('GM.removeValueChangeListener')),
+  });
+  const scope = privileged ? [
+    GM_getValue, GM_setValue, GM_deleteValue, GM_listValues, GM_getValues, GM_setValues, GM_deleteValues,
+    GM_addValueChangeListener, GM_removeValueChangeListener, GM_setClipboard, GM_openInTab, GM_notification, GM_download,
+    GM_getTab, GM_saveTab, GM_getTabs, GM_registerMenuCommand, GM_unregisterMenuCommand, GM_xmlhttpRequest, GM,
+  ] : [
+    denied('GM_getValue'), denied('GM_setValue'), denied('GM_deleteValue'), denied('GM_listValues'), denied('GM_getValues'),
+    denied('GM_setValues'), denied('GM_deleteValues'), denied('GM_addValueChangeListener'), denied('GM_removeValueChangeListener'),
+    denied('GM_setClipboard'), denied('GM_openInTab'), denied('GM_notification'), denied('GM_download'),
+    denied('GM_getTab'), denied('GM_saveTab'), denied('GM_getTabs'), denied('GM_registerMenuCommand'),
+    denied('GM_unregisterMenuCommand'), denied('GM_xmlhttpRequest'), pageGM,
+  ];
+
   const __rk_run = function () {
     try {
-      (function () {
+      (function (GM_getValue, GM_setValue, GM_deleteValue, GM_listValues, GM_getValues, GM_setValues, GM_deleteValues,
+                 GM_addValueChangeListener, GM_removeValueChangeListener, GM_setClipboard, GM_openInTab, GM_notification, GM_download,
+                 GM_getTab, GM_saveTab, GM_getTabs, GM_registerMenuCommand, GM_unregisterMenuCommand, GM_xmlhttpRequest, GM) {
+        return (function () {
         /*__RK_BODY__*/
-      }).call(window);
+        }).call(this);
+      }).apply(window, scope);
     } catch (e) {
       console.error(logPrefix, e);
       post('error', { message: String(e && e.message || e), stack: String(e && e.stack || '') }).catch(() => {});
@@ -436,7 +479,7 @@
         else setTimeout(__rk_run, 0);
     }
   };
-  post('injected', { url: location.href, top: isTop }).catch(() => {});
+  if (privileged) post('injected', { url: location.href, top: isTop }).catch(() => {});
   start();
   void grantAll; void GM_cookie; void GM_webRequest; void GM_audio; void unsafeWindow; void closeWindow; void focusWindow;
 })();

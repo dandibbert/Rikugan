@@ -23,6 +23,8 @@ import UserNotifications
     }
 
     struct PortState {
+        /// The ID the extension's JS chose (used in events delivered back to JS).
+        let id: String
         let extID: String
         var opener: Endpoint
         var receivers: [Endpoint]
@@ -65,15 +67,24 @@ import UserNotifications
 
     private func handleCall(_ body: [String: Any], message: WKScriptMessage, worldName: String) async throws -> Any? {
         guard let extID = body["ext"] as? String, let ext = runtime.loaded[extID], ext.record.enabled else {
+            SecurityLog.shared.record("chrome call rejected: unknown or disabled extension id from world '\(worldName)'")
             throw RikuganError("Extension is not enabled")
         }
         let ctx = body["ctx"] as? String ?? "content"
         // Validate the caller: content scripts must come from the extension's world; extension pages from its origin.
         if ctx == "content" {
-            guard worldName == Worlds.extensionWorld(extID).name else { throw RikuganError("Extension bridge world mismatch") }
+            // The content world is set by WebKit: page JS ("") or another extension's world cannot claim it.
+            guard worldName == Worlds.extensionWorld(extID).name else {
+                SecurityLog.shared.record("chrome call rejected: world '\(worldName)' claimed content script of \(ext.displayName)")
+                throw RikuganError("Extension bridge world mismatch")
+            }
         } else {
+            // Extension pages: the frame's security origin (set by WebKit) must be chrome-extension://<extID>.
             guard message.world == .page, message.frameInfo.securityOrigin.protocol == runtime.scheme,
-                  message.frameInfo.securityOrigin.host == extID else { throw RikuganError("Extension page origin mismatch") }
+                  message.frameInfo.securityOrigin.host == extID else {
+                SecurityLog.shared.record("chrome call rejected: origin \(message.frameInfo.securityOrigin.protocol)://\(message.frameInfo.securityOrigin.host) claimed \(ctx) of \(ext.displayName)")
+                throw RikuganError("Extension page origin mismatch")
+            }
         }
         let caller = Caller(ext: ext, ctx: ctx, message: message)
         let api = body["api"] as? String ?? ""
@@ -118,10 +129,10 @@ import UserNotifications
             try await connect(ext, args: argsDict, caller: caller)
             return nil
         case "port.post":
-            postToPort(argsDict["portId"] as? String ?? "", message: argsDict["message"] ?? NSNull(), caller: caller)
+            try postToPort(argsDict["portId"] as? String ?? "", message: argsDict["message"] ?? NSNull(), caller: caller)
             return nil
         case "port.disconnect":
-            disconnectPort(argsDict["portId"] as? String ?? "", caller: caller)
+            try disconnectPort(argsDict["portId"] as? String ?? "", caller: caller)
             return nil
         case "runtime.openOptionsPage":
             runtime.openOptions(ext, from: TabRegistry.shared.focusedWindow?.activeTab)
@@ -627,11 +638,18 @@ import UserNotifications
     }
 
     private func connect(_ ext: LoadedExtension, args: [String: Any], caller: Caller) async throws {
-        guard let portID = args["portId"] as? String else { return }
+        guard let portID = args["portId"] as? String, !portID.isEmpty else { return }
+        // Port IDs are chosen by extension JS: keep them per extension and never let a new connect
+        // replace a live port (that would hijack it).
+        let key = Self.portKey(ext.id, portID)
+        guard ports[key] == nil else {
+            SecurityLog.shared.record("runtime.connect rejected: port id already in use (\(ext.displayName))")
+            throw RikuganError("Port id already in use")
+        }
         let name = args["name"] as? String ?? ""
         let senderInfo = sender(for: caller)
         let opener = caller.endpoint
-        ports[portID] = PortState(extID: ext.id, opener: opener, receivers: [])
+        ports[key] = PortState(id: portID, extID: ext.id, opener: opener, receivers: [])
         var receivers: [Endpoint] = []
         let open = "return globalThis.__rikuganChrome ? globalThis.__rikuganChrome.openPort(id, n, s) : false;"
         if args["target"] as? String == "tab", let tabID = args["tabId"] as? Int, let tab = TabRegistry.shared.tab(tabID), let webView = tab.webView {
@@ -652,8 +670,8 @@ import UserNotifications
                 }
             }
         }
-        guard !receivers.isEmpty, var state = ports[portID] else {
-            ports.removeValue(forKey: portID)
+        guard !receivers.isEmpty, var state = ports[key] else {
+            ports.removeValue(forKey: key)
             deliverPortEvent(opener, portID: portID, type: "disconnect", message: nil)
             return
         }
@@ -661,29 +679,45 @@ import UserNotifications
         state.connected = true
         let queued = state.pending
         state.pending = []
-        ports[portID] = state
+        ports[key] = state
         for message in queued {
             for target in receivers { deliverPortEvent(target, portID: portID, type: "message", message: message) }
         }
     }
 
-    private func postToPort(_ portID: String, message: Any, caller: Caller) {
-        guard var state = ports[portID] else { return }
-        let key = caller.endpoint.key
-        if state.opener.key == key && !state.connected {
-            state.pending.append(message)
-            ports[portID] = state
-            return
+    static func portKey(_ extID: String, _ portID: String) -> String { extID + "|" + portID }
+
+    /// Only an endpoint of the port (its opener or a receiver) may use it, and only within its own
+    /// extension (the key is namespaced by the caller's verified extension ID).
+    private func ownedPort(_ portID: String, caller: Caller, action: String) throws -> (String, PortState)? {
+        let key = Self.portKey(caller.ext.id, portID)
+        guard let state = ports[key] else { return nil }
+        let endpoint = caller.endpoint.key
+        guard state.opener.key == endpoint || state.receivers.contains(where: { $0.key == endpoint }) else {
+            SecurityLog.shared.record("\(action) rejected: caller is not an endpoint of the port (\(caller.ext.displayName))")
+            throw RikuganError("Port is not owned by this context")
         }
-        let targets = state.opener.key == key ? state.receivers : [state.opener]
-        for target in targets { deliverPortEvent(target, portID: portID, type: "message", message: message) }
+        return (key, state)
     }
 
-    private func disconnectPort(_ portID: String, caller: Caller) {
-        guard let state = ports.removeValue(forKey: portID) else { return }
-        let key = caller.endpoint.key
-        let targets = state.opener.key == key ? state.receivers : [state.opener]
-        for target in targets { deliverPortEvent(target, portID: portID, type: "disconnect", message: nil) }
+    private func postToPort(_ portID: String, message: Any, caller: Caller) throws {
+        guard let (key, found) = try ownedPort(portID, caller: caller, action: "port.post") else { return }
+        var state = found
+        let endpoint = caller.endpoint.key
+        if state.opener.key == endpoint && !state.connected {
+            state.pending.append(message)
+            ports[key] = state
+            return
+        }
+        let targets = state.opener.key == endpoint ? state.receivers : [state.opener]
+        for target in targets { deliverPortEvent(target, portID: state.id, type: "message", message: message) }
+    }
+
+    private func disconnectPort(_ portID: String, caller: Caller) throws {
+        guard let (key, state) = try ownedPort(portID, caller: caller, action: "port.disconnect") else { return }
+        ports.removeValue(forKey: key)
+        let targets = state.opener.key == caller.endpoint.key ? state.receivers : [state.opener]
+        for target in targets { deliverPortEvent(target, portID: state.id, type: "disconnect", message: nil) }
     }
 
     func hasOpenPorts(extID: String) -> Bool { ports.values.contains { $0.extID == extID && $0.connected } }
@@ -694,21 +728,21 @@ import UserNotifications
     func endpointsGone(tabID: Int) { endpointsGone { $0.tabID == tabID } }
 
     private func endpointsGone(where gone: (Endpoint) -> Bool) {
-        for (portID, state) in ports {
+        for (key, state) in ports {
             if gone(state.opener) {
-                ports.removeValue(forKey: portID)
-                for r in state.receivers where !gone(r) { deliverPortEvent(r, portID: portID, type: "disconnect", message: nil) }
+                ports.removeValue(forKey: key)
+                for r in state.receivers where !gone(r) { deliverPortEvent(r, portID: state.id, type: "disconnect", message: nil) }
                 continue
             }
             let remaining = state.receivers.filter { !gone($0) }
             if remaining.count != state.receivers.count {
                 if remaining.isEmpty {
-                    ports.removeValue(forKey: portID)
-                    deliverPortEvent(state.opener, portID: portID, type: "disconnect", message: nil)
+                    ports.removeValue(forKey: key)
+                    deliverPortEvent(state.opener, portID: state.id, type: "disconnect", message: nil)
                 } else {
                     var copy = state
                     copy.receivers = remaining
-                    ports[portID] = copy
+                    ports[key] = copy
                 }
             }
         }

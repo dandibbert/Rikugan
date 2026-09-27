@@ -141,7 +141,11 @@ struct UserscriptDetailView: View {
                     LabeledContent("版本", value: script.metadata.version)
                     if !script.metadata.author.isEmpty { LabeledContent("作者", value: script.metadata.author) }
                     LabeledContent("运行时机", value: script.metadata.runAt.rawValue)
-                    LabeledContent("运行环境", value: script.usesPageWorld ? "页面环境（unsafeWindow 可用）" : "隔离环境")
+                    LabeledContent("运行环境", value: script.usesPageWorld ? "页面环境（真正的 unsafeWindow，无特权 GM API）" : "隔离环境（特权 GM API；unsafeWindow 看不到页面 JS 全局变量）")
+                    if !script.metadata.unavailableInPageWorld.isEmpty {
+                        Text("此脚本以 @inject-into page 运行在页面环境，以下 API 出于安全不可用（网页可伪造页面环境中的任何调用）：" + script.metadata.unavailableInPageWorld.joined(separator: "、"))
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     LabeledContent("上次更新", value: script.updatedAt.formatted(date: .abbreviated, time: .shortened))
                     if let checked = script.lastUpdateCheck { LabeledContent("上次检查", value: checked.formatted(date: .abbreviated, time: .shortened)) }
                 }

@@ -171,20 +171,30 @@ final class MetadataParserTests: XCTestCase {
         let m = MetadataParser.parse(src).metadata
         XCTAssertTrue(m.grantsNone)
         XCTAssertTrue(m.runsInPageWorld)
+        // unsafeWindow alone needs no bridge → real page world.
+        let unsafeOnly = "// ==UserScript==\n// @name x\n// @match *://*/*\n// @grant unsafeWindow\n// @grant GM_addStyle\n// ==/UserScript==\n"
+        XCTAssertTrue(MetadataParser.parse(unsafeOnly).metadata.runsInPageWorld)
+        // unsafeWindow + a privileged grant → isolated (the bridge must never be reachable from the page).
         let unsafe = "// ==UserScript==\n// @name x\n// @match *://*/*\n// @grant unsafeWindow\n// @grant GM_setValue\n// ==/UserScript==\n"
-        XCTAssertTrue(MetadataParser.parse(unsafe).metadata.runsInPageWorld)
+        XCTAssertFalse(MetadataParser.parse(unsafe).metadata.runsInPageWorld)
     }
 
-    func testWorldSelectionUsesSource() {
+    func testPrivilegedScriptsNeverRunInPageWorld() {
         let granted = "// ==UserScript==\n// @name x\n// @match *://*/*\n// @grant GM_setValue\n// ==/UserScript==\n"
         let m = MetadataParser.parse(granted).metadata
+        XCTAssertTrue(m.needsPrivilegedBridge)
         XCTAssertFalse(m.runsInPageWorld(source: granted + "GM_setValue('a', 1)"))
-        XCTAssertTrue(m.runsInPageWorld(source: granted + "unsafeWindow.foo = 1"))
-        XCTAssertFalse(m.runsInPageWorld(source: granted + "const notunsafeWindowx = 1"))
+        // Referencing unsafeWindow in the body no longer moves a privileged script into the page world.
+        XCTAssertFalse(m.runsInPageWorld(source: granted + "unsafeWindow.foo = 1"))
         let content = granted.replacingOccurrences(of: "// ==/UserScript==", with: "// @inject-into content\n// ==/UserScript==")
         XCTAssertFalse(MetadataParser.parse(content).metadata.runsInPageWorld(source: content + "unsafeWindow.x"))
+        // Explicit @inject-into page runs as page JS, and its privileged grants are reported unavailable.
         let page = granted.replacingOccurrences(of: "// ==/UserScript==", with: "// @inject-into page\n// ==/UserScript==")
-        XCTAssertTrue(MetadataParser.parse(page).metadata.runsInPageWorld(source: page))
+        let pm = MetadataParser.parse(page).metadata
+        XCTAssertTrue(pm.runsInPageWorld(source: page))
+        XCTAssertEqual(pm.unavailableInPageWorld, ["GM_setValue"])
+        let none = "// ==UserScript==\n// @name x\n// @match *://*/*\n// @grant none\n// ==/UserScript==\n"
+        XCTAssertEqual(MetadataParser.parse(none).metadata.unavailableInPageWorld, [])
     }
 
     func testErrorsReported() {

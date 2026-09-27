@@ -103,6 +103,7 @@ final class LocalHTTPServer: @unchecked Sendable {
     let server: LocalHTTPServer
     let base: String
     private(set) var results: [SelfTestRunner.Result] = []
+    let startedAt = Date()
     /// Extra structured data written to the suite's JSON report (e.g. the compatibility matrix).
     var extras: [String: Any] = [:]
     var services: AppServices { AppServices.shared }
@@ -222,10 +223,24 @@ final class LocalHTTPServer: @unchecked Sendable {
 
     /// Writes `Documents/SelfTestReports/<suite>.json` (collected by CI with `simctl get_app_container`).
     func writeReport(summary: String) {
+        let finished = !summary.contains("IN PROGRESS")
+        let failures = results.filter { !$0.passed }.count
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let report: [String: Any] = [
+            // Integrity fields verified by CI (scripts/verify_selftest_result.py).
+            "runID": SelfTestRunner.runID,
+            "suiteName": suite,
+            "processID": Int(ProcessInfo.processInfo.processIdentifier),
+            "processLaunchedAt": iso.string(from: SelfTestRunner.processLaunchedAt),
+            "startedAt": iso.string(from: startedAt),
+            "finishedAt": finished ? iso.string(from: Date()) : NSNull(),
+            "result": finished ? (failures == 0 && !results.isEmpty ? "PASS" : "FAIL") : "IN PROGRESS",
+            "assertionCount": results.count,
+            "failureCount": failures,
             "suite": suite,
             "summary": summary,
-            "date": ISO8601DateFormatter().string(from: Date()),
+            "date": iso.string(from: Date()),
             "build": Bundle.main.infoDictionary?["RikuganGitCommit"] as? String ?? "unknown",
             "environment": {
                 #if targetEnvironment(simulator)

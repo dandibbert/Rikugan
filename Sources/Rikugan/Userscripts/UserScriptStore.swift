@@ -42,7 +42,6 @@ struct BuiltUserScript {
     let directory: URL
     private let indexFile: JSONFile<[InstalledUserScript]>
     private var values: [UUID: [String: String]] = [:]
-    private var tokens: [UUID: String] = [:]
     private(set) lazy var gm = GMBridge(store: self)
     /// Scripts whose main-frame injection ran per tab (for the manager / menu).
     private var sourceCache: [String: String] = [:]
@@ -55,13 +54,9 @@ struct BuiltUserScript {
 
     func script(_ id: UUID) -> InstalledUserScript? { scripts.first { $0.id == id } }
 
-    /// Random per-launch token authenticating GM bridge calls from the page world.
-    func token(for id: UUID) -> String {
-        if let token = tokens[id] { return token }
-        let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        tokens[id] = token
-        return token
-    }
+    /// Name of the native → script dispatch function. It lives only in the script's own isolated
+    /// world (page-world scripts get none), so it needs no secret.
+    static func dispatchFunctionName(_ id: UUID) -> String { "__rikuganGM_" + id.uuidString.replacingOccurrences(of: "-", with: "") }
 
     // MARK: Values (independent storage namespace per script – never page localStorage)
 
@@ -191,8 +186,10 @@ struct BuiltUserScript {
             "connects": meta.connects, "requires": meta.requires, "noframes": meta.noframes,
         ]
         let config: [String: Any] = [
-            "id": script.id.uuidString, "token": token(for: script.id), "handler": Worlds.messageHandlerName,
-            "name": meta.name, "grants": meta.grants, "values": values(for: script.id), "resources": resources,
+            // Page-world scripts are plain page JavaScript: no bridge handler name and no stored
+            // values are embedded in their source (the page could read either).
+            "id": script.id.uuidString, "handler": script.usesPageWorld ? "" : Worlds.messageHandlerName,
+            "name": meta.name, "grants": meta.grants, "values": script.usesPageWorld ? [String: String]() : values(for: script.id), "resources": resources,
             "runAt": meta.runAt.rawValue, "frameMode": frameMode,
             "include": rx(meta.includeRules()), "exclude": rx(meta.excludeRules()),
             "meta": metaDict, "metaStr": metadataBlock(script.source), "appVersion": AppServices.shared.appVersion,

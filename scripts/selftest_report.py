@@ -35,6 +35,14 @@ def render(report):
             if ext.get("runtimeErrors"):
                 out.append(f"- runtime errors: {esc(' | '.join(ext['runtimeErrors']))}")
             out.append("</details>\n")
+    for rnd in extras.get("rounds", []) if isinstance(extras.get("rounds"), list) else []:
+        if rnd.get("failures"):
+            out.append(f"**Round {rnd.get('round', 0) + 1} failures (full):**")
+            out += [f"- {esc(f)}" for f in rnd["failures"]]
+            out.append("")
+    if report.get("runID"):
+        out.append(f"runID `{report.get('runID')}` · started {report.get('startedAt')} · finished {report.get('finishedAt')} · result {report.get('result')}")
+        out.append("")
     failed = [r for r in report.get("results", []) if not r["passed"]]
     passed = len(report.get("results", [])) - len(failed)
     out.append(f"{passed} passed, {len(failed)} failed")

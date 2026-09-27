@@ -27,7 +27,10 @@ final class BrowserUITests: XCTestCase {
 
     private func runSuite(_ suite: String, timeout: TimeInterval, requirePass: Bool = true, extra: [String] = []) {
         let app = XCUIApplication()
-        app.launchArguments = ["-RikuganSuite", suite] + extra
+        // Per-invocation nonce: CI passes it (TEST_RUNNER_RIKUGAN_RUN_ID) and later verifies the
+        // app's JSON report carries it; locally a fresh one is generated.
+        let runID = ProcessInfo.processInfo.environment["RIKUGAN_RUN_ID"].flatMap { $0.isEmpty ? nil : $0 } ?? "local-" + UUID().uuidString
+        app.launchArguments = ["-RikuganSuite", suite, "-RikuganRunID", runID] + extra
         app.launch()
         let summary = app.staticTexts["selftest-summary"]
         let deadline = Date().addingTimeInterval(timeout)
@@ -44,14 +47,18 @@ final class BrowserUITests: XCTestCase {
         attachment.name = "selftest-\(suite)"
         attachment.lifetime = .keepAlways
         add(attachment)
-        print("SELFTEST SUMMARY: \(summary.label)")
+        let label = summary.label
+        print("SELFTEST SUMMARY: \(label)")
+        // The summary must belong to this invocation (never a stale result).
+        XCTAssertTrue(label.contains("SELFTEST \(suite) ") && label.contains("run=\(runID)"), "summary is not from this run: \(label)")
         if requirePass {
-            XCTAssertTrue(summary.label.contains(" PASS "), summary.label)
+            XCTAssertTrue(label.contains(" PASS "), label)
         }
     }
 
     func testSelfTestSuitePasses() throws { runSuite("core", timeout: 240) }
     func testPageWorldSuite() throws { runSuite("pageworld", timeout: 180) }
+    func testSecuritySuite() throws { runSuite("security", timeout: 240) }
     func testFontSuite() throws { runSuite("fonts", timeout: 240) }
     func testDNRSuite() throws { runSuite("dnr", timeout: 180) }
     func testTabLifecycleSuite() throws { runSuite("lifecycle", timeout: 600) }

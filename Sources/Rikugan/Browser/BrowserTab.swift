@@ -399,9 +399,9 @@ enum TranslationState: Equatable {
     // MARK: Userscript / tools helpers
 
     func runMenuCommand(_ command: ScriptMenuCommand) {
-        guard let webView, let script = profile.userscripts.script(command.scriptID) else { return }
-        let world = script.usesPageWorld ? WKContentWorld.page : Worlds.userscript(script.id)
-        let fn = "__rikuganGM_" + profile.userscripts.token(for: script.id)
+        guard let webView, let script = profile.userscripts.script(command.scriptID), !script.usesPageWorld else { return }
+        let world = Worlds.userscript(script.id)
+        let fn = UserScriptStore.dispatchFunctionName(script.id)
         webView.rkEval("window[\(fn.jsLiteral)] && window[\(fn.jsLiteral)]({type:'menu', id:\(command.commandID.jsLiteral)})", world: world)
     }
 
