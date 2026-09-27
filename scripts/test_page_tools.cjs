@@ -52,4 +52,30 @@ sandbox.Event = class Event { constructor(type) { this.type = type; } };
 const fill = sandbox.RikuganPageTools.fill({username:'user',password:'pass',name:'Name',email:'mail@example.com',phone:'123',address:'Road',cardNumber:'4111',cardName:'Card Name'});
 assert.deepEqual(JSON.parse(JSON.stringify(fill)), {username:true,password:true,name:true,email:true,phone:true,address:true,cardNumber:true,cardName:true});
 assert.deepEqual(Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value])), {username:'user',password:'pass',name:'Name',email:'mail@example.com',phone:'123',address:'Road',cardNumber:'4111',cardName:'Card Name'});
-console.log('PASS: page tools selector, appearance no-ops, media collector and password/identity/payment autofill mapping');
+
+const sent = [];
+const underlying = element('div', {id: 'ad-slot'}); underlying.style = {outline: ''};
+const made = [];
+function domElement(tag) {
+  const listeners = {};
+  const value = element(tag); value.style = {}; value.dataset = {}; value.listeners = listeners; value.removed = false;
+  value.addEventListener = (name, handler) => { listeners[name] = handler; };
+  value.appendChild = child => { value.children.push(child); child.parentElement = value; };
+  value.append = (...children) => children.forEach(value.appendChild);
+  value.remove = () => { value.removed = true; };
+  made.push(value); return value;
+}
+const pickerBody = domElement('body');
+sandbox.document = {
+  body: pickerBody,
+  createElement: domElement,
+  getElementById() { return null; },
+  elementFromPoint() { return underlying; }
+};
+sandbox.webkit = {messageHandlers: {rikuganPage: {postMessage(message) { sent.push(message); }}}};
+assert.equal(sandbox.RikuganPageTools.startPicker(), true);
+const veil = made.find(item => item.id === 'rikugan-picker');
+assert.ok(veil);
+veil.listeners.click({clientX: 12, clientY: 20, preventDefault() {}});
+assert.deepEqual(JSON.parse(JSON.stringify(sent)), [{action:'picker', selector:'#ad-slot', label:'div'}]);
+console.log('PASS: page tools selector, touch-safe direct-click element picker, media collector and password/identity/payment autofill mapping');

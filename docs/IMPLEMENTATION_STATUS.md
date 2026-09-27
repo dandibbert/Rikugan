@@ -23,6 +23,10 @@ GM XHR 新增原生 URLSessionDataTask 取消、总超时、下载进度与 read
 
 Autofill 的密码、身份、支付条目继续只存 Keychain（WhenUnlockedThisDeviceOnly），写入改为 update-or-insert，避免“先删除旧项再添加失败”导致丢数据；条目有数量/体积限制及网站匹配保护。身份实际填充 name/email/tel/address，支付实际填充 cc-name/cc-number，仍只在用户点按后执行且不自动提交；支付 CVV/完整自动支付流程不存储、不承诺。
 
+Element Picker 修正 iPhone 触摸选择：不再依赖 mousemove，pointer/touch start/move 和直接 click 都会根据实际坐标命中元素，双击可取消；确认后仍生成站点限定 cosmetic rule 并立即应用。
+
+图片保存改用当前 WKWebsiteDataStore 的 Cookie 进行用户主动资源获取，逐跳重建目标 Cookie header，支持登录态图片且避免把旧站凭证带到重定向域；单图 25 MB 上限。相册保存改走 Photos add-only 权限和 PHPhotoLibrary 完成回调，权限拒绝或系统保存失败不再误报“已保存”。
+
 ## 0.3.0 已交付
 
 | 规格/缺口 | 实现 | 验证入口 |

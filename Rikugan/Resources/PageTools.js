@@ -164,10 +164,21 @@
     const tip = doc.createElement('div');
     tip.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px 14px;border-radius:12px;font:14px system-ui';
     tip.textContent = '点选要隐藏的元素';
+    const cancel = doc.createElement('button');
+    cancel.type = 'button'; cancel.textContent = '取消';
+    cancel.style.cssText = 'float:right;border:0;border-radius:8px;padding:4px 10px;background:#333;color:#fff;font:inherit';
+    tip.appendChild(cancel);
     let current = null;
+    const point = event => {
+      const touch = event.touches && event.touches[0] || event.changedTouches && event.changedTouches[0];
+      const value = touch || event;
+      return Number.isFinite(value.clientX) && Number.isFinite(value.clientY) ? value : null;
+    };
     const highlight = event => {
+      const location = point(event);
+      if (!location) return;
       veil.style.pointerEvents = 'none';
-      const target = doc.elementFromPoint(event.clientX, event.clientY);
+      const target = doc.elementFromPoint(location.clientX, location.clientY);
       veil.style.pointerEvents = 'auto';
       if (!target || target === veil || target === tip) return;
       if (current) current.style.outline = current.__rgOutline || '';
@@ -175,9 +186,14 @@
       current.__rgOutline = target.style.outline;
       target.style.outline = '2px solid #ff5a36';
     };
-    veil.addEventListener('mousemove', highlight);
-    veil.addEventListener('touchmove', highlight);
+    veil.addEventListener('pointermove', highlight);
+    veil.addEventListener('pointerdown', highlight);
+    veil.addEventListener('touchstart', highlight, {passive: true});
+    veil.addEventListener('touchmove', highlight, {passive: true});
+    let finished = false;
     const finish = event => {
+      if (finished) return;
+      finished = true;
       if (event) event.preventDefault();
       const chosen = current;
       veil.remove(); tip.remove();
@@ -185,7 +201,12 @@
       if (!chosen || !root.webkit || !webkit.messageHandlers || !webkit.messageHandlers.rikuganPage) return;
       webkit.messageHandlers.rikuganPage.postMessage({ action: 'picker', selector: selector(chosen), label: chosen.tagName.toLowerCase() });
     };
-    veil.addEventListener('click', finish);
+    veil.addEventListener('click', event => { highlight(event); finish(event); });
+    cancel.addEventListener('click', event => {
+      finished = true; event.preventDefault(); event.stopPropagation();
+      if (current) current.style.outline = current.__rgOutline || '';
+      veil.remove(); tip.remove();
+    });
     doc.body.append(veil, tip);
     return true;
   }

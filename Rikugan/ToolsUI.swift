@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import UIKit
 import PhotosUI
+import Photos
 import AVFoundation
 import Vision
 import CoreImage
@@ -125,27 +126,46 @@ struct ImageSheet: View {
         }
     }
     private func save(_ links: [String]) async {
-        var images: [UIImage] = []
+        guard let webView = tab.existingWebView else { model.message = "页面已经被系统回收，请重新打开后保存图片。"; return }
+        let userAgent = await PageTools.call("navigator.userAgent", in: webView) as? String
+        var images: [UIImage] = [], fetchFailures = 0
         for link in links {
-            guard let url = URL(string: link), let (data, _) = try? await URLSession.shared.data(from: url), let image = UIImage(data: data) else { continue }
-            images.append(image)
+            guard let url = URL(string: link) else { fetchFailures += 1; continue }
+            do {
+                let (data, _) = try await WebsiteResourceFetcher.data(from: url, store: webView.configuration.websiteDataStore,
+                    referer: webView.url, userAgent: userAgent)
+                guard let image = UIImage(data: data) else { fetchFailures += 1; continue }
+                images.append(image)
+            } catch { fetchFailures += 1 }
         }
-        let saver = PhotoSaver()
-        for image in images { await saver.write(image) }
-        model.message = images.isEmpty ? "没有保存任何图片。" : "已保存 \(images.count) 张图片。"
+        guard !images.isEmpty else { model.message = "没有取得可保存的图片。失败 \(fetchFailures) 张。"; return }
+        let authorization = await PhotoSaver.authorization()
+        guard authorization == .authorized || authorization == .limited else {
+            model.message = "没有照片添加权限。可在系统设置中允许 Rikugan 添加照片。"; return
+        }
+        var saved = 0, photoFailures = 0
+        for image in images {
+            do { try await PhotoSaver.write(image); saved += 1 }
+            catch { photoFailures += 1 }
+        }
+        let failed = fetchFailures + photoFailures
+        model.message = saved == 0 ? "没有保存任何图片。失败 \(failed) 张。" : "已保存 \(saved) 张" + (failed > 0 ? "，失败 \(failed) 张。" : "图片。")
     }
 }
 
-@MainActor final class PhotoSaver: NSObject {
-    private var continuation: CheckedContinuation<Void, Never>?
-    func write(_ image: UIImage) async {
+enum PhotoSaver {
+    static func authorization() async -> PHAuthorizationStatus {
         await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            UIImageWriteToSavedPhotosAlbum(image, self, #selector(image(_:didFinishSavingWithError:contextInfo:)), nil)
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { continuation.resume(returning: $0) }
         }
     }
-    @objc func image(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeMutableRawPointer?) {
-        continuation?.resume(); continuation = nil
+    static func write(_ image: UIImage) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.creationRequestForAsset(from: image) }) { success, error in
+                if success { continuation.resume() }
+                else { continuation.resume(throwing: error ?? RikuganError.message("系统没有保存这张图片。")) }
+            }
+        }
     }
 }
 

@@ -32,6 +32,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path == "/__private-image.png":
+            if "download-auth=yes" not in self.headers.get("Cookie", ""):
+                return self.send_error(403, "Missing browser login cookie")
+            data = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
         if path == "/__echo":
             return self.echo()
         if path == "/__redirect":
