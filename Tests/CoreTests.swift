@@ -114,7 +114,9 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "debugger" }?.level, "Unsupported")
         XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "nativeMessaging" }?.level, "Unsupported")
         XCTAssertEqual(ChromeAPIMatrix.additions(old: ["storage"], new: ["tabs", "storage"]), ["tabs"])
-        XCTAssertEqual(ExtensionCatalog.storeID(from: "abcdefghijklmnopabcdefghijklmnop"), "abcdefghijklmnop")
+        XCTAssertEqual(ExtensionCatalog.storeID(from: "abcdefghijklmnopabcdefghijklmnop"), "abcdefghijklmnopabcdefghijklmnop")
+        XCTAssertNil(ExtensionCatalog.storeID(from: "abcdefghijklmnop"))
+        XCTAssertNil(ExtensionCatalog.storeID(from: "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"))
     }
     func testVersionsOmniboxAndMigration() throws {
         XCTAssertTrue(VersionComparator.isNewer("1.2.0", than: "1.1.9"))
