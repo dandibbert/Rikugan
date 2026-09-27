@@ -9,9 +9,12 @@ settings:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
     TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.2.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
     GENERATE_INFOPLIST_FILE: NO
 targets:
   Rikugan:
@@ -19,7 +22,7 @@ targets:
     platform: iOS
     sources:
       - path: Rikugan
-        excludes: [Resources, Info.plist]
+        excludes: [Resources, Info.plist, Rikugan.entitlements]
       - path: Rikugan/Resources
         buildPhase: resources
     settings:
@@ -28,9 +31,28 @@ targets:
         INFOPLIST_FILE: Rikugan/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SUPPORTS_MACCATALYST: NO
+        CODE_SIGN_ENTITLEMENTS: Rikugan/Rikugan.entitlements
     dependencies:
+      - target: RikuganShare
+        embed: true
+        codeSign: false
+        link: false
       - sdk: WebKit.framework
       - sdk: JavaScriptCore.framework
+  RikuganShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+        excludes: [Info.plist, RikuganShare.entitlements]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan.Share
+        INFOPLIST_FILE: ShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ShareExtension/RikuganShare.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
   RikuganTests:
     type: bundle.unit-test
     platform: iOS
@@ -54,6 +76,7 @@ schemes:
     build:
       targets:
         Rikugan: all
+        RikuganShare: all
     test:
       debugEnabled: false
       targets: [RikuganTests, RikuganUITests]

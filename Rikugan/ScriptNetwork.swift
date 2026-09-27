@@ -38,6 +38,20 @@ final class ScriptNetwork: NSObject, URLSessionDataDelegate {
         }
         return text
     }
+    static func download(_ url: URL, limit: Int = 1_000_000) async throws -> (Data, String) {
+        let result: [String: Any] = try await withCheckedThrowingContinuation { continuation in
+            fetch(URLRequest(url: url), limit: limit, permits: { ["https", "http"].contains($0.scheme) && $0.user == nil && $0.password == nil }) {
+                continuation.resume(with: $0)
+            }
+        }
+        guard let code = result["status"] as? Int, (200..<300).contains(code),
+              let encoded = result["responseBase64"] as? String, let data = Data(base64Encoded: encoded) else {
+            throw RikuganError.message("资源下载失败（HTTP \(result["status"] ?? "?")）。")
+        }
+        let headers = (result["responseHeaders"] as? String ?? "").lowercased()
+        let mime = headers.split(separator: "\r\n").first { $0.hasPrefix("content-type:") }?.dropFirst(13).split(separator: ";").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? "application/octet-stream"
+        return (data, mime)
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let url = request.url, permits(url) else {

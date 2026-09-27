@@ -29,18 +29,20 @@ struct ScriptCommand: Identifiable {
                 handlers.append((name, world)); scripts[name] = script
             }
             let storage = (script.storageJSON.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) ?? [:]
+            let resources = Dictionary(uniqueKeysWithValues: script.resources.map { ($0.name, ["text": $0.text, "url": $0.dataURL]) })
             let configuration: [String: Any] = [
-                "id": script.id.uuidString, "name": script.name, "version": script.version,
-                "handler": name, "matches": script.matches, "includes": script.includes,
+                "id": script.id.uuidString, "name": script.name, "namespace": script.namespace, "author": script.author,
+                "version": script.version, "handler": name, "matches": script.matches, "includes": script.includes,
                 "excludes": script.excludes, "excludeMatches": script.excludeMatches,
-                "grants": script.grants, "runAt": script.runAt, "storage": storage
+                "grants": script.grants, "runAt": script.runAt, "storage": storage, "resources": resources, "isolated": script.isolated
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys]),
                   let json = String(data: data, encoding: .utf8) else { continue }
             let source = Self.template
                 .replacingOccurrences(of: "/*__CONFIG__*/", with: json)
                 .replacingOccurrences(of: "/*__SOURCE__*/", with: script.dependencies.joined(separator: "\n;\n") + "\n;\n" + script.source)
-            let userScript = WKUserScript(source: source, injectionTime: script.runAt == "document-start" ? .atDocumentStart : .atDocumentEnd,
+            let early = script.runAt == "document-start" || script.runAt == "document-body"
+            let userScript = WKUserScript(source: source, injectionTime: early ? .atDocumentStart : .atDocumentEnd,
                                           forMainFrameOnly: script.noFrames, in: world)
             controller.addUserScript(userScript)
         }
@@ -94,6 +96,11 @@ struct ScriptCommand: Identifiable {
         case "unregisterMenuCommand":
             session.commands.removeAll { $0.id == args["id"] as? String && $0.scriptID == script.id && $0.tabID == tab.id }
             replyHandler(true, nil)
+        case "getResourceText", "getResourceURL":
+            guard let name = args["name"] as? String, let resource = script.resources.first(where: { $0.name == name }) else {
+                replyHandler(nil, "找不到 @resource \(args["name"] as? String ?? "")。"); return
+            }
+            replyHandler(operation == "getResourceURL" ? resource.dataURL : resource.text, nil)
         case "xmlHttpRequest":
             guard let raw = args["url"] as? String, let url = URL(string: raw, relativeTo: origin)?.absoluteURL else { replyHandler(nil, "无效的请求 URL。"); return }
             var request = URLRequest(url: url)

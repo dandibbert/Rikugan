@@ -6,6 +6,8 @@ import WebKit
     let profileID: UUID
     let relativePath: String
     let webExtension: WKWebExtension
+    var updateURL = ""
+    var storeID = ""
     var name: String { webExtension.displayName ?? "未命名扩展" }
     var permissions: [String] { webExtension.requestedPermissions.map(\.rawValue).sorted() }
     var patterns: [String] { webExtension.allRequestedMatchPatterns.map(\.string).sorted() }
@@ -18,14 +20,27 @@ extension BrowserSession {
         let id = UUID()
         let values = try input.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
         guard values.isSymbolicLink != true else { throw RikuganError.message("扩展来源不能是符号链接。") }
+        guard values.isDirectory == true || (values.fileSize ?? Int.max) <= 32 * 1024 * 1024 else {
+            throw RikuganError.message("扩展安装包不能超过 32 MB。")
+        }
+        var source = input
+        var temporary: URL?
+        defer { if let temporary { try? FileManager.default.removeItem(at: temporary) } }
+        if input.pathExtension.lowercased() == "crx" {
+            let zip = try CRXArchive.zipData(from: Data(contentsOf: input))
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent(id.uuidString + ".zip")
+            try zip.write(to: temp)
+            source = temp
+            temporary = temp
+        }
         let directory = values.isDirectory == true
         let relative = "Extensions/" + id.uuidString + (directory ? "" : ".zip")
         let destination = model.directory(profileID).appendingPathComponent(relative)
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         if directory {
-            guard FileManager.default.fileExists(atPath: input.appendingPathComponent("manifest.json").path) else { throw RikuganError.message("所选文件夹的根目录缺少 manifest.json。") }
+            guard FileManager.default.fileExists(atPath: source.appendingPathComponent("manifest.json").path) else { throw RikuganError.message("所选文件夹的根目录缺少 manifest.json。") }
             let keys: [URLResourceKey] = [.isSymbolicLinkKey, .fileSizeKey]
-            guard let enumerator = FileManager.default.enumerator(at: input, includingPropertiesForKeys: keys) else { throw RikuganError.message("不能读取扩展文件夹。") }
+            guard let enumerator = FileManager.default.enumerator(at: source, includingPropertiesForKeys: keys) else { throw RikuganError.message("不能读取扩展文件夹。") }
             var count = 0, size = 0
             while let file = enumerator.nextObject() as? URL {
                 let info = try file.resourceValues(forKeys: Set(keys)); count += 1; size += info.fileSize ?? 0
@@ -33,14 +48,26 @@ extension BrowserSession {
             }
         } else {
             guard (values.fileSize ?? Int.max) <= 32 * 1024 * 1024 else { throw RikuganError.message("扩展 ZIP 不能超过 32 MB。") }
-            try ArchiveValidator.validate(Data(contentsOf: input))
+            try ArchiveValidator.validate(Data(contentsOf: source))
         }
-        try FileManager.default.copyItem(at: input, to: destination)
+        try FileManager.default.copyItem(at: source, to: destination)
         do {
+            let manifest = Self.manifestData(at: destination, directory: directory)
+            var parsed: ParsedManifest?
+            if let manifest {
+                parsed = try ExtensionManifest.parse(manifest)
+            }
             let webExtension = try await WKWebExtension(resourceBaseURL: destination)
             guard isActive else { throw RikuganError.message("导入期间切换了身份，请在目标身份重新导入。") }
-            return PreparedExtension(id: id, profileID: profileID, relativePath: relative, webExtension: webExtension)
+            var prepared = PreparedExtension(id: id, profileID: profileID, relativePath: relative, webExtension: webExtension)
+            prepared.updateURL = parsed?.updateURL ?? ""
+            return prepared
         } catch { try? FileManager.default.removeItem(at: destination); throw error }
+    }
+    private static func manifestData(at url: URL, directory: Bool) -> Data? {
+        if directory { return try? Data(contentsOf: url.appendingPathComponent("manifest.json")) }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return ZipArchive.extract(data: data, path: "manifest.json")
     }
     func discardExtension(_ prepared: PreparedExtension) {
         guard let model else { return }
@@ -48,9 +75,11 @@ extension BrowserSession {
     }
     func installExtension(_ prepared: PreparedExtension) async throws {
         guard prepared.profileID == profileID, isActive else { throw RikuganError.message("身份已切换，请重新导入扩展。") }
-        let record = ExtensionRecord(id: prepared.id, name: prepared.name, version: prepared.webExtension.version ?? "1.0",
+        var record = ExtensionRecord(id: prepared.id, name: prepared.name, version: prepared.webExtension.version ?? "1.0",
                                      detail: prepared.webExtension.displayDescription ?? "", relativePath: prepared.relativePath,
                                      allowedPermissions: prepared.permissions, allowedPatterns: prepared.patterns, requestedPatterns: prepared.patterns)
+        record.updateURL = prepared.updateURL
+        record.storeID = prepared.storeID
         try await activateExtension(prepared.webExtension, record: record)
         model?.updateProfile(profileID) { $0.extensions.append(record) }
     }
@@ -135,6 +164,72 @@ extension BrowserSession {
         context.userGesturePerformed(in: tab)
         context.performAction(for: tab)
     }
+    func installFromStore(_ input: String) async {
+        guard let id = ExtensionCatalog.storeID(from: input) else { model?.message = "没有识别到 32 位扩展 ID。"; return }
+        let edge = input.contains("edge.microsoft")
+        guard let url = edge ? ExtensionCatalog.edgeDownloadURL(id: id) : ExtensionCatalog.chromeDownloadURL(id: id) else { return }
+        model?.working = true
+        defer { model?.working = false }
+        do {
+            var request = URLRequest(url: url)
+            request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count > 16 else {
+                throw RikuganError.message("商店没有返回安装包（HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)）。")
+            }
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent(id + ".crx")
+            try data.write(to: temp)
+            var prepared = try await prepareExtension(temp)
+            prepared.storeID = id
+            model?.preparedExtension = prepared
+        } catch { model?.message = error.localizedDescription }
+    }
+    func updateExtension(_ record: ExtensionRecord) async {
+        let address = record.updateURL.isEmpty ? (record.storeID.isEmpty ? "" : (ExtensionCatalog.chromeDownloadURL(id: record.storeID)?.absoluteString ?? "")) : record.updateURL
+        guard let url = URL(string: address), url.scheme == "https" else { model?.message = "这个扩展没有 HTTPS 更新地址。"; return }
+        model?.working = true
+        defer { model?.working = false }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw RikuganError.message("更新下载失败。") }
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent(record.id.uuidString + ".crx")
+            try data.write(to: temp)
+            let prepared = try await prepareExtension(temp)
+            let version = prepared.webExtension.version ?? record.version
+            guard VersionComparator.isNewer(version, than: record.version) else { model?.message = "已是最新版本 \(record.version)。"; discardExtension(prepared); return }
+            let added = ChromeAPIMatrix.additions(old: record.allowedPermissions + record.requestedPatterns, new: prepared.permissions + prepared.patterns)
+            let install = { [weak self] () async in
+                guard let self else { return }
+                var updated = record
+                updated.version = version
+                updated.relativePath = prepared.relativePath
+                updated.allowedPermissions = prepared.permissions
+                updated.allowedPatterns = prepared.patterns
+                updated.requestedPatterns = prepared.patterns
+                do {
+                    try await self.activateExtension(prepared.webExtension, record: updated)
+                    self.model?.updateProfile(self.profileID) { profile in
+                        if let index = profile.extensions.firstIndex(where: { $0.id == record.id }) { profile.extensions[index] = updated }
+                    }
+                    self.discardInstalledFiles(record)
+                } catch {
+                    self.discardExtension(prepared)
+                    await self.loadExtension(record)
+                    self.model?.message = "扩展更新失败，保留原版本：\(error.localizedDescription)"
+                }
+            }
+            if added.isEmpty { await install() }
+            else {
+                BrowserPresentation.confirm(title: "更新需要新权限", message: added.map(ChromeAPIMatrix.describe).joined(separator: "\n")) { allowed in
+                    if allowed { Task { await install() } } else { self.discardExtension(prepared) }
+                }
+            }
+        } catch { model?.message = error.localizedDescription }
+    }
+    private func discardInstalledFiles(_ record: ExtensionRecord) {
+        guard let model else { return }
+        try? FileManager.default.removeItem(at: model.directory(profileID).appendingPathComponent(record.relativePath))
+    }
     func openOptions(_ id: UUID) {
         guard let context = contexts[id], let url = context.optionsPageURL else { model?.message = "这个扩展没有选项页面。"; return }
         addTab(url: url, configuration: context.webViewConfiguration)
@@ -152,7 +247,7 @@ extension BrowserSession {
 extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow {
     func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] { tabs }
     func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { activeTab }
-    func isPrivate(for context: WKWebExtensionContext) -> Bool { false }
+    func isPrivate(for context: WKWebExtensionContext) -> Bool { activeTab?.isPrivate == true }
     func frame(for context: WKWebExtensionContext) -> CGRect { BrowserPresentation.presenter?.view.bounds ?? .zero }
     func screenFrame(for context: WKWebExtensionContext) -> CGRect { UIScreen.main.bounds }
     func webExtensionController(_ controller: WKWebExtensionController, openWindowsFor context: WKWebExtensionContext) -> [any WKWebExtensionWindow] { [self] }

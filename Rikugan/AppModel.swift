@@ -10,6 +10,8 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
     @Published var scriptDraft: ScriptDraft?
     @Published var preparedExtension: PreparedExtension?
     @Published var working = false
+    @Published var pendingShare: (action: String, value: String)?
+    let downloadCenter = DownloadCenter()
     let root: URL
     let isTesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
     var profile: BrowserProfile { state.profiles.first { $0.id == state.activeProfileID } ?? state.profiles[0] }
@@ -23,8 +25,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: file.path) {
-                initial = try JSONDecoder().decode(AppState.self, from: Data(contentsOf: file))
-                guard initial.schema == 1, !initial.profiles.isEmpty else { throw RikuganError.message("不支持的资料格式") }
+                initial = try StateMigration.decode(Data(contentsOf: file))
             }
         } catch {
             if FileManager.default.fileExists(atPath: file.path) {
@@ -36,6 +37,8 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         }
         state = initial
         message = warning
+        downloadCenter.activate(self)
+        registerFonts()
     }
 
     func start() {
@@ -80,6 +83,38 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         }
     }
     func directory(_ id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
+    func handleIncomingURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "rikugan" else { handleFile(url); return }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let action = items.first { $0.name == "action" }?.value ?? (url.host == "search" ? "search" : "open")
+        if url.host == "pending" || items.first(where: { $0.name == "action" }) == nil && url.host == "pending" {
+            consumeShareFile(); return
+        }
+        if let value = items.first(where: { $0.name == "url" })?.value ?? items.first(where: { $0.name == "text" })?.value {
+            pendingShare = (action, value); applyPendingShare(); return
+        }
+        consumeShareFile()
+    }
+    func consumeShareFile() {
+        guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppGroupID.suite) else { return }
+        let file = container.appendingPathComponent("share-inbox.json")
+        guard let data = try? Data(contentsOf: file),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return }
+        try? FileManager.default.removeItem(at: file)
+        let action = json["action"] ?? "open"
+        let value = json["url"] ?? json["text"] ?? ""
+        guard !value.isEmpty else { return }
+        pendingShare = (action, value)
+        applyPendingShare()
+    }
+    func applyPendingShare() {
+        guard let pending = pendingShare, let session else { return }
+        pendingShare = nil
+        if pending.action == "search" { session.activeTab?.loadInput(pending.value) }
+        else if let url = URL(string: pending.value) ?? URLRules.inputURL(pending.value, searchEngine: profile.searchEngine) {
+            if session.activeTab?.isHome == true { session.activeTab?.navigate(url) } else { session.addTab(url: url) }
+        }
+    }
     func handleFile(_ url: URL) {
         Task {
             working = true; defer { working = false }
@@ -87,8 +122,11 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             do {
                 let values = try url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
-                if url.pathExtension.lowercased() == "zip" || values.isDirectory == true {
+                let ext = url.pathExtension.lowercased()
+                if ext == "zip" || ext == "crx" || values.isDirectory == true {
                     preparedExtension = try await session?.prepareExtension(url)
+                } else if ["ttf", "otf", "ttc", "woff", "woff2"].contains(ext) {
+                    try importFont(url)
                 } else {
                     guard (values.fileSize ?? 0) <= 2_000_000 else { throw RikuganError.message("脚本不得超过 2 MB。") }
                     let text = try String(contentsOf: url, encoding: .utf8)
@@ -120,6 +158,14 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
             script.dependencies.append(try await ScriptNetwork.downloadText(url))
         }
         try UserScriptSyntax.validate(script.dependencies.joined(separator: "\n;\n") + "\n;\n" + script.source)
+        for index in script.resources.indices {
+            guard let url = URL(string: script.resources[index].url) else { throw RikuganError.message("@resource 地址无效。") }
+            guard url.scheme?.lowercased() == "https" || (isTesting && url.scheme == "http") else { throw RikuganError.message("@resource 只接受 HTTPS 地址。") }
+            let (data, mime) = try await ScriptNetwork.download(url, limit: 1_000_000)
+            script.resources[index].dataBase64 = data.base64EncodedString()
+            script.resources[index].mime = mime
+        }
+        script.updatedAt = Date()
         updateProfile(profileID) { profile in
             if let i = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[i] = script }
             else { profile.scripts.append(script) }
@@ -142,6 +188,80 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
             message = "自检组件已安装。打开 example.com 测试页，可看到扩展和用户脚本的运行结果。"
         } catch { message = error.localizedDescription }
     }
+    func checkScriptUpdate(_ script: UserScript) async -> String? {
+        let address = script.updateURL.isEmpty ? script.downloadURL : script.updateURL
+        guard let url = URL(string: address), url.scheme == "https" else { message = "这个脚本没有 HTTPS 更新地址。"; return nil }
+        do {
+            let text = try await ScriptNetwork.downloadText(url)
+            let remote = try UserScript.parse(text)
+            guard VersionComparator.isNewer(remote.version, than: script.version) else { message = "已是最新版本 \(script.version)。"; return nil }
+            message = "发现 \(remote.version)，请确认后保存。"
+            return text
+        } catch { message = error.localizedDescription; return nil }
+    }
+    func exportBackup() throws -> URL {
+        let backup = PortableBackup(tabs: profile.tabs, tabGroups: profile.tabGroups, selectedTabID: profile.selectedTabID,
+                                    bookmarks: profile.bookmarks, bookmarkFolders: profile.bookmarkFolders, settings: profile.settings,
+                                    siteSettings: profile.siteSettings, searchEngine: profile.searchEngine, searchHistory: profile.searchHistory)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Rikugan-backup.json")
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(backup).write(to: url, options: .atomic)
+        return url
+    }
+    func importBackup(_ data: Data) throws {
+        let backup = try JSONDecoder().decode(PortableBackup.self, from: data)
+        guard backup.version <= 2 else { throw RikuganError.message("这份备份来自更新的 Rikugan，当前版本不能导入。") }
+        updateProfile(state.activeProfileID) { profile in
+            profile.tabs = backup.tabs.filter { !$0.isPrivate }
+            profile.tabGroups = backup.tabGroups
+            profile.selectedTabID = backup.selectedTabID
+            profile.bookmarks = backup.bookmarks
+            profile.bookmarkFolders = backup.bookmarkFolders
+            profile.settings = backup.settings
+            profile.siteSettings = backup.siteSettings
+            profile.searchEngine = backup.searchEngine
+            profile.searchHistory = backup.searchHistory
+        }
+        message = "已导入标签页、分组和自定义设置。扩展二进制和钥匙串没有包含在备份里。"
+        activate(state.activeProfileID)
+    }
+    func registerFonts() {
+        for font in profile.settings.importedFonts {
+            let url = directory(profile.id).appendingPathComponent("Fonts").appendingPathComponent(font.fileName)
+            if FileManager.default.fileExists(atPath: url.path) { try? FontLibrary.register(url) }
+        }
+    }
+    func importFont(_ url: URL) throws {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 2_500_000 else { throw RikuganError.message("字体文件不能超过 2.5 MB。") }
+        let folder = directory(profile.id).appendingPathComponent("Fonts", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let fileName = UUID().uuidString + "." + (url.pathExtension.isEmpty ? "ttf" : url.pathExtension)
+        let destination = folder.appendingPathComponent(fileName)
+        try data.write(to: destination, options: .atomic)
+        let family = try FontLibrary.register(destination)
+        updateProfile(profile.id) { $0.settings.importedFonts.append(ImportedFont(family: family, fileName: fileName)); $0.settings.webFontFamily = family }
+        session?.refreshScripts()
+    }
+    func importWallpaper(_ url: URL) throws {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        let data = try Data(contentsOf: url)
+        guard (1...8_000_000).contains(data.count) else { throw RikuganError.message("壁纸图片需要小于 8 MB。") }
+        let ext = url.pathExtension.lowercased()
+        let fileName = "wallpaper." + (["jpg", "jpeg", "png", "heic", "webp"].contains(ext) ? ext : "img")
+        let folder = directory(profile.id)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try data.write(to: folder.appendingPathComponent(fileName), options: .atomic)
+        updateProfile(profile.id) { $0.settings.wallpaperFile = fileName }
+    }
+    func clearWallpaper() {
+        let name = profile.settings.wallpaperFile
+        updateProfile(profile.id) { $0.settings.wallpaperFile = "" }
+        if !name.isEmpty { try? FileManager.default.removeItem(at: directory(profile.id).appendingPathComponent(name)) }
+    }
 }
 
 @main struct RikuganApp: App {
@@ -150,7 +270,21 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
         WindowGroup {
             RootView().environmentObject(model)
                 .task { model.start() }
-                .onOpenURL { model.handleFile($0) }
+                .onOpenURL { model.handleIncomingURL($0) }
+                .onAppear { model.consumeShareFile() }
+        }
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("新标签页") { model.session?.addTab() }.keyboardShortcut("t")
+                Button("关闭标签页") { if let tab = model.session?.activeTab { model.session?.close(tab) } }.keyboardShortcut("w")
+            }
+        }
+        WindowGroup(for: UUID.self) { $tabID in
+            if let tabID, let session = model.session, let tab = session.tabs.first(where: { $0.id == tabID }) {
+                BrowserPage(tab: tab, session: session, openPanel: { _ in }).environmentObject(model)
+            } else {
+                ContentUnavailableView("标签已关闭", systemImage: "macwindow")
+            }
         }
     }
 }

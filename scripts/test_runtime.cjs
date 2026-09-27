@@ -15,7 +15,7 @@ function run(url, override = {}, source = 'globalThis.didRun = true;') {
     if (operation === 'listValues') return Promise.resolve([...nativeStorage.keys()]);
     return Promise.resolve(true);
   };
-  const sandbox = {location: new URL(url), URL, console, setTimeout, window: {webkit: {messageHandlers: {test: {postMessage: bridge}}}}};
+  const sandbox = {location: new URL(url), URL, console, setTimeout, document: {body: {}, readyState: 'complete'}, window: {webkit: {messageHandlers: {test: {postMessage: bridge}}}}};
   const script = template.replace('/*__CONFIG__*/', JSON.stringify(config)).replace('/*__SOURCE__*/', source);
   new vm.Script(script).runInNewContext(sandbox);
   return {sandbox, calls};
@@ -47,4 +47,17 @@ async function testAsyncStorage() {
   console.log('PASS: asynchronous GM storage preserves null and distinguishes missing values');
 }
 testAsyncStorage().catch(error => { console.error(error); process.exitCode = 1; });
+const resources = run('https://example.com/', {
+  grants: ['GM_getResourceText', 'GM_getResourceURL'],
+  resources: { style: { text: 'body{}', url: 'data:text/css;base64,Ym9keXt9' } }
+}, "globalThis.text = GM_getResourceText('style'); globalThis.href = GM_getResourceURL('style'); globalThis.missing = String(GM_getResourceText('nope'));");
+assert.equal(resources.sandbox.text, 'body{}');
+assert.equal(resources.sandbox.href, 'data:text/css;base64,Ym9keXt9');
+assert.equal(resources.sandbox.missing, 'undefined');
+const isolated = run('https://example.com/', { isolated: true }, 'try { unsafeWindow.document; globalThis.leaked = true; } catch (error) { globalThis.partial = String(error.message); }');
+assert.equal(isolated.sandbox.leaked, undefined);
+assert.match(isolated.sandbox.partial, /Partial/);
+const body = run('https://example.com/a', { runAt: 'document-body' });
+assert.equal(body.sandbox.didRun, true);
+console.log('PASS: userscript runtime syntax, URL guards, exclusions, grants, resources and partial unsafeWindow');
 

@@ -81,5 +81,99 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(try UserScript.parse(String(contentsOf: script)).name, "Rikugan Demo Script")
         XCTAssertThrowsError(try ArchiveValidator.validate(Data("not a zip".utf8)))
     }
+    func testAdBlockVerdictAndCompile() {
+        let blocked = AdBlockEngine.verdict(url: URL(string: "https://ads.doubleclick.net/pagead")!, lines: AdBlockEngine.builtin)
+        XCTAssertEqual(blocked, .block)
+        let allowed = AdBlockEngine.verdict(url: URL(string: "https://ads.doubleclick.net/pagead")!, lines: ["@@||doubleclick.net^", "||doubleclick.net^"])
+        XCTAssertEqual(allowed, .allow)
+        XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://example.com/")!, lines: AdBlockEngine.builtin), .none)
+        let compiled = AdBlockEngine.compile(lines: ["||doubleclick.net^", "example.com##.ad-banner", "##.adsbygoogle"])
+        XCTAssertTrue(compiled.json.contains("css-display-none"))
+        XCTAssertTrue(compiled.networkJSON.contains("block"))
+        XCTAssertFalse(compiled.networkJSON.contains("css-display-none"))
+        XCTAssertTrue(compiled.globalCSS.contains(".adsbygoogle"))
+        XCTAssertEqual(compiled.hostSelectors["example.com"], [".ad-banner"])
+    }
+    func testZipCRXAndCapabilityMatrix() throws {
+        let manifest = Data(#"{"manifest_version":3,"name":"T","version":"1.2.3","permissions":["storage"]}"#.utf8)
+        let zip = ZipArchive.store([("manifest.json", manifest)])
+        XCTAssertNoThrow(try ArchiveValidator.validate(zip))
+        let extracted = try XCTUnwrap(ZipArchive.extract(data: zip, path: "manifest.json"))
+        let parsed = try ExtensionManifest.parse(extracted)
+        XCTAssertEqual(parsed.name, "T")
+        XCTAssertEqual(parsed.manifestVersion, 3)
+        XCTAssertThrowsError(try ExtensionManifest.parse(Data(#"{"manifest_version":2,"name":"Old","version":"1"}"#.utf8)))
+        var crx = Data("Cr24".utf8)
+        crx.append(contentsOf: [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        crx.append(zip)
+        XCTAssertNoThrow(try ArchiveValidator.validate(try CRXArchive.zipData(from: crx)))
+        var crx3 = Data("Cr24".utf8)
+        crx3.append(contentsOf: [3, 0, 0, 0, 0, 0, 0, 0])
+        crx3.append(zip)
+        XCTAssertEqual(try ZipArchive.extract(data: try CRXArchive.zipData(from: crx3), path: "manifest.json"), manifest)
+        XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "debugger" }?.level, "Unsupported")
+        XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "nativeMessaging" }?.level, "Unsupported")
+        XCTAssertEqual(ChromeAPIMatrix.additions(old: ["storage"], new: ["tabs", "storage"]), ["tabs"])
+        XCTAssertEqual(ExtensionCatalog.storeID(from: "abcdefghijklmnopabcdefghijklmnop"), "abcdefghijklmnop")
+    }
+    func testVersionsOmniboxAndMigration() throws {
+        XCTAssertTrue(VersionComparator.isNewer("1.2.0", than: "1.1.9"))
+        XCTAssertFalse(VersionComparator.isNewer("1.0", than: "1.0.0"))
+        XCTAssertTrue(VersionComparator.isNewer("2", than: "1.9.9"))
+        let keyword = try XCTUnwrap(URLRules.inputURL("g cats", searchEngine: "https://example.com/?q="))
+        XCTAssertTrue(keyword.absoluteString.contains("google.com"))
+        XCTAssertTrue(keyword.absoluteString.contains("cats"))
+        let engine = SearchEngine(name: "C", template: "https://example.com/search?q={query}", keyword: "zz")
+        let custom = try XCTUnwrap(URLRules.inputURL("zz a+b", searchEngine: "", customEngines: [engine]))
+        XCTAssertEqual(URLComponents(url: custom, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "a+b")
+        XCTAssertEqual(URLRules.inputURL("chrome://extensions", searchEngine: "")?.scheme, "chrome")
+        XCTAssertEqual(InternalPages.kind(URL(string: "edge://extensions")!), "extensions")
+        XCTAssertEqual(InternalPages.kind(URL(string: "rikugan://settings")!), "settings")
+        let profileID = UUID(), tabID = UUID()
+        let legacy: [String: Any] = [
+            "schema": 1, "activeProfileID": profileID.uuidString,
+            "profiles": [[
+                "id": profileID.uuidString, "name": "旧身份", "symbol": "person.crop.circle",
+                "tabs": [["id": tabID.uuidString, "url": "https://example.com", "title": "旧", "desktop": false]],
+                "selectedTabID": NSNull(), "bookmarks": [], "history": [], "scripts": [], "extensions": [],
+                "searchEngine": "https://www.google.com/search?q="
+            ]]
+        ]
+        let migrated = try StateMigration.decode(JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(migrated.schema, 2)
+        XCTAssertEqual(migrated.profiles[0].name, "旧身份")
+        XCTAssertEqual(migrated.profiles[0].tabs.first?.url, "https://example.com")
+        XCTAssertTrue(migrated.profiles[0].settings.contentBlocking)
+        XCTAssertTrue(migrated.profiles[0].tabGroups.isEmpty)
+    }
+    func testScriptMetadataAndBackup() throws {
+        let meta = """
+        // ==UserScript==
+        // @name Meta
+        // @author Ada
+        // @include https://example.com/*
+        // @exclude /private/
+        // @resource style https://example.com/a.css
+        // @run-at document-body
+        // @grant GM_getResourceText
+        // ==/UserScript==
+        console.log('meta');
+        """
+        let script = try UserScript.parse(meta)
+        XCTAssertEqual(script.author, "Ada")
+        XCTAssertEqual(script.runAt, "document-body")
+        XCTAssertEqual(script.resources.first?.name, "style")
+        XCTAssertTrue(script.permits("getResourceText"))
+        XCTAssertTrue(script.matchesURL(URL(string: "https://example.com/a")!))
+        XCTAssertFalse(script.matchesURL(URL(string: "https://example.com/private")!))
+        var backup = PortableBackup()
+        backup.tabs = [SavedTab(url: "https://example.com", title: "E")]
+        backup.searchHistory = ["cats"]
+        backup.settings.customRules = [CustomBlockRule(text: "||example.net^")]
+        let copy = try JSONDecoder().decode(PortableBackup.self, from: JSONEncoder().encode(backup))
+        XCTAssertEqual(copy.tabs.first?.title, "E")
+        XCTAssertEqual(copy.searchHistory, ["cats"])
+        XCTAssertEqual(copy.settings.customRules.first?.text, "||example.net^")
+    }
 }
 

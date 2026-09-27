@@ -12,6 +12,8 @@ struct AddonsView: View {
     @State private var scriptURL = ""
     @State private var confirmDemo = false
     @State private var toggling = Set<UUID>()
+    @State private var storePrompt = false
+    @State private var storeText = ""
     var body: some View {
         NavigationStack {
             List {
@@ -51,14 +53,34 @@ struct AddonsView: View {
                         ForEach(model.profile.scripts) { script in
                             HStack {
                                 Button { dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { model.scriptDraft = ScriptDraft(source: script.source, existingID: script.id) } } label: {
-                                    VStack(alignment: .leading, spacing: 4) { Text(script.name).font(.headline); Text(script.matches.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(2); Text(script.isolated ? "隔离环境 · \(script.runAt)" : "页面环境 · \(script.runAt)").font(.caption2).foregroundStyle(.secondary) }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(script.name).font(.headline)
+                                        Text("v\(script.version) · \(script.author.isEmpty ? script.namespace : script.author)").font(.caption2).foregroundStyle(.secondary)
+                                        Text(script.matches.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                        Text((script.isolated ? "隔离环境" : "页面环境") + " · \(script.runAt) · \(script.grants.joined(separator: " "))").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                    }
                                 }.buttonStyle(.plain)
                                 Spacer()
                                 Toggle("启用", isOn: Binding(get: { script.enabled }, set: { enabled in
                                     model.updateProfile(session.profileID) { profile in if let index = profile.scripts.firstIndex(where: { $0.id == script.id }) { profile.scripts[index].enabled = enabled } }
                                     session.commands.removeAll { $0.scriptID == script.id }; session.refreshScripts()
                                 })).labelsHidden().accessibilityLabel("启用 " + script.name)
-                            }.swipeActions { Button("删除", role: .destructive) {
+                            }
+                            .contextMenu {
+                                Button("编辑") { model.scriptDraft = ScriptDraft(source: script.source, existingID: script.id) }
+                                Button("检查更新") { Task { if let text = await model.checkScriptUpdate(script) { model.scriptDraft = ScriptDraft(source: text, existingID: script.id) } } }
+                                Button("重新安装") { Task { let address = script.downloadURL.isEmpty ? script.updateURL : script.downloadURL; if !address.isEmpty { await model.importScriptURL(address) } } }
+                                Button("导出") {
+                                    let url = FileManager.default.temporaryDirectory.appendingPathComponent(script.name + ".user.js")
+                                    try? script.source.write(to: url, atomically: true, encoding: .utf8)
+                                    BrowserPresentation.share([url])
+                                }
+                                Button("删除", role: .destructive) {
+                                    model.updateProfile(session.profileID) { $0.scripts.removeAll { $0.id == script.id } }
+                                    session.commands.removeAll { $0.scriptID == script.id }; session.refreshScripts()
+                                }
+                            }
+                            .swipeActions { Button("删除", role: .destructive) {
                                 model.updateProfile(session.profileID) { $0.scripts.removeAll { $0.id == script.id } }; session.commands.removeAll { $0.scriptID == script.id }; session.refreshScripts()
                             } }
                         }
@@ -67,6 +89,7 @@ struct AddonsView: View {
                 Section("添加组件") {
                     Button("从文件导入", systemImage: "square.and.arrow.down") { importFile = true }.accessibilityIdentifier("addons.import")
                     Button("从网址导入用户脚本", systemImage: "link") { enterURL = true }
+                    Button("从 Chrome / Edge 商店安装", systemImage: "bag") { storePrompt = true }
                     Button("新建用户脚本", systemImage: "square.and.pencil") {
                         dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { model.scriptDraft = ScriptDraft(source: ScriptEditor.template) }
                     }
@@ -88,6 +111,11 @@ struct AddonsView: View {
                     Button("取消", role: .cancel) {}
                     Button("读取") { dismiss(); Task { try? await Task.sleep(nanoseconds: 350_000_000); await model.importScriptURL(scriptURL) } }
                 } message: { Text("先读取并展示源码与权限，不会自动执行。") }
+                .alert("商店链接或扩展 ID", isPresented: $storePrompt) {
+                    TextField("chromewebstore 或 a-p 共 32 位 ID", text: $storeText).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("取消", role: .cancel) {}
+                    Button("下载") { let value = storeText; Task { await session.installFromStore(value) } }
+                } message: { Text("会下载 CRX 并进入权限确认。商店若拒绝未签名客户端，会显示失败原因，不会假装已安装。") }
                 .alert("安装自检组件？", isPresented: $confirmDemo) {
                     Button("取消", role: .cancel) {}
                     Button("安装示例") { Task { await model.installDemos() } }
@@ -118,7 +146,10 @@ struct ExtensionDetails: View {
                             Toggle(pattern, isOn: Binding(get: { record.allowedPatterns.contains(pattern) }, set: { session.setHostPermission(pattern, record: record, allowed: $0) })).font(.subheadline)
                         }
                     }
-                    Section("已授权 API") { ForEach(record.allowedPermissions, id: \.self) { Text($0).font(.system(.footnote, design: .monospaced)) } }
+                    Section("已授权 API") { ForEach(Array(Set(record.allowedPermissions + record.allowedPatterns)).sorted(), id: \.self) { Text(ChromeAPIMatrix.describe($0)).font(.subheadline) } }
+                    Section("身份") { LabeledContent("扩展 ID", value: record.storeID.isEmpty ? record.id.uuidString : record.storeID); if !record.updateURL.isEmpty { Text(record.updateURL).font(.caption2) } }
+                    NavigationLink("API 兼容矩阵") { CapabilityView() }
+                    Button("检查更新") { Task { await session.updateExtension(record) } }
                     if let context = session.contexts[record.id], !context.errors.isEmpty { Section("运行时诊断") { Text(context.errors.map(\.localizedDescription).joined(separator: "\n")).font(.footnote).textSelection(.enabled) } }
                     if let error = session.extensionErrors[record.id] { Section("加载错误") { Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled) } }
                     Section { Button("删除扩展", role: .destructive) { deleting = true } }
@@ -180,14 +211,22 @@ struct ScriptEditor: View {
     @State private var selection = 0
     @State private var saving = false
     @State private var error: String?
+    @State private var find = ""
+    @State private var findTick = 0
     init(draft: ScriptDraft) { self.draft = draft; _source = State(initialValue: draft.source) }
     var parsed: UserScript? { try? UserScript.parse(source) }
+    var parseError: String? { do { _ = try UserScript.parse(source); return nil } catch { return error.localizedDescription } }
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("编辑模式", selection: $selection) { Text("说明与权限").tag(0); Text("源代码").tag(1) }.pickerStyle(.segmented).padding()
                 if selection == 1 {
-                    TextEditor(text: $source).font(.system(size: 12, design: .monospaced)).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("script.source")
+                    if let parseError { Text(parseError).font(.footnote).foregroundStyle(.red).padding(.horizontal) }
+                    HStack {
+                        TextField("查找", text: $find).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Button("下一个") { findTick += 1 }
+                    }.padding(.horizontal)
+                    SourceEditor(text: $source, query: find, tick: findTick)
                 } else {
                     Form {
                         if let script = parsed {

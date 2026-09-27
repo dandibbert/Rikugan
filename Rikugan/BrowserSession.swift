@@ -11,7 +11,13 @@ import WebKit
     @Published var ready = false
     @Published var extensionErrors: [UUID: String] = [:]
     @Published var commands: [ScriptCommand] = []
+    @Published var thumbnails: [UUID: UIImage] = [:]
+    @Published var favicons: [UUID: UIImage] = [:]
+    @Published var requestedPanel: String?
     var contexts: [UUID: WKWebExtensionContext] = [:]
+    var privateStore: WKWebsiteDataStore = .nonPersistent()
+    var contentRuleList: WKContentRuleList?
+    var globalCosmetic = ""
     var popupPresenter: PopupPresenter?
     private var scriptRefresh: Task<Void, Never>?
     private var stopped = false
@@ -42,6 +48,11 @@ import WebKit
         for tab in tabs { extensionController.didOpenTab(tab) }
         if let tab = activeTab { extensionController.didActivateTab(tab, previousActiveTab: nil); tab.restoreIfNeeded() }
         ready = true; persistTabs()
+        Task { [weak self] in
+            guard let self else { return }
+            await BlockListCoordinator.rebuild(self)
+            self.model?.applyPendingShare()
+        }
     }
     func shutdown() {
         guard !stopped else { return }
@@ -54,11 +65,16 @@ import WebKit
         tabs.removeAll()
         extensionController.delegate = nil
     }
-    @discardableResult func addTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil) -> BrowserTab {
-        let tab = BrowserTab(saved: SavedTab(), session: self, configuration: configuration)
+    @discardableResult func addTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false, groupID: UUID? = nil) -> BrowserTab {
+        var saved = SavedTab(isPrivate: isPrivate, groupID: groupID)
+        if let groupID { saved.groupID = groupID }
+        let tab = BrowserTab(saved: saved, session: self, configuration: configuration)
         tabs.append(tab); extensionController.didOpenTab(tab)
         if activate { select(tab) }
         if let url { tab.navigate(url) }
+        else if !isPrivate, profile.settings.homepage == "custom", let home = URL(string: profile.settings.homepageURL), !profile.settings.homepageURL.isEmpty { tab.navigate(home) }
+        else if !isPrivate, profile.settings.homepage == "blank" { tab.isHome = false; tab.navigate(URL(string: "about:blank")!) }
+        if saved.autoRefreshSeconds > 0 { tab.setAutoRefresh(saved.autoRefreshSeconds) }
         persistTabs(); return tab
     }
     func select(_ tab: BrowserTab) {
@@ -68,20 +84,31 @@ import WebKit
     }
     func close(_ tab: BrowserTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if !tab.isPrivate, let url = URL(string: tab.address), ["http", "https"].contains(url.scheme ?? "") {
+            let closed = ClosedTab(url: tab.address, title: tab.pageTitle, groupID: tab.groupID)
+            model?.updateProfile(profileID) { profile in
+                profile.closedTabs.insert(closed, at: 0)
+                profile.closedTabs = Array(profile.closedTabs.prefix(30))
+            }
+        }
         let wasActive = selectedID == tab.id
-        tabs.remove(at: index); extensionController.didCloseTab(tab, windowIsClosing: false)
+        let wasPrivate = tab.isPrivate
+        tabs.remove(at: index); thumbnails[tab.id] = nil; favicons[tab.id] = nil
+        extensionController.didCloseTab(tab, windowIsClosing: false)
         commands.removeAll { $0.tabID == tab.id }; tab.teardown()
+        if wasPrivate, !tabs.contains(where: \.isPrivate) { privateStore = .nonPersistent() }
         if tabs.isEmpty { addTab() }
         else if wasActive { select(tabs[min(index, tabs.count - 1)]) }
         persistTabs()
     }
     func persistTabs() {
         guard !stopped else { return }
-        let snapshots = tabs.map(\.snapshot)
-        model?.updateProfile(profileID) { $0.tabs = snapshots; $0.selectedTabID = selectedID }
+        let snapshots = tabs.filter { !$0.isPrivate }.map(\.snapshot)
+        let selected = tabs.first { $0.id == selectedID && !$0.isPrivate }?.id ?? snapshots.first?.id
+        model?.updateProfile(profileID) { $0.tabs = snapshots.isEmpty ? [SavedTab()] : snapshots; $0.selectedTabID = selected }
     }
     func recordVisit(_ tab: BrowserTab) {
-        guard let url = tab.webView.url, ["http", "https"].contains(url.scheme ?? "") else { return }
+        guard !tab.isPrivate, let url = tab.webView.url, ["http", "https"].contains(url.scheme ?? "") else { return }
         model?.updateProfile(profileID) { profile in
             profile.history.removeAll { $0.url == url.absoluteString }
             profile.history.insert(PageRecord(title: tab.pageTitle, url: url.absoluteString), at: 0)
@@ -99,7 +126,13 @@ import WebKit
     }
     func refreshScripts() {
         guard isActive else { return }
-        for tab in tabs { tab.scriptEngine.configure(tab.webView.configuration.userContentController, scripts: profile.scripts) }
+        for tab in tabs {
+            let allowed = tab.userscriptsAllowed
+            tab.scriptEngine.configure(tab.webView.configuration.userContentController, scripts: allowed ? profile.scripts : [])
+            PageTools.install(on: tab.webView.configuration.userContentController, cosmeticCSS: globalCosmetic)
+            tab.ensurePageHandler()
+            tab.syncContentRules()
+        }
     }
     func scheduleScriptRefresh() {
         scriptRefresh?.cancel()
@@ -143,15 +176,30 @@ import WebKit
     private var observations: [NSKeyValueObservation] = []
     private var restored = false
     private var downloads: [ObjectIdentifier: URL] = [:]
-    var snapshot: SavedTab { SavedTab(id: id, url: isHome ? "" : address, title: pageTitle, desktop: desktop) }
+    var isPrivate: Bool
+    var groupID: UUID?
+    var autoRefreshSeconds: Int
+    var contentRulesOn = false
+    var pageHandlerInstalled = false
+    var refreshTask: Task<Void, Never>?
+    var webKitDownloadIDs: [ObjectIdentifier: UUID] = [:]
+    var lastActiveAt = Date()
+    var snapshot: SavedTab { SavedTab(id: id, url: isHome || isPrivate ? "" : address, title: pageTitle, desktop: desktop, groupID: groupID, autoRefreshSeconds: autoRefreshSeconds) }
+    var userscriptsAllowed: Bool {
+        let host = webView.url?.host ?? URL(string: address)?.host
+        return session?.profile.site(for: host)?.userScriptsEnabled ?? true
+    }
 
     init(saved: SavedTab, session: BrowserSession, configuration supplied: WKWebViewConfiguration? = nil) {
         id = saved.id; self.session = session; pageTitle = saved.title; address = saved.url; isHome = saved.url.isEmpty; desktop = saved.desktop
+        isPrivate = saved.isPrivate; groupID = saved.groupID; autoRefreshSeconds = saved.autoRefreshSeconds
         let configuration = supplied ?? WKWebViewConfiguration()
-        configuration.websiteDataStore = session.dataStore
+        configuration.websiteDataStore = saved.isPrivate ? session.privateStore : session.dataStore
         configuration.webExtensionController = session.extensionController
         configuration.userContentController = WKUserContentController()
         configuration.allowsInlineMediaPlayback = true
+        configuration.allowsPictureInPictureMediaPlayback = true
+        configuration.allowsAirPlayForMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = .audio
         configuration.defaultWebpagePreferences.preferredContentMode = saved.desktop ? .desktop : .mobile
         webView = WKWebView(frame: .zero, configuration: configuration)
@@ -160,7 +208,7 @@ import WebKit
         scriptEngine.configure(configuration.userContentController, scripts: session.profile.scripts)
         webView.navigationDelegate = self; webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        webView.isInspectable = true
+        webView.isInspectable = session.profile.settings.inspectable
         webView.scrollView.keyboardDismissMode = .onDrag
         observations = [
             webView.observe(\.title, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(properties: .title) } },
@@ -174,7 +222,10 @@ import WebKit
     func syncState(properties: WKWebExtension.TabChangedProperties) {
         progress = webView.estimatedProgress; isLoading = webView.isLoading
         canGoBack = webView.canGoBack; canGoForward = webView.canGoForward
-        if let url = webView.url { address = url.absoluteString }
+        if let url = webView.url {
+            address = url.absoluteString
+            session?.noteURLChange(self)
+        }
         if let title = webView.title, !title.isEmpty { pageTitle = title }
         if !properties.isEmpty { session?.extensionController.didChangeTabProperties(properties, for: self) }
     }
@@ -188,7 +239,17 @@ import WebKit
         webView.load(URLRequest(url: url)); session?.persistTabs()
     }
     func loadInput(_ input: String) {
-        if let url = URLRules.inputURL(input, searchEngine: session?.profile.searchEngine ?? "https://www.google.com/search?q=") { navigate(url) }
+        let engine = session?.profile.searchEngine ?? "https://www.google.com/search?q="
+        let custom = session?.profile.settings.customEngines ?? []
+        if !isPrivate, URLRules.isSearch(input), let session {
+            let term = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            session.model?.updateProfile(session.profileID) { profile in
+                profile.searchHistory.removeAll { $0 == term }
+                profile.searchHistory.insert(term, at: 0)
+                profile.searchHistory = Array(profile.searchHistory.prefix(40))
+            }
+        }
+        if let url = URLRules.inputURL(input, searchEngine: engine, customEngines: custom) { navigate(url) }
     }
     func toggleDesktop() {
         desktop.toggle()
@@ -196,7 +257,12 @@ import WebKit
         webView.reload(); session?.persistTabs()
     }
     func teardown() {
+        refreshTask?.cancel(); refreshTask = nil
         webView.stopLoading(); observations.removeAll()
+        if pageHandlerInstalled {
+            webView.configuration.userContentController.removeScriptMessageHandler(forName: "rikuganPage", contentWorld: .page)
+            pageHandlerInstalled = false
+        }
         scriptEngine.teardown(webView.configuration.userContentController)
         webView.navigationDelegate = nil; webView.uiDelegate = nil
     }
@@ -207,7 +273,10 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         isHome = false; restored = true
         pageError = nil; session?.commands.removeAll { $0.tabID == id }
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { syncState(properties: [.loading, .URL, .title]); session?.recordVisit(self) }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        syncState(properties: [.loading, .URL, .title]); session?.recordVisit(self); applyDecorations(); captureThumbnail(); captureIcon()
+    }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { applyDecorations() }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         if (error as NSError).code != NSURLErrorCancelled { pageError = error.localizedDescription }
     }
@@ -217,8 +286,17 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { pageError = "页面进程已被系统回收，点击重新载入。" }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences,
                  decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        let host = navigationAction.request.url?.host
+        let site = session?.profile.site(for: host)
+        if let forced = site?.desktopMode { desktop = forced }
         preferences.preferredContentMode = desktop ? .desktop : .mobile
+        preferences.allowsContentJavaScript = site?.javascriptEnabled ?? true
         guard let url = navigationAction.request.url else { decisionHandler(.cancel, preferences); return }
+        if let kind = InternalPages.kind(url) {
+            decisionHandler(.cancel, preferences)
+            session?.requestedPanel = kind
+            return
+        }
         if navigationAction.shouldPerformDownload { decisionHandler(.download, preferences); return }
         if ["http", "https"].contains(url.scheme ?? ""), url.path.hasSuffix(".user.js"), navigationAction.targetFrame?.isMainFrame != false {
             decisionHandler(.cancel, preferences)
@@ -228,9 +306,18 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
             decisionHandler(.allow, preferences); return
         }
         decisionHandler(.cancel, preferences)
-        if navigationAction.navigationType == .linkActivated {
-            BrowserPresentation.confirm(title: "打开外部 App？", message: url.absoluteString) { allowed in if allowed { UIApplication.shared.open(url) } }
+        guard navigationAction.navigationType == .linkActivated || navigationAction.navigationType == .other else { return }
+        let scheme = url.scheme?.lowercased() ?? ""
+        let settings = session?.profile.settings
+        let external = site?.externalNavigation ?? "ask"
+        if ["itms-apps", "itms", "itmss", "macappstore"].contains(scheme), settings?.preventAppStoreRedirect != false || external == "block" {
+            session?.model?.message = "已拦截 App Store 跳转。"; return
         }
+        if settings?.preventExternalAppRedirect == true || external == "block" {
+            session?.model?.message = "已拦截外部 App 跳转。"; return
+        }
+        if external == "allow" { UIApplication.shared.open(url); return }
+        BrowserPresentation.confirm(title: "\(host ?? url.scheme ?? "网页") 想打开外部 App", message: url.absoluteString) { allowed in if allowed { UIApplication.shared.open(url) } }
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
@@ -249,11 +336,17 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
             let safe = name.isEmpty || name == "." || name == ".." ? "download" : name
             var url = dir.appendingPathComponent(safe)
             if FileManager.default.fileExists(atPath: url.path) { url = dir.appendingPathComponent(UUID().uuidString.prefix(8) + "-" + safe) }
-            downloads[ObjectIdentifier(download)] = url; completionHandler(url)
+            downloads[ObjectIdentifier(download)] = url
+            let recordID = session?.model?.downloadCenter.noteWebKit(name: safe, fileName: url.lastPathComponent, state: "running")
+            if let recordID { webKitDownloadIDs[ObjectIdentifier(download)] = recordID }
+            completionHandler(url)
         } catch { session?.model?.message = error.localizedDescription; completionHandler(nil) }
     }
     func downloadDidFinish(_ download: WKDownload) {
         let url = downloads.removeValue(forKey: ObjectIdentifier(download))
+        if let id = webKitDownloadIDs.removeValue(forKey: ObjectIdentifier(download)) {
+            session?.model?.downloadCenter.finishWebKit(id, fileName: url?.lastPathComponent ?? "download")
+        }
         session?.model?.message = "下载完成：\(url?.lastPathComponent ?? "文件")。可在「文件 → 我的 iPhone → Rikugan → Downloads」找到。"
     }
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
@@ -263,6 +356,15 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let session else { return nil }
+        let host = webView.url?.host ?? ""
+        let popup = session.profile.site(for: host)?.popups ?? "allow"
+        if popup == "block" { return nil }
+        if popup == "ask" {
+            BrowserPresentation.confirm(title: host.isEmpty ? "弹窗" : host, message: "这个网页想打开新标签页。") { allowed in
+                if allowed, let url = navigationAction.request.url { session.addTab(url: url, activate: true, configuration: configuration) }
+            }
+            return nil
+        }
         return session.addTab(activate: true, configuration: configuration).webView
     }
     func webViewDidClose(_ webView: WKWebView) { session?.close(self) }
@@ -279,7 +381,29 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         BrowserPresentation.input(title: frame.securityOrigin.host, message: prompt, initial: defaultText, completion: completionHandler)
     }
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
-                 type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) { decisionHandler(.prompt) }
+                 type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        let kind = type == .camera ? "camera" : type == .microphone ? "microphone" : "camera-microphone"
+        decide(kind, host: origin.host, decisionHandler: decisionHandler)
+    }
+    func webView(_ webView: WKWebView, requestGeolocationPermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        decide("location", host: origin.host, decisionHandler: decisionHandler)
+    }
+    private func decide(_ kind: String, host: String, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        let current = session?.profile.permission(host: host, kind: kind) ?? "ask"
+        if current == "allow" { decisionHandler(.grant); return }
+        if current == "block" { decisionHandler(.deny); return }
+        let title = ["camera": "相机", "microphone": "麦克风", "camera-microphone": "相机和麦克风", "location": "位置"][kind] ?? kind
+        BrowserPresentation.choice(title: host, message: "\(title)权限") { [weak self] choice in
+            if choice != "ask" {
+                self?.session?.model?.updateProfile(self?.session?.profileID ?? UUID()) { profile in
+                    profile.webPermissions.removeAll { $0.host == host && $0.kind == kind }
+                    if choice != "ask" { profile.webPermissions.append(WebPermission(host: host, kind: kind, decision: choice)) }
+                }
+            }
+            decisionHandler(choice == "allow" ? .grant : choice == "block" ? .deny : .prompt)
+        }
+    }
 }
 
 @MainActor enum BrowserPresentation {
@@ -302,6 +426,21 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completion(false) })
         alert.addAction(UIAlertAction(title: "允许", style: .default) { _ in completion(true) })
         presenter.present(alert, animated: true)
+    }
+    static func choice(title: String, message: String, completion: @escaping (String) -> Void) {
+        guard let presenter, !(presenter is UIAlertController) else { completion("ask"); return }
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "允许", style: .default) { _ in completion("allow") })
+        alert.addAction(UIAlertAction(title: "禁止", style: .destructive) { _ in completion("block") })
+        alert.addAction(UIAlertAction(title: "仅此一次询问", style: .cancel) { _ in completion("ask") })
+        presenter.present(alert, animated: true)
+    }
+    static func share(_ items: [Any]) {
+        guard let presenter else { return }
+        let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        sheet.popoverPresentationController?.sourceView = presenter.view
+        sheet.popoverPresentationController?.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.maxY - 60, width: 1, height: 1)
+        presenter.present(sheet, animated: true)
     }
     static func input(title: String, message: String, initial: String?, completion: @escaping (String?) -> Void) {
         guard let presenter, !(presenter is UIAlertController) else { completion(nil); return }
