@@ -249,5 +249,43 @@ function load(extra) {
   frameListeners[frameListeners.length - 1]({ data: { source: 'rikugan-extension-host-result', id: asked.payload.id, result: { sources: ['2+2'] } } });
   assert.equal(JSON.stringify(await again), JSON.stringify([{ result: 4 }, { result: 9 }]));
 
+  const gateHost = load({ chrome: { runtime: {} } });
+  assert.equal(typeof gateHost.__rikuganCreateBackgroundGate, 'function');
+  for (let round = 0; round < 12; round += 1) {
+    const gate = gateHost.__rikuganCreateBackgroundGate();
+    gate.start();
+    assert.equal(gate.state, 'starting');
+    const cold = gate.enqueueMessage({ from: 'content', round });
+    const popup = gate.enqueueMessage({ from: 'popup', round });
+    const early = gate.connect({ name: 'early', tabId: 7 });
+    const extra = gate.connect({ name: 'extra', tabId: 8 });
+    assert.equal(early.pending, true);
+    assert.equal(gate.pendingCount(), 2);
+    gate.markReady();
+    assert.equal(gate.state, 'ready');
+    assert.equal((await cold).message.from, 'content');
+    assert.equal((await popup).message.round, round);
+    assert.equal(early.pending, false);
+    assert.equal(extra.pending, false);
+    const live = gate.connect({ name: 'live', tabId: 7 });
+    assert.equal(live.pending, false);
+    live.disconnect();
+    gate.closeTab(7);
+    assert.equal(early.disconnected, true);
+    const againPort = gate.connect({ name: 'reconnect', tabId: 9 });
+    againPort.disconnect();
+    assert.equal(againPort.disconnected, true);
+    gate.idle();
+    assert.equal(gate.state, 'idle');
+    gate.suspend();
+    assert.equal(gate.state, 'suspended');
+    gate.start();
+    assert.equal(gate.state, 'waking');
+    gate.markReady();
+    gate.fail('background failed');
+    await assert.rejects(gate.enqueueMessage({ from: 'after-fail' }), /background failed/);
+    assert.equal(gate.state, 'failed');
+  }
+
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

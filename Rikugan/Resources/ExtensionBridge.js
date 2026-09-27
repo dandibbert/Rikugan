@@ -366,6 +366,7 @@
     if (!runtime || !runtime.onMessage || typeof runtime.onMessage.addListener !== 'function' || runtime.__rgHostRelay) return;
     runtime.__rgHostRelay = true;
     runtime.onMessage.addListener(function (message, sender, sendResponse) {
+      if (message && message.source === 'rikugan-bg-ready' && root.__rikuganBackgroundGate) root.__rikuganBackgroundGate.markReady();
       if (!message || message.source !== 'rikugan-extension-host' || !message.payload) return;
       var payload = message.payload;
       if (isolatedRequest(payload)) {
@@ -386,6 +387,110 @@
       window.postMessage({ source: 'rikugan-extension-host', payload: payload }, '*');
       return true;
     });
+  }
+
+  function createBackgroundGate() {
+    var state = 'notStarted';
+    var queue = [];
+    var ports = [];
+    var listeners = [];
+    var seq = 1;
+    function emit(port, name) {
+      (port[name] || []).forEach(function (fn) { try { fn(port); } catch (error) {} });
+    }
+    function openPort(port) {
+      if (!port.pending) return;
+      port.pending = false;
+      listeners.forEach(function (fn) { try { fn(port); } catch (error) {} });
+    }
+    function deliver(item) {
+      var value = { queued: false, message: item.payload };
+      item.resolve(value);
+      return value;
+    }
+    return {
+      get state() { return state; },
+      onConnect: function (fn) { listeners.push(fn); },
+      start: function () { state = (state === 'ready' || state === 'idle' || state === 'suspended') ? 'waking' : 'starting'; },
+      markReady: function () {
+        state = 'ready';
+        var pending = queue.splice(0);
+        pending.forEach(deliver);
+        ports.forEach(openPort);
+      },
+      idle: function () { if (state === 'ready') state = 'idle'; },
+      suspend: function () { state = 'suspended'; },
+      wake: function () { state = 'waking'; },
+      fail: function (message) {
+        state = 'failed';
+        var error = new Error(message || 'background failed');
+        queue.splice(0).forEach(function (item) { item.reject(error); });
+        ports.splice(0).forEach(function (port) { port.disconnected = true; emit(port, 'onDisconnect'); });
+      },
+      enqueueMessage: function (payload) {
+        if (state === 'failed') return Promise.reject(new Error('background failed'));
+        if (state === 'ready' || state === 'idle') return Promise.resolve({ queued: false, message: payload });
+        return new Promise(function (resolve, reject) { queue.push({ payload: payload, resolve: resolve, reject: reject }); });
+      },
+      connect: function (info) {
+        var port = { id: seq++, name: info && info.name || '', tabId: info && info.tabId, pending: state !== 'ready' && state !== 'idle', disconnected: false, onDisconnect: [], onMessage: [] };
+        ports.push(port);
+        if (!port.pending) listeners.forEach(function (fn) { try { fn(port); } catch (error) {} });
+        port.disconnect = function () {
+          if (port.disconnected) return;
+          port.disconnected = true;
+          var index = ports.indexOf(port);
+          if (index >= 0) ports.splice(index, 1);
+          emit(port, 'onDisconnect');
+        };
+        return port;
+      },
+      closeTab: function (tabId) {
+        ports.filter(function (port) { return port.tabId === tabId; }).forEach(function (port) { port.disconnect(); });
+      },
+      pendingCount: function () { return queue.length; },
+      portCount: function () { return ports.length; }
+    };
+  }
+
+  function installBackgroundGate() {
+    if (root.__rikuganBackgroundGate) return root.__rikuganBackgroundGate;
+    var gate = createBackgroundGate();
+    root.__rikuganBackgroundGate = gate;
+    root.__rikuganCreateBackgroundGate = createBackgroundGate;
+    var runtime = (root.browser && root.browser.runtime) || (root.chrome && root.chrome.runtime);
+    if (!runtime) return gate;
+    var originalSend = runtime.sendMessage;
+    var originalConnect = runtime.connect;
+    if (typeof window === 'undefined') gate.markReady();
+    else gate.start();
+    runtime.sendMessage = function (message, options, callback) {
+      var responseCallback = typeof options === 'function' ? options : callback;
+      var task = (gate.state === 'ready' || gate.state === 'idle') && typeof originalSend === 'function'
+        ? Promise.resolve(originalSend.apply(runtime, arguments))
+        : gate.enqueueMessage(message);
+      if (typeof responseCallback === 'function') {
+        task.then(function (value) { responseCallback(value); }, function (error) {
+          runtime.lastError = { message: error && error.message || String(error) };
+          responseCallback();
+        });
+        return undefined;
+      }
+      return task;
+    };
+    runtime.connect = function (info) {
+      if ((gate.state === 'ready' || gate.state === 'idle') && typeof originalConnect === 'function') return originalConnect.apply(runtime, arguments);
+      return gate.connect(info || {});
+    };
+    if (typeof window === 'undefined' && typeof originalSend === 'function') {
+      try { originalSend({ source: 'rikugan-bg-ready' }); } catch (error) {}
+    } else if (typeof originalSend === 'function') {
+      try {
+        var probe = originalSend({ source: 'rikugan-bg-probe' });
+        if (probe && typeof probe.then === 'function') probe.then(function () { gate.markReady(); }, function () {});
+      } catch (error) {}
+    }
+    return gate;
   }
 
   function installRikuganExtensionBridge(target) {
@@ -415,6 +520,7 @@
       if (pollTimer && typeof pollTimer.unref === 'function') pollTimer.unref();
     }
     root.__rikuganPollNotifications = pollNotifications;
+    installBackgroundGate();
     return host.chrome || host.browser;
   }
 

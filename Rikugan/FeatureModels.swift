@@ -90,6 +90,9 @@ struct BrowserSettings: Equatable {
     var customEngines: [SearchEngine] = []
     var urlShortcuts: [URLShortcut] = []
     var webFontFamily = ""
+    var headingFontFamily = ""
+    var monospaceFontFamily = ""
+    var activeGroupID: UUID? = nil
     var importedFonts: [ImportedFont] = []
     var inspectable = true
     var shortcuts: [String] = []
@@ -103,7 +106,7 @@ extension BrowserSettings: Codable {
     enum CodingKeys: String, CodingKey {
         case addressBar, darkMode, homepage, homepageURL, immersiveWallpaper, wallpaperFile
         case preventAppStoreRedirect, preventExternalAppRedirect, contentBlocking, builtInRules
-        case customRules, subscriptions, customEngines, urlShortcuts, webFontFamily, importedFonts, inspectable
+        case customRules, subscriptions, customEngines, urlShortcuts, webFontFamily, headingFontFamily, monospaceFontFamily, activeGroupID, importedFonts, inspectable
         case shortcuts, translateTarget, reader, translationBackend, searchSuggestions
     }
     init(from decoder: Decoder) throws {
@@ -124,6 +127,9 @@ extension BrowserSettings: Codable {
         customEngines = try container.decodeIfPresent([SearchEngine].self, forKey: .customEngines) ?? customEngines
         urlShortcuts = try container.decodeIfPresent([URLShortcut].self, forKey: .urlShortcuts) ?? urlShortcuts
         webFontFamily = try container.decodeIfPresent(String.self, forKey: .webFontFamily) ?? webFontFamily
+        headingFontFamily = try container.decodeIfPresent(String.self, forKey: .headingFontFamily) ?? headingFontFamily
+        monospaceFontFamily = try container.decodeIfPresent(String.self, forKey: .monospaceFontFamily) ?? monospaceFontFamily
+        activeGroupID = try container.decodeIfPresent(UUID.self, forKey: .activeGroupID) ?? activeGroupID
         importedFonts = try container.decodeIfPresent([ImportedFont].self, forKey: .importedFonts) ?? importedFonts
         inspectable = try container.decodeIfPresent(Bool.self, forKey: .inspectable) ?? inspectable
         shortcuts = try container.decodeIfPresent([String].self, forKey: .shortcuts) ?? shortcuts
@@ -149,6 +155,9 @@ extension BrowserSettings: Codable {
         try container.encode(customEngines, forKey: .customEngines)
         try container.encode(urlShortcuts, forKey: .urlShortcuts)
         try container.encode(webFontFamily, forKey: .webFontFamily)
+        try container.encode(headingFontFamily, forKey: .headingFontFamily)
+        try container.encode(monospaceFontFamily, forKey: .monospaceFontFamily)
+        try container.encodeIfPresent(activeGroupID, forKey: .activeGroupID)
         try container.encode(importedFonts, forKey: .importedFonts)
         try container.encode(inspectable, forKey: .inspectable)
         try container.encode(shortcuts, forKey: .shortcuts)

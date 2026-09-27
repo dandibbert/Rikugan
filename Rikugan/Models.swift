@@ -37,6 +37,50 @@ struct SavedTab: Codable, Identifiable, Equatable {
     var groupID: UUID? = nil
     var isPrivate = false
     var autoRefreshSeconds = 0
+    var scrollX = 0.0
+    var scrollY = 0.0
+
+    private enum CodingKeys: String, CodingKey {
+        case id, url, title, desktop, groupID, isPrivate, autoRefreshSeconds, scrollX, scrollY
+    }
+
+    init(id: UUID = UUID(), url: String = "", title: String = "新标签页", desktop: Bool = false, groupID: UUID? = nil, isPrivate: Bool = false, autoRefreshSeconds: Int = 0, scrollX: Double = 0, scrollY: Double = 0) {
+        self.id = id
+        self.url = url
+        self.title = title
+        self.desktop = desktop
+        self.groupID = groupID
+        self.isPrivate = isPrivate
+        self.autoRefreshSeconds = autoRefreshSeconds
+        self.scrollX = scrollX
+        self.scrollY = scrollY
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? "新标签页"
+        desktop = try container.decodeIfPresent(Bool.self, forKey: .desktop) ?? false
+        groupID = try container.decodeIfPresent(UUID.self, forKey: .groupID)
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
+        autoRefreshSeconds = try container.decodeIfPresent(Int.self, forKey: .autoRefreshSeconds) ?? 0
+        scrollX = try container.decodeIfPresent(Double.self, forKey: .scrollX) ?? 0
+        scrollY = try container.decodeIfPresent(Double.self, forKey: .scrollY) ?? 0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(url, forKey: .url)
+        try container.encode(title, forKey: .title)
+        try container.encode(desktop, forKey: .desktop)
+        try container.encodeIfPresent(groupID, forKey: .groupID)
+        try container.encode(isPrivate, forKey: .isPrivate)
+        try container.encode(autoRefreshSeconds, forKey: .autoRefreshSeconds)
+        try container.encode(scrollX, forKey: .scrollX)
+        try container.encode(scrollY, forKey: .scrollY)
+    }
 }
 
 struct PageRecord: Codable, Identifiable, Equatable {

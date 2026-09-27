@@ -587,7 +587,10 @@ struct TabsView: View {
                 if let group {
                     Menu {
                         Button("重命名") { BrowserPresentation.input(title: "重命名标签组", message: "", initial: group.name) { name in if let name { session.renameGroup(group.id, to: name) } } }
-                        Button("删除标签组", role: .destructive) { session.deleteGroup(group.id) }
+                        Button("组向前") { session.moveGroup(group.id, direction: -1) }
+                        Button("组向后") { session.moveGroup(group.id, direction: 1) }
+                        Button("删除标签组，标签留在未分组", role: .destructive) { session.deleteGroup(group.id, disposition: .ungroup) }
+                        Button("删除标签组并关闭其中的标签", role: .destructive) { session.deleteGroup(group.id, disposition: .closeTabs) }
                     } label: { Image(systemName: "ellipsis.circle") }
                 }
             }
@@ -610,6 +613,9 @@ struct TabsView: View {
                 }.frame(height: 92).clipped().clipShape(RoundedRectangle(cornerRadius: 10))
                 Text(tab.pageTitle).font(.subheadline).lineLimit(1)
                 Text(tab.isHome ? "新标签页" : tab.address).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                if tab.phase == .suspended || tab.phase == .terminated {
+                    Text(tab.phase == .terminated ? "进程已结束，重新打开会重新加载" : "已暂停，打开时重新加载").font(.caption2).foregroundStyle(.orange)
+                }
             }
         }
         .buttonStyle(.plain)
@@ -618,9 +624,13 @@ struct TabsView: View {
             Button("关闭") { session.close(tab) }
             Button("关闭其他") { session.closeOthers(keeping: tab) }
             Button("复制链接") { UIPasteboard.general.string = tab.address }
-            Menu("移到标签组") {
-                Button("未分组") { session.move(tab, to: nil) }
-                ForEach(model.profile.tabGroups) { group in Button(group.name) { session.move(tab, to: group.id) } }
+            if !tab.isPrivate {
+                Menu("移到标签组") {
+                    Button("未分组") { _ = session.move(tab, to: nil) }
+                    ForEach(model.profile.tabGroups) { group in Button(group.name) { _ = session.move(tab, to: group.id) } }
+                }
+                Button("组内前移") { session.moveWithinGroup(tab, direction: -1) }
+                Button("组内后移") { session.moveWithinGroup(tab, direction: 1) }
             }
         }
     }
@@ -825,6 +835,9 @@ struct SettingsView: View {
     @State private var clearing = false
     @State private var importing = false
     @State private var wallpaper = false
+    @State private var pendingImport: Data?
+    @State private var importSummary = ""
+    @State private var showDiagnostics = UserDefaults.standard.bool(forKey: "rikugan.developerDiagnostics") || ProcessInfo.processInfo.arguments.contains("--diagnostics")
     var body: some View {
         NavigationStack {
             Form {
@@ -846,7 +859,7 @@ struct SettingsView: View {
                     Picker("地址栏", selection: Binding(get: { model.profile.settings.addressBar }, set: { value in model.updateProfile(session.profileID) { $0.settings.addressBar = value } })) {
                         Text("底部").tag("bottom"); Text("顶部").tag("top")
                     }
-                    Picker("网页暗黑", selection: Binding(get: { model.profile.settings.darkMode }, set: { value in model.updateProfile(session.profileID) { $0.settings.darkMode = value }; session.tabs.forEach { $0.applyDecorations() } })) {
+                    Picker("网页暗黑", selection: Binding(get: { model.profile.settings.darkMode }, set: { value in model.updateProfile(session.profileID) { $0.settings.darkMode = value }; session.tabs.forEach { if $0.webViewIfLive() != nil { $0.applyDecorations() } } })) {
                         Text("关闭").tag("off"); Text("自动").tag("auto"); Text("始终").tag("on")
                     }
                     Picker("首页", selection: Binding(get: { model.profile.settings.homepage }, set: { value in model.updateProfile(session.profileID) { $0.settings.homepage = value } })) {
@@ -864,7 +877,7 @@ struct SettingsView: View {
                     if !model.profile.settings.wallpaperFile.isEmpty { Button("清除首页壁纸", role: .destructive) { model.clearWallpaper() } }
                     Toggle("拦截 App Store 跳转", isOn: Binding(get: { model.profile.settings.preventAppStoreRedirect }, set: { value in model.updateProfile(session.profileID) { $0.settings.preventAppStoreRedirect = value } }))
                     Toggle("拦截外部 App 跳转", isOn: Binding(get: { model.profile.settings.preventExternalAppRedirect }, set: { value in model.updateProfile(session.profileID) { $0.settings.preventExternalAppRedirect = value } }))
-                    Toggle("允许 Safari 检查网页", isOn: Binding(get: { model.profile.settings.inspectable }, set: { value in model.updateProfile(session.profileID) { $0.settings.inspectable = value }; session.tabs.forEach { $0.webView.isInspectable = value } }))
+                    Toggle("允许 Safari 检查网页", isOn: Binding(get: { model.profile.settings.inspectable }, set: { value in model.updateProfile(session.profileID) { $0.settings.inspectable = value }; session.tabs.forEach { $0.webViewIfLive()?.isInspectable = value } }))
                     NavigationLink("内容拦截") { ContentBlockingView() }
                     NavigationLink("网页字体") { FontSettingsView() }
                     NavigationLink("扩展 API 兼容性") { CapabilityView() }
@@ -884,6 +897,7 @@ struct SettingsView: View {
                 Section("备份") {
                     Button("导出标签页和设置") { if let url = try? model.exportBackup() { BrowserPresentation.share([url]) } }
                     Button("导入备份") { importing = true }
+                    Text("格式版本 3，含 formatVersion、exportedAt、appVersion。包含设置、搜索引擎、站点、标签组、标签、用户脚本源码和字体元数据。不包含密码、钥匙串、Cookie、扩展二进制和字体文件字节。导入前可以合并或替换；校验失败不会改当前资料。").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("网页通知") {
                     if model.notices.isEmpty { Text("还没有网页通知。允许后会出现在这里，并提交系统本地通知。").font(.footnote).foregroundStyle(.secondary) }
@@ -916,6 +930,11 @@ struct SettingsView: View {
                 Section("本身份的下载") { DownloadList(center: model.downloadCenter) }
                 Section("关于 Rikugan") {
                     LabeledContent("版本", value: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0") + " (" + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1") + ")")
+                        .onTapGesture {
+                            showDiagnostics = true
+                            UserDefaults.standard.set(true, forKey: "rikugan.developerDiagnostics")
+                        }
+                    if showDiagnostics { NavigationLink("诊断") { DiagnosticsView(session: session) } }
                     Text("浏览、用户脚本和广告拦截可以在 iOS 17 运行。扩展安装使用 iOS 18.4 的 WKWebExtension；更低系统会显示「需要 iOS 18.4」，不会另做一套 chrome.*。未实现的 API 会标明 Unsupported，不会静默当成成功。").font(.footnote).foregroundStyle(.secondary)
                     Text("工程包含 com.apple.developer.web-browser entitlement。未签名 IPA 没有有效签名，不会出现在「设置 → App → 默认 App → 浏览器 App」。用带这项权限的描述文件重签之后，系统才可能把它列出来。分享扩展需要同一个 App Group：\(AppGroupID.suite)。").font(.footnote).foregroundStyle(.secondary)
                     Link("源代码与问题反馈", destination: URL(string: "https://github.com/dandibbert/Rikugan")!)
@@ -923,10 +942,23 @@ struct SettingsView: View {
             }.navigationTitle("设置与下载").toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
                 .confirmationDialog("会退出当前身份中的网站登录，不影响其他身份、书签或脚本。", isPresented: $clearing, titleVisibility: .visible) { Button("清除", role: .destructive) { Task { await session.clearWebsiteData() } } }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json], allowsMultipleSelection: false) { result in
-                    if case .success(let urls) = result, let url = urls.first {
-                        let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-                        if let data = try? Data(contentsOf: url) { try? model.importBackup(data) }
+                    guard case .success(let urls) = result, let url = urls.first else { return }
+                    let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    do {
+                        let data = try Data(contentsOf: url)
+                        let preview = try model.previewBackup(data)
+                        pendingImport = data
+                        let scripts = preview.scriptCount.map { "脚本 \($0) 个" } ?? "这份旧备份没有脚本"
+                        importSummary = "格式 \(preview.formatVersion)。标签 \(preview.tabCount) 个，分组 \(preview.groupCount) 个，\(scripts)。不导入：\(preview.omitted.joined(separator: "、"))。"
+                    } catch {
+                        pendingImport = nil
+                        model.message = error.localizedDescription
                     }
+                }
+                .confirmationDialog(importSummary, isPresented: Binding(get: { pendingImport != nil }, set: { if !$0 { pendingImport = nil } }), titleVisibility: .visible) {
+                    Button("合并到当前资料") { commitImport(.merge) }
+                    Button("替换标签、分组和设置") { commitImport(.replace) }
+                    Button("取消", role: .cancel) { pendingImport = nil }
                 }
                 .fileImporter(isPresented: $wallpaper, allowedContentTypes: [.image], allowsMultipleSelection: false) { result in
                     if case .success(let urls) = result, let url = urls.first {
@@ -934,6 +966,14 @@ struct SettingsView: View {
                     }
                 }
         }
+    }
+}
+
+extension SettingsView {
+    private func commitImport(_ mode: ProfileArchive.Mode) {
+        guard let data = pendingImport else { return }
+        pendingImport = nil
+        do { try model.importBackup(data, mode: mode) } catch { model.message = error.localizedDescription }
     }
 }
 

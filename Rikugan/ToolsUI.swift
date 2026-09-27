@@ -571,7 +571,7 @@ struct SiteSettingsSheet: View {
                     Picker("弹窗", selection: optional(\.popups)) { Text("允许").tag(Optional("allow")); Text("询问").tag(Optional("ask")); Text("禁止").tag(Optional("block")) }
                     Picker("网页字体", selection: optional(\.fontFamily)) {
                         Text("跟随身份").tag(String?.none)
-                        Text("系统默认").tag(String?(""))
+                        Text("不覆盖，用网页自己的字体").tag(String?(""))
                         ForEach(FontLibrary.families().prefix(80), id: \.self) { Text($0).tag(String?($0)) }
                     }
                     Section("网页权限") {
@@ -778,15 +778,29 @@ struct FontSettingsView: View {
     @State private var importing = false
     var body: some View {
         Form {
-            Picker("网页字体", selection: Binding(get: { model.profile.settings.webFontFamily }, set: { value in
+            Picker("正文", selection: Binding(get: { model.profile.settings.webFontFamily }, set: { value in
                 model.updateProfile(model.profile.id) { $0.settings.webFontFamily = value }
-                model.session?.tabs.forEach { $0.applyDecorations() }
+                model.session?.tabs.forEach { if $0.webViewIfLive() != nil { $0.applyDecorations() } }
             })) {
                 Text("不覆盖").tag("")
                 ForEach(FontLibrary.families(), id: \.self) { Text($0).tag($0) }
             }
+            Picker("标题", selection: Binding(get: { model.profile.settings.headingFontFamily }, set: { value in
+                model.updateProfile(model.profile.id) { $0.settings.headingFontFamily = value }
+                model.session?.tabs.forEach { if $0.webViewIfLive() != nil { $0.applyDecorations() } }
+            })) {
+                Text("跟随正文").tag("")
+                ForEach(FontLibrary.families(), id: \.self) { Text($0).tag($0) }
+            }
+            Picker("等宽", selection: Binding(get: { model.profile.settings.monospaceFontFamily }, set: { value in
+                model.updateProfile(model.profile.id) { $0.settings.monospaceFontFamily = value }
+                model.session?.tabs.forEach { if $0.webViewIfLive() != nil { $0.applyDecorations() } }
+            })) {
+                Text("跟随正文").tag("")
+                ForEach(FontLibrary.families(), id: \.self) { Text($0).tag($0) }
+            }
             Button("安装字体文件") { importing = true }
-            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf、otf、ttc 会注册到本进程，并用 data URL 注入网页。woff / woff2 Core Text 不能注册，导入会被拒绝。身份字体作用到网页；站点设置里可以单独覆盖。").font(.footnote).foregroundStyle(.secondary)
+            Text("列表包含系统字体，以及通过描述文件安装后能被 UIFont 看到的字体。导入的 ttf、otf、ttc 会注册到本进程，并用 data URL 注入网页。woff / woff2 Core Text 不能注册，导入会被拒绝。正文、标题和等宽分开设置，不使用全页 * 选择器。Material Icons、Font Awesome 和 iconfont 会写回原来的字体家族。站点可以选择不覆盖。").font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("网页字体")
             .fileImporter(isPresented: $importing, allowedContentTypes: [.font, .data], allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first { do { try model.importFont(url) } catch { model.message = error.localizedDescription } }
@@ -796,13 +810,95 @@ struct FontSettingsView: View {
 
 struct CapabilityView: View {
     var body: some View {
-        List(ChromeAPIMatrix.entries, id: \.api) { entry in
-            VStack(alignment: .leading, spacing: 4) {
-                HStack { Text(entry.api).font(.headline); Spacer(); Text(entry.level).font(.caption.weight(.semibold)).foregroundStyle(entry.level == "Unsupported" ? .red : entry.level == "Partial" ? .orange : .green) }
-                Text(entry.note).font(.footnote).foregroundStyle(.secondary)
+        List {
+            ForEach(ChromeAPIMatrix.entries, id: \.api) { entry in
+                Section {
+                    Text(entry.note).font(.footnote).foregroundStyle(.secondary)
+                    ForEach(ChromeAPIMatrix.methods.filter { $0.api == entry.api }, id: \.name) { method in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack { Text(method.name).font(.subheadline); Spacer(); Text(method.level).font(.caption.weight(.semibold)).foregroundStyle(method.level == "Unsupported" ? .red : method.level == "Partial" ? .orange : .green) }
+                            Text(method.note).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    HStack { Text(entry.api); Spacer(); Text(entry.level).foregroundStyle(entry.level == "Unsupported" ? .red : entry.level == "Partial" ? .orange : .green) }
+                }
             }
         }.navigationTitle("扩展 API")
     }
+}
+
+struct DiagnosticsView: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var session: BrowserSession
+    var body: some View {
+        List {
+            LabeledContent("App version", value: appVersion)
+            LabeledContent("Git commit", value: Bundle.main.infoDictionary?["RikuganGitCommit"] as? String ?? "local")
+            LabeledContent("Build date", value: Bundle.main.infoDictionary?["RikuganBuildDate"] as? String ?? "local")
+            LabeledContent("Device / OS", value: "\(UIDevice.current.model) · \(UIDevice.current.systemName) \(UIDevice.current.systemVersion)")
+            LabeledContent("Profile", value: model.profile.name)
+            LabeledContent("Tabs", value: "\(session.tabs.count)")
+            LabeledContent("Live WebView", value: "\(session.tabs.filter { $0.webViewIfLive() != nil }.count)")
+            LabeledContent("Suspended", value: "\(session.tabs.filter { $0.phase == .suspended }.count)")
+            LabeledContent("Terminated", value: "\(session.tabs.filter { $0.phase == .terminated }.count)")
+            LabeledContent("Userscripts", value: model.profile.scripts.filter(\.enabled).map(\.name).joined(separator: ", ").ifEmpty("none"))
+            LabeledContent("Extensions", value: model.profile.extensions.map(\.name).joined(separator: ", ").ifEmpty("none"))
+            LabeledContent("Background", value: session.extensionPhase.rawValue)
+            if !session.extensionPhaseError.isEmpty { Text(session.extensionPhaseError).font(.caption).foregroundStyle(.red) }
+            LabeledContent("DNR redirect", value: "Unsupported")
+            LabeledContent("DNR modifyHeaders", value: "Unsupported")
+            LabeledContent("App Group", value: FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppGroupID.suite) == nil ? "unavailable" : AppGroupID.suite)
+            LabeledContent("Share Extension", value: sharePresent ? "embedded" : "not in bundle")
+            LabeledContent("Web Inspector", value: model.profile.settings.inspectable ? "enabled" : "off")
+            Section("Last runtime errors") {
+                if model.runtimeLog.isEmpty { Text("none").foregroundStyle(.secondary) }
+                ForEach(Array(model.runtimeLog.enumerated()), id: \.offset) { _, line in Text(line).font(.caption) }
+            }
+            Button("Export Diagnostics") { export() }
+            Text("诊断文件不含历史、Cookie、密码或页面正文。PlayCover 上的结果不能写成 iPhone 通过。").font(.footnote).foregroundStyle(.secondary)
+        }.navigationTitle("诊断")
+    }
+    private var appVersion: String {
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(short) (\(build))"
+    }
+    private var sharePresent: Bool {
+        let plugins = Bundle.main.builtInPlugInsURL
+        guard let plugins, let items = try? FileManager.default.contentsOfDirectory(at: plugins, includingPropertiesForKeys: nil) else { return false }
+        return items.contains { $0.lastPathComponent.contains("Share") }
+    }
+    private func export() {
+        let payload: [String: Any] = [
+            "appVersion": appVersion,
+            "commit": Bundle.main.infoDictionary?["RikuganGitCommit"] as? String ?? "local",
+            "buildDate": Bundle.main.infoDictionary?["RikuganBuildDate"] as? String ?? "local",
+            "os": UIDevice.current.systemVersion,
+            "profile": model.profile.name,
+            "tabs": session.tabs.count,
+            "liveWebViews": session.tabs.filter { $0.webViewIfLive() != nil }.count,
+            "suspended": session.tabs.filter { $0.phase == .suspended }.count,
+            "terminated": session.tabs.filter { $0.phase == .terminated }.count,
+            "userscripts": model.profile.scripts.map(\.name),
+            "extensions": model.profile.extensions.map { ["name": $0.name, "version": $0.version] },
+            "background": session.extensionPhase.rawValue,
+            "backgroundError": session.extensionPhaseError,
+            "appGroup": FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppGroupID.suite) != nil,
+            "shareExtension": sharePresent,
+            "webInspector": model.profile.settings.inspectable,
+            "runtimeLog": model.runtimeLog,
+            "api": ChromeAPIMatrix.entries.map { ["api": $0.api, "level": $0.level] }
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])) ?? Data()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Rikugan-diagnostics.json")
+        try? data.write(to: url, options: .atomic)
+        BrowserPresentation.share([url])
+    }
+}
+
+private extension String {
+    func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
 }
 
 struct DownloadList: View {

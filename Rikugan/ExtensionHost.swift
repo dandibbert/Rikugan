@@ -100,8 +100,14 @@ extension BrowserSession {
         model?.updateProfile(profileID) { $0.extensions.append(record) }
     }
     func loadExtension(_ record: ExtensionRecord) async {
-        guard #available(iOS 18.4, *) else { extensionErrors[record.id] = Self.extensionOSMessage; return }
+        guard #available(iOS 18.4, *) else {
+            extensionErrors[record.id] = Self.extensionOSMessage
+            extensionPhase = .failed
+            extensionPhaseError = Self.extensionOSMessage
+            return
+        }
         guard let model else { return }
+        extensionPhase = ExtensionRuntime.beginLoad(from: extensionPhase)
         do {
             let base = model.directory(profileID).appendingPathComponent(record.relativePath)
             let directory = (try? base.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
@@ -109,7 +115,14 @@ extension BrowserSession {
             let extensionObject = try await WKWebExtension(resourceBaseURL: base)
             guard isActive else { return }
             try activateExtension(extensionObject, record: record)
-        } catch { extensionErrors[record.id] = error.localizedDescription }
+            extensionPhase = .ready
+            extensionPhaseError = ""
+        } catch {
+            extensionErrors[record.id] = error.localizedDescription
+            extensionPhase = .failed
+            extensionPhaseError = error.localizedDescription
+            model.noteRuntime("extension load failed: \(error.localizedDescription)")
+        }
     }
     @available(iOS 18.4, *)
     private func activateExtension(_ webExtension: WKWebExtension, record: ExtensionRecord) throws {
@@ -355,14 +368,14 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
 extension BrowserTab: WKWebExtensionTab {
     func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { session }
     func indexInWindow(for context: WKWebExtensionContext) -> Int { session?.tabs.firstIndex(where: { $0.id == id }) ?? 0 }
-    func webView(for context: WKWebExtensionContext) -> WKWebView? { webView }
+    func webView(for context: WKWebExtensionContext) -> WKWebView? { webViewIfLive() }
     func title(for context: WKWebExtensionContext) -> String? { pageTitle }
-    func url(for context: WKWebExtensionContext) -> URL? { webView.url }
+    func url(for context: WKWebExtensionContext) -> URL? { webViewIfLive()?.url ?? URL(string: address) }
     func pendingURL(for context: WKWebExtensionContext) -> URL? { isLoading ? URL(string: address) : nil }
     func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !isLoading }
     func isSelected(for context: WKWebExtensionContext) -> Bool { session?.selectedID == id }
-    func size(for context: WKWebExtensionContext) -> CGSize { webView.bounds.size }
-    func zoomFactor(for context: WKWebExtensionContext) -> Double { webView.pageZoom }
+    func size(for context: WKWebExtensionContext) -> CGSize { webViewIfLive()?.bounds.size ?? .zero }
+    func zoomFactor(for context: WKWebExtensionContext) -> Double { webViewIfLive()?.pageZoom ?? 1 }
     func setZoomFactor(_ zoomFactor: Double, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { webView.pageZoom = min(5, max(0.25, zoomFactor)); completionHandler(nil) }
     func activate(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { session?.select(self); completionHandler(nil) }
     func setSelected(_ selected: Bool, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { if selected { session?.select(self) }; completionHandler(nil) }

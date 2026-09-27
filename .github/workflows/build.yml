@@ -12,6 +12,16 @@ concurrency:
   group: rikugan-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  logic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runtime, page tools, and background stress
+        run: |
+          node scripts/test_runtime.cjs
+          node scripts/test_page_tools.cjs
+          node scripts/test_extension_bridge.cjs
   ios:
     runs-on: macos-15
     timeout-minutes: 35
@@ -28,6 +38,7 @@ jobs:
           python3 scripts/prepare_resources.py
           node scripts/test_runtime.cjs
           node scripts/test_page_tools.cjs
+          node scripts/test_extension_bridge.cjs
           xcodegen generate
       - name: Build unsigned iPhone app
         run: |
@@ -35,7 +46,9 @@ jobs:
           xcodebuild -project Rikugan.xcodeproj -scheme Rikugan -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
-            CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} ARCHS=arm64 build | tee build-device.log
+            CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} ARCHS=arm64 \
+            RIKUGAN_GIT_COMMIT=${GITHUB_SHA} RIKUGAN_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            build | tee build-device.log
       - name: Package unsigned IPA
         run: |
           mkdir -p dist/Payload

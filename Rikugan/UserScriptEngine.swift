@@ -265,7 +265,7 @@ struct ScriptCommand: Identifiable {
         let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
         let source = "globalThis.__rikuganValueChanged && globalThis.__rikuganValueChanged(\(keyJS), \(text), true)"
         for other in session.tabs where other.id != tab.id && other.isPrivate == tab.isPrivate {
-            other.webView.evaluateJavaScript(source, in: nil, in: world) { _, _ in }
+            other.webViewIfLive()?.evaluateJavaScript(source, in: nil, in: world) { _, _ in }
         }
     }
     private func reportTransfer(id: String, event: [String: Any], world: WKContentWorld) {

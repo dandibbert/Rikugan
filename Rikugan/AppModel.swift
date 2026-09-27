@@ -29,6 +29,7 @@ struct PageNotice: Identifiable, Equatable {
     @Published var working = false
     @Published var pendingShare: (action: String, value: String)?
     @Published var notices: [PageNotice] = []
+    @Published var runtimeLog: [String] = []
     @Published var noticeToast: PageNotice?
     var extensionNotices: [String: ExtensionNoticeRecord] = [:]
     var pendingExtensionEvents: [ExtensionNotificationEvent] = []
@@ -37,6 +38,11 @@ struct PageNotice: Identifiable, Equatable {
     let root: URL
     let isTesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
     var profile: BrowserProfile { state.profiles.first { $0.id == state.activeProfileID } ?? state.profiles[0] }
+    func noteRuntime(_ text: String) {
+        let line = String(text.prefix(240))
+        runtimeLog.append(line)
+        if runtimeLog.count > 40 { runtimeLog.removeFirst(runtimeLog.count - 40) }
+    }
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -313,29 +319,31 @@ struct PageNotice: Identifiable, Equatable {
         } catch { message = error.localizedDescription; return nil }
     }
     func exportBackup() throws -> URL {
-        let backup = PortableBackup(tabs: profile.tabs, tabGroups: profile.tabGroups, selectedTabID: profile.selectedTabID,
-                                    bookmarks: profile.bookmarks, bookmarkFolders: profile.bookmarkFolders, settings: profile.settings,
-                                    siteSettings: profile.siteSettings, searchEngine: profile.searchEngine, searchHistory: profile.searchHistory)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
+        let document = ProfileArchive.export(profile: profile, appVersion: version)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Rikugan-backup.json")
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(backup).write(to: url, options: .atomic)
+        try encoder.encode(document).write(to: url, options: .atomic)
         return url
     }
-    func importBackup(_ data: Data) throws {
-        let backup = try JSONDecoder().decode(PortableBackup.self, from: data)
-        guard backup.version <= 2 else { throw RikuganError.message("这份备份来自更新的 Rikugan，当前版本不能导入。") }
+    func previewBackup(_ data: Data) throws -> ProfileArchive.Preview { try ProfileArchive.preview(data) }
+    func importBackup(_ data: Data, mode: ProfileArchive.Mode) throws {
+        let document = try ProfileArchive.decode(data)
+        let current = profile
+        let next = ProfileArchive.apply(document, onto: current, mode: mode)
         updateProfile(state.activeProfileID) { profile in
-            profile.tabs = backup.tabs.filter { !$0.isPrivate }
-            profile.tabGroups = backup.tabGroups
-            profile.selectedTabID = backup.selectedTabID
-            profile.bookmarks = backup.bookmarks
-            profile.bookmarkFolders = backup.bookmarkFolders
-            profile.settings = backup.settings
-            profile.siteSettings = backup.siteSettings
-            profile.searchEngine = backup.searchEngine
-            profile.searchHistory = backup.searchHistory
+            profile.tabs = next.tabs
+            profile.tabGroups = next.tabGroups
+            profile.selectedTabID = next.selectedTabID
+            profile.bookmarks = next.bookmarks
+            profile.bookmarkFolders = next.bookmarkFolders
+            profile.settings = next.settings
+            profile.siteSettings = next.siteSettings
+            profile.searchEngine = next.searchEngine
+            profile.searchHistory = next.searchHistory
+            profile.scripts = next.scripts
         }
-        message = "已导入标签页、分组和自定义设置。扩展二进制和钥匙串没有包含在备份里。"
+        message = mode == .merge ? "已合并备份。密码、Cookie、扩展二进制和字体文件不在备份里。" : "已替换标签、分组、设置和脚本。密码、Cookie、扩展二进制和字体文件没有导入。"
         activate(state.activeProfileID)
     }
     func registerFonts() {

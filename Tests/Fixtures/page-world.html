@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Page world</title></head>
+<body>
+<p id="status">waiting</p>
+<script>
+window.pageValue = 1;
+window.pageObject = { n: 1 };
+window.pageFunction = function (value) { return value + 1; };
+window.addEventListener('ping', function (event) {
+  document.getElementById('status').textContent = 'event ' + event.detail;
+});
+</script>
+</body>
+</html>

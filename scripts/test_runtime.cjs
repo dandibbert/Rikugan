@@ -262,6 +262,28 @@ assert.match(query.calls[0].args.headers['Content-Type'], /application\/x-www-fo
   moved.sandbox.__rikuganOnURLChange();
   assert.equal(moved.sandbox.changes, 2);
   assert.equal(moved.sandbox.runs, 2);
+  const pageWindow = {
+    pageValue: 1,
+    pageObject: { n: 1 },
+    pageFunction(value) { return value + 1; },
+    listeners: {},
+    addEventListener(type, fn) { this.listeners[type] = fn; },
+    dispatchEvent(event) { const fn = this.listeners[event.type]; if (fn) fn(event); },
+    webkit: { messageHandlers: { test: { postMessage() { return Promise.resolve(true); } } } }
+  };
+  const grantNone = run('https://example.com/', { grants: ['none'], isolated: false }, "globalThis.read = window.pageValue; window.pageObject.n = 2; globalThis.called = window.pageFunction(3); window.addEventListener('ping', event => { globalThis.event = event.detail; }); window.dispatchEvent({ type: 'ping', detail: 9 }); window.exposed = 7;", { window: pageWindow });
+  assert.equal(grantNone.sandbox.read, 1);
+  assert.equal(pageWindow.pageObject.n, 2);
+  assert.equal(grantNone.sandbox.called, 4);
+  assert.equal(grantNone.sandbox.event, 9);
+  assert.equal(pageWindow.exposed, 7);
+  const isolatedWindow = { pageValue: 'isolated', webkit: { messageHandlers: { test: { postMessage() { return Promise.resolve(true); } } } } };
+  const granted = run('https://example.com/', { grants: ['GM_getValue'], isolated: true }, 'globalThis.seen = window.pageValue; globalThis.pageSeen = window.pageObject;', { window: isolatedWindow });
+  assert.equal(granted.sandbox.seen, 'isolated');
+  assert.equal(granted.sandbox.pageSeen, undefined);
+  const child = { top: {}, webkit: { messageHandlers: { test: { postMessage() { return Promise.resolve(true); } } } } };
+  const iframe = run('https://example.com/frame', { noFrames: false }, 'globalThis.frameRan = true;', { window: child });
+  assert.equal(iframe.sandbox.frameRan, true);
   console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow get/set/call, page-world window, menu, xhr and listeners');
 })().catch(error => { console.error(error); process.exit(1); });
 

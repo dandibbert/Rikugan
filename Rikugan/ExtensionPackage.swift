@@ -18,9 +18,42 @@ enum ChromeAPIMatrix {
         .init(api: "i18n", level: "Partial", note: "跟随扩展包内的 _locales，缺少的文案不会伪造。"),
         .init(api: "notifications", level: "Partial", note: "扩展脚本调用 chrome.notifications.create、update、clear、getAll、getPermissionLevel。create 与 update 写入通知记录、App 内列表，并提交 UNUserNotificationCenter。getPermissionLevel 在系统通知已授权时返回 granted，未授权或被拒绝时返回 denied。按钮保存在记录上。点按列表行触发 onClicked，点按按钮触发 onButtonClicked，滑掉一行或 clear 触发 onClosed，点「通知设置」触发 onShowSettings。后台轮询取回这些事件。iconUrl 和 imageUrl 从扩展包相对路径、扩展 URL 或 https 图片读取，显示在列表行上，并在系统允许时作为 UNNotificationAttachment。progress 保存 0 到 100 并显示在列表行上，update 会改它；系统通知本身没有进度条。列表行出现时，以及系统通知提交成功时，都会通过轮询触发 onShown。系统通知本身不能深链按钮。"),
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
-        .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带 DNR 由 WebKit 执行。Rikugan 的广告拦截是独立引擎，不把扩展改写成用户脚本。"),
+        .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带静态规则由 WebKit 执行，block 可以生效。Rikugan 不实现 redirect、modifyHeaders，也不调用私有 WebKit API。广告拦截是另一套引擎。"),
+        .init(api: "webRequest", level: "Unsupported", note: "没有 chrome.webRequest。不能在请求发出前同步改头或观察完整请求体。"),
         .init(api: "debugger", level: "Unsupported", note: "已列入 unsupportedAPIs。不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),
         .init(api: "nativeMessaging", level: "Unsupported", note: "runtime.sendNativeMessage 与 connectNative 已列入 unsupportedAPIs。")
+    ]
+    struct Method: Equatable { var api: String; var name: String; var level: String; var note: String }
+    static let methods: [Method] = [
+        .init(api: "runtime", name: "sendMessage", level: "Partial", note: "WebKit 提供时沿用。内容脚本在 background ready 之前调用会进入 BackgroundGate 队列，收到 rikugan-bg-ready 或一次探测成功后按顺序交付。失败态返回 background failed，不靠 sleep 重试。"),
+        .init(api: "runtime", name: "connect", level: "Partial", note: "ready 前的 Port 保持 pending，ready 后触发 onConnect。disconnect、重新 connect、多个 port 和关闭标签都会结束对应 port。"),
+        .init(api: "runtime", name: "sendNativeMessage", level: "Unsupported", note: "已列入 unsupportedAPIs。"),
+        .init(api: "runtime", name: "connectNative", level: "Unsupported", note: "已列入 unsupportedAPIs。"),
+        .init(api: "storage", name: "local", level: "Supported", note: "WKWebExtension 扩展存储，按身份隔离。"),
+        .init(api: "storage", name: "sync", level: "Partial", note: "走 WebKit 的 sync 区域，不是另一套云同步。"),
+        .init(api: "storage", name: "session", level: "Partial", note: "走 WebKit 的 session 区域。"),
+        .init(api: "scripting", name: "executeScript", level: "Partial", note: "css/func/code/files、world、tabId、allFrames、frameIds。不是完整 chrome.scripting。"),
+        .init(api: "scripting", name: "insertCSS", level: "Partial", note: "写入页面 CSSOM，接受 world。"),
+        .init(api: "scripting", name: "registerContentScripts", level: "Unsupported", note: "没有动态注册 content script 的实现。"),
+        .init(api: "tabs", name: "query", level: "Supported", note: "返回当前窗口里 WebKit 能看到的标签。"),
+        .init(api: "tabs", name: "get", level: "Supported", note: "按标签取 URL、标题和加载状态。暂停的标签没有 live WKWebView，URL 来自保存的地址。"),
+        .init(api: "tabs", name: "create", level: "Supported", note: "openNewTabUsing。"),
+        .init(api: "tabs", name: "update", level: "Partial", note: "可以激活和加载 URL。不保证改写全部 Chrome update 字段。"),
+        .init(api: "tabs", name: "remove", level: "Supported", note: "关闭对应标签，不退出 App。"),
+        .init(api: "tabs", name: "reload", level: "Supported", note: "重新请求当前 URL。进程被系统杀掉后不会恢复 JS 堆。"),
+        .init(api: "tabs", name: "captureVisibleTab", level: "Partial", note: "只对仍有 WKWebView 的标签截图。"),
+        .init(api: "permissions", name: "contains", level: "Partial", note: "安装和可选权限会再问用户。不伪造已授权。"),
+        .init(api: "permissions", name: "request", level: "Partial", note: "WebKit 的权限提示回调到确认框。"),
+        .init(api: "action", name: "onClicked", level: "Partial", note: "工具栏按钮走 performAction。没有浏览器 action 时由 WebKit 打开 popup。"),
+        .init(api: "contextMenus", name: "create", level: "Partial", note: "只覆盖 WebKit 实际给出的菜单，不是全部桌面上下文。"),
+        .init(api: "cookies", name: "getAll", level: "Partial", note: "只能读当前身份 WKWebsiteDataStore 暴露的 cookie。"),
+        .init(api: "downloads", name: "download", level: "Partial", note: "浏览器下载列表可用。chrome.downloads 取决于 WebKit，没有第二套实现。"),
+        .init(api: "webNavigation", name: "onCommitted", level: "Partial", note: "只有 WebKit 实际发出的导航事件。"),
+        .init(api: "declarativeNetRequest", name: "静态 block", level: "Partial", note: "扩展包里的 block 规则由 WebKit 执行。已有 block 测试不能被改坏。"),
+        .init(api: "declarativeNetRequest", name: "redirect", level: "Unsupported", note: "公共 API 不能把网络规则变成真实 HTTP 2xx 重定向。"),
+        .init(api: "declarativeNetRequest", name: "modifyHeaders", level: "Unsupported", note: "不能在 WKWebView 公共 API 上改请求头或响应头。"),
+        .init(api: "webRequest", name: "onBeforeRequest", level: "Unsupported", note: "没有 blocking webRequest。"),
+        .init(api: "debugger", name: "attach", level: "Unsupported", note: "不暴露 debugger，也不使用私有检查器 API。")
     ]
     static func additions(old: [String], new: [String]) -> [String] {
         let known = Set(old)

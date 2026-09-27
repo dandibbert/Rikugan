@@ -47,7 +47,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 ## 浏览器功能
 
-多标签、标签组（缩略图写入身份目录，网格里可以重命名和删除分组）、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照，也不记搜索历史）、地址栏关键词与可改名/删除的自定义 `{query}` 引擎、只输入关键词就打开网址的快捷方式、Google / Bing / DuckDuckGo / Brave / Yahoo / Baidu / Startpage / Naver / Yandex 搜索建议（设置里可关）、前进/后退/标签按钮长按快捷动作、自动刷新（恢复会话后继续当前标签的计时）、系统分享、页内查找（`WKWebView.find`，匹配次数用只读文本统计，不往页面插 `<mark>`）、桌面版模式、按 `parentID` 嵌套的书签文件夹（删除文件夹时子项回到上一层）、书签编辑同时改标题和网址、按天历史、下载暂停/继续。`URLSession` 路径有速度和剩余时间，并带上 `WKWebsiteDataStore` 的 Cookie。网页触发的 `WKDownload` 走 WebKit 会话（因此带页面 Cookie），可以取消并拿 resume data 再 `resumeDownload`。公开的 `WKDownloadDelegate` 没有字节回调，进度、速度和剩余时间来自目标文件在磁盘上的增长。下载列表的「保存到文件」用 `UIDocumentPickerViewController` 导出已完成的文件。站点权限含摄像头、麦克风、位置、剪贴板、通知、弹窗和外部跳转。剪贴板「询问」使用和相机一样的允许/禁止对话框；允许后页面 `readText` 保持可用，禁止则拒绝读取。允许通知后，页面 `Notification` 进入 App 内通知列表，并在系统授权后提交 `UNUserNotificationCenter`。iPhone 保持单栏界面；较宽的 iPad 使用侧栏和标签条。「新窗口」在同一个 `BrowserSession` 里再开一组 `BrowserTab`，所以脚本、内容规则、下载、页内查找、阅读模式和页面菜单都会跑。这些标签不写入主窗口保存的标签列表。切换标签不会新建 `WKWebView`。
+多标签、标签组（缩略图写入身份目录，网格里可以重命名和删除分组）、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照，也不记搜索历史）、地址栏关键词与可改名/删除的自定义 `{query}` 引擎、只输入关键词就打开网址的快捷方式、Google / Bing / DuckDuckGo / Brave / Yahoo / Baidu / Startpage / Naver / Yandex 搜索建议（设置里可关）、前进/后退/标签按钮长按快捷动作、自动刷新（恢复会话后继续当前标签的计时）、系统分享、页内查找（`WKWebView.find`，匹配次数用只读文本统计，不往页面插 `<mark>`）、桌面版模式、按 `parentID` 嵌套的书签文件夹（删除文件夹时子项回到上一层）、书签编辑同时改标题和网址、按天历史、下载暂停/继续。`URLSession` 路径有速度和剩余时间，并带上 `WKWebsiteDataStore` 的 Cookie。网页触发的 `WKDownload` 走 WebKit 会话（因此带页面 Cookie），可以取消并拿 resume data 再 `resumeDownload`。公开的 `WKDownloadDelegate` 没有字节回调，进度、速度和剩余时间来自目标文件在磁盘上的增长。下载列表的「保存到文件」用 `UIDocumentPickerViewController` 导出已完成的文件。站点权限含摄像头、麦克风、位置、剪贴板、通知、弹窗和外部跳转。剪贴板「询问」使用和相机一样的允许/禁止对话框；允许后页面 `readText` 保持可用，禁止则拒绝读取。允许通知后，页面 `Notification` 进入 App 内通知列表，并在系统授权后提交 `UNUserNotificationCenter`。iPhone 保持单栏界面；较宽的 iPad 使用侧栏和标签条。「新窗口」在同一个 `BrowserSession` 里再开一组 `BrowserTab`，所以脚本、内容规则、下载、页内查找、阅读模式和页面菜单都会跑。这些标签不写入主窗口保存的标签列表。切换仍在预算内的标签不会重建网页。当前标签保持 live WKWebView；其余最近使用的标签保留到最多 8 个，更早的标签会 suspend，只留下 URL、标题、滚动位置、分组和缩略图。打开暂停的标签或 WebContent 被系统回收后会重新请求这个 URL，不恢复 JS 堆、WebSocket 或后退列表。
 
 另外有：
 
@@ -60,7 +60,7 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 - 二维码扫描后可以打开、搜索或复制；打开会导航。
 - 钥匙串自动填充仍是点按后填入，编辑项含地址。列表里支付条目只显示末四位；点按填入时 `cardNumber` 用钥匙串里保存的卡号。不写 UserDefaults。打开自动填充页会在 iCloud 可用时读取私有数据库 `iCloud.com.dandibbert.Rikugan` 的 `AutofillVault` 记录并按 id 合并回钥匙串。未签名 IPA 没有可用的 iCloud 容器，读取失败就继续用钥匙串。图片页的「打开原图」在查看器里用当前身份的 Cookie 加载图片，返回仍留在原页面。
 - 实验控制台收集页面 `console.log` / `info` / `warn` / `error` 和未捕获错误。完整检查器仍是 Safari 的 Develop（`isInspectable`），本 App 不是 Web Inspector。
-- 字体按身份应用到网页，站点设置可以覆盖。ttf / otf / ttc 交给 Core Text。woff / woff2 无法由 Core Text 注册，导入会被拒绝。
+- 字体按身份应用到网页。正文、标题和等宽分开设置，站点可以覆盖，也可以选不覆盖。样式不使用 `*` 选择器，并写回 Material Icons、Font Awesome 和 iconfont。ttf / otf / ttc 交给 Core Text。woff / woff2 无法由 Core Text 注册，导入会被拒绝。备份是 formatVersion 3，导入前可预览并选择合并或替换；密码、Cookie、扩展二进制和字体文件字节不在文件里。连点设置里的版本号打开诊断页。PlayCover 和模拟器的结果都不是 iPhone 通过，步骤在 `docs/TESTING.md`。第三方扩展没有在 WKWebView 里跑过，见 `docs/EXTENSION_COMPATIBILITY.md`。
 
 浏览数据（标签、历史、书签、Cookie）没有 iCloud 同步。自动填充可以尝试写入上面的私有数据库；未签名包会失败并留在钥匙串。分享扩展在未签名 IPA 里编进包，但 App Group 要等带该 entitlement 的描述文件重签后才真正共享文件；短链接仍可通过 `rikugan://` 唤起主 App。
 

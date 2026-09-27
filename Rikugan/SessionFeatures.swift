@@ -7,7 +7,7 @@ extension BrowserSession {
         let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
         let idJS = PageTools.jsString(noticeID) ?? "\"\""
         let source = "globalThis.__rikuganNotify && globalThis.__rikuganNotify(\(idJS))"
-        for tab in tabs { tab.webView.evaluateJavaScript(source, in: nil, in: world) { _, _ in } }
+        for tab in tabs { tab.webViewIfLive()?.evaluateJavaScript(source, in: nil, in: world) { _, _ in } }
     }
     func noteURLChange(_ tab: BrowserTab) {
         let js = "globalThis.__rikuganOnURLChange && globalThis.__rikuganOnURLChange()"
@@ -42,12 +42,47 @@ extension BrowserSession {
             profile.tabGroups[index].name = String(name.prefix(40))
         }
     }
-    func deleteGroup(_ id: UUID) {
-        for tab in tabs where tab.groupID == id { tab.groupID = nil }
-        model?.updateProfile(profileID) { $0.tabGroups.removeAll { $0.id == id } }
+    func deleteGroup(_ id: UUID, disposition: TabGroupEdit.Deletion = .ungroup) {
+        let refs = tabs.map { TabGroupEdit.TabRef(id: $0.id, groupID: $0.groupID, isPrivate: $0.isPrivate, order: 0) }
+        let edited = TabGroupEdit.delete(groups: profile.tabGroups, tabs: refs, id: id, disposition: disposition)
+        if disposition == .closeTabs {
+            for tab in tabs.filter({ $0.groupID == id }) { close(tab) }
+        } else {
+            for tab in tabs {
+                if let match = edited.tabs.first(where: { $0.id == tab.id }) { tab.groupID = match.groupID }
+            }
+        }
+        model?.updateProfile(profileID) { profile in
+            profile.tabGroups = edited.groups
+            if profile.settings.activeGroupID == id { profile.settings.activeGroupID = nil }
+        }
         persistTabs()
     }
-    func move(_ tab: BrowserTab, to groupID: UUID?) { tab.groupID = groupID; persistTabs() }
+    @discardableResult func move(_ tab: BrowserTab, to groupID: UUID?) -> Bool {
+        let refs = tabs.map { TabGroupEdit.TabRef(id: $0.id, groupID: $0.groupID, isPrivate: $0.isPrivate, order: 0) }
+        guard let moved = TabGroupEdit.move(refs, id: tab.id, to: groupID, groups: profile.tabGroups),
+              let match = moved.first(where: { $0.id == tab.id }) else { return false }
+        tab.groupID = match.groupID
+        if selectedID == tab.id, !tab.isPrivate {
+            model?.updateProfile(profileID) { $0.settings.activeGroupID = match.groupID }
+        }
+        persistTabs()
+        return true
+    }
+    func moveGroup(_ id: UUID, direction: Int) {
+        guard let index = profile.tabGroups.firstIndex(where: { $0.id == id }) else { return }
+        let next = TabGroupEdit.reorder(profile.tabGroups, from: index, to: index + direction)
+        guard next.map(\.id) != profile.tabGroups.map(\.id) else { return }
+        model?.updateProfile(profileID) { $0.tabGroups = next }
+    }
+    func moveWithinGroup(_ tab: BrowserTab, direction: Int) {
+        let refs = tabs.enumerated().map { TabGroupEdit.TabRef(id: $0.element.id, groupID: $0.element.groupID, isPrivate: $0.element.isPrivate, order: $0.offset) }
+        let moved = TabGroupEdit.reorderWithinGroup(refs, id: tab.id, direction: direction)
+        guard moved.map(\.id) != refs.map(\.id) else { return }
+        let lookup = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
+        tabs = moved.compactMap { lookup[$0.id] }
+        persistTabs()
+    }
     func loadThumbnails() {
         guard let model else { return }
         let folder = model.directory(profileID).appendingPathComponent("Thumbnails", isDirectory: true)
@@ -108,7 +143,10 @@ extension BrowserTab: WKScriptMessageHandler {
         let site = session?.profile.site(for: host)
         let mode = site?.darkMode ?? session?.profile.settings.darkMode ?? "off"
         let siteFont = site?.fontFamily
-        let family = siteFont ?? session?.profile.settings.webFontFamily ?? ""
+        let disabled = siteFont == ""
+        let family = disabled ? "" : (siteFont ?? session?.profile.settings.webFontFamily ?? "")
+        let heading = siteFont == nil && !disabled ? (session?.profile.settings.headingFontFamily ?? "") : ""
+        let mono = siteFont == nil && !disabled ? (session?.profile.settings.monospaceFontFamily ?? "") : ""
         var face = ""
         if let font = session?.profile.settings.importedFonts.first(where: { $0.family == family }), let session, let model = session.model {
             let file = model.directory(session.profileID).appendingPathComponent("Fonts").appendingPathComponent(font.fileName)
@@ -119,6 +157,8 @@ extension BrowserTab: WKScriptMessageHandler {
         let modeJS = PageTools.jsString(mode) ?? "\"off\""
         let familyJS = PageTools.jsString(family) ?? "\"\""
         let faceJS = PageTools.jsString(face) ?? "\"\""
+        let headingJS = PageTools.jsString(heading) ?? "\"\""
+        let monoJS = PageTools.jsString(mono) ?? "\"\""
         let notifyJS = PageTools.jsString(notifications) ?? "\"ask\""
         let clipboardJS = PageTools.jsString(clipboard) ?? "\"ask\""
         let hostJSON = (session?.hostCSS).flatMap { try? JSONSerialization.data(withJSONObject: $0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
@@ -130,7 +170,7 @@ extension BrowserTab: WKScriptMessageHandler {
         let css = PageTools.jsString(session?.globalCosmetic ?? "") ?? "\"\""
         Task { [weak self] in
             guard let self else { return }
-            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.applyReplace(\(replacements), \(href)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installClipboard(\(clipboardJS)),RikuganPageTools.installConsole(),RikuganPageTools.installExtensionRelay(),true", in: self.webView)
+            _ = await PageTools.call("RikuganPageTools.setAppearance(\(modeJS)),RikuganPageTools.setFont(\(familyJS),\(faceJS),\(headingJS),\(monoJS)),RikuganPageTools.applyBlocking(\(css), \(hostJSON), \(procedural)),RikuganPageTools.applyScriptlets(\(scriptlets)),RikuganPageTools.applyCSP(\(policies)),RikuganPageTools.applyReplace(\(replacements), \(href)),RikuganPageTools.installNotifications(\(notifyJS)),RikuganPageTools.installClipboard(\(clipboardJS)),RikuganPageTools.installConsole(),RikuganPageTools.installExtensionRelay(),true", in: self.webView)
         }
     }
     func captureThumbnail() {

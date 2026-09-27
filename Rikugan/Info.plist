@@ -8,6 +8,8 @@
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
   <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+  <key>RikuganGitCommit</key><string>$(RIKUGAN_GIT_COMMIT)</string>
+  <key>RikuganBuildDate</key><string>$(RIKUGAN_BUILD_DATE)</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UILaunchScreen</key><dict/>
   <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><true/></dict>

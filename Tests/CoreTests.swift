@@ -550,5 +550,80 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(AdBlockEngine.pruneKeys(#"ad|$.promo"#), ["ad", "promo"])
         XCTAssertEqual(AdBlockEngine.pruneKeys(#"\$.data.ad"#), ["ad"])
     }
+    func testTabLifecycleGroupsAndArchive() throws {
+        let now = Date()
+        let slots = (0..<32).map { TabResidence.Slot(id: UUID(), lastActiveAt: now.addingTimeInterval(Double($0))) }
+        let active = slots[10].id
+        let plan = TabResidence.assign(slots: slots, activeID: active, budget: 8)
+        XCTAssertEqual(plan[active], .active)
+        XCTAssertEqual(plan.values.filter { $0 == .active || $0 == .liveBackground }.count, 8)
+        XCTAssertEqual(plan.values.filter { $0 == .suspended }.count, 24)
+        let oldest = try XCTUnwrap(slots.min { $0.lastActiveAt < $1.lastActiveAt })
+        let switched = TabResidence.assign(slots: slots, activeID: oldest.id, budget: 8)
+        XCTAssertEqual(switched[oldest.id], .active)
+        XCTAssertEqual(switched[active], .liveBackground)
+        let terminated = TabResidence.assign(slots: [TabResidence.Slot(id: active, lastActiveAt: now, terminated: true)], activeID: active)
+        XCTAssertEqual(terminated[active], .terminated)
+
+        let groupA = TabGroup(name: "A")
+        let groupB = TabGroup(name: "B")
+        XCTAssertEqual(TabGroupEdit.reorder([groupA, groupB], from: 0, to: 1).map(\.name), ["B", "A"])
+        let privateTab = TabGroupEdit.TabRef(id: UUID(), groupID: nil, isPrivate: true, order: 0)
+        XCTAssertNil(TabGroupEdit.move([privateTab], id: privateTab.id, to: groupA.id, groups: [groupA]))
+        let first = TabGroupEdit.TabRef(id: UUID(), groupID: groupA.id, isPrivate: false, order: 0)
+        let second = TabGroupEdit.TabRef(id: UUID(), groupID: groupA.id, isPrivate: false, order: 1)
+        let reordered = TabGroupEdit.reorderWithinGroup([first, second], id: second.id, direction: -1)
+        XCTAssertEqual(reordered.map(\.id), [second.id, first.id])
+        let moved = try XCTUnwrap(TabGroupEdit.move([first], id: first.id, to: groupB.id, groups: [groupA, groupB]))
+        XCTAssertEqual(moved[0].groupID, groupB.id)
+        let closed = TabGroupEdit.delete(groups: [groupB], tabs: moved, id: groupB.id, disposition: .closeTabs)
+        XCTAssertTrue(closed.groups.isEmpty)
+        XCTAssertTrue(closed.tabs.isEmpty)
+        let ungrouped = TabGroupEdit.delete(groups: [groupA], tabs: [first], id: groupA.id, disposition: .ungroup)
+        XCTAssertNil(ungrouped.tabs[0].groupID)
+        XCTAssertEqual(ExtensionRuntime.beginLoad(from: .notStarted), .starting)
+        XCTAssertEqual(ExtensionRuntime.beginLoad(from: .suspended), .waking)
+        XCTAssertEqual(ExtensionRuntime.beginLoad(from: .ready), .waking)
+
+        var profile = BrowserProfile(name: "个人")
+        profile.tabGroups = [groupA, groupB]
+        profile.tabs = [
+            SavedTab(url: "https://example.com/a", title: "A", groupID: groupA.id, scrollY: 20),
+            SavedTab(url: "https://example.com/b", title: "B", groupID: groupB.id)
+        ]
+        profile.selectedTabID = profile.tabs[0].id
+        profile.settings.activeGroupID = groupA.id
+        profile.settings.webFontFamily = "Font A"
+        profile.scripts = [try UserScript.parse(source)]
+        let encoded = try JSONEncoder().encode(ProfileArchive.export(profile: profile, appVersion: "0.2.0"))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["futureField"] = true
+        let extra = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try ProfileArchive.decode(extra)
+        XCTAssertEqual(decoded.formatVersion, 3)
+        XCTAssertEqual(decoded.tabGroups.map(\.name), ["A", "B"])
+        XCTAssertEqual(decoded.tabs.map(\.scrollY), [20, 0])
+        XCTAssertEqual(decoded.userscripts?.count, 1)
+        XCTAssertFalse(decoded.includesExtensionBinaries)
+        XCTAssertTrue(decoded.omitted.contains("cookies"))
+        let replaced = ProfileArchive.apply(decoded, onto: BrowserProfile(name: "空"), mode: .replace)
+        XCTAssertEqual(replaced.tabs.map(\.url), profile.tabs.map(\.url))
+        XCTAssertEqual(replaced.tabGroups.map(\.id), [groupA.id, groupB.id])
+        XCTAssertEqual(replaced.settings.activeGroupID, groupA.id)
+        XCTAssertEqual(replaced.scripts.count, 1)
+        var existing = profile
+        existing.tabs.append(SavedTab(url: "https://example.com/c", title: "C"))
+        let merged = ProfileArchive.apply(decoded, onto: existing, mode: .merge)
+        XCTAssertEqual(merged.tabs.count, 3)
+        XCTAssertThrowsError(try ProfileArchive.decode(Data("nope".utf8)))
+        XCTAssertThrowsError(try ProfileArchive.decode(Data("{\"formatVersion\":9}".utf8)))
+        let legacy = PortableBackup(tabs: profile.tabs, tabGroups: profile.tabGroups, selectedTabID: profile.tabs[0].id, settings: profile.settings)
+        let migrated = try ProfileArchive.decode(JSONEncoder().encode(legacy))
+        XCTAssertEqual(migrated.formatVersion, 2)
+        XCTAssertNil(migrated.userscripts)
+        let kept = ProfileArchive.apply(migrated, onto: profile, mode: .replace)
+        XCTAssertEqual(kept.scripts.count, profile.scripts.count)
+        XCTAssertEqual(kept.tabGroups.map(\.id), [groupA.id, groupB.id])
+    }
 }
 

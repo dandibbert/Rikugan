@@ -14,6 +14,8 @@ import WebKit
     @Published var selectedID: UUID?
     @Published var ready = false
     @Published var extensionErrors: [UUID: String] = [:]
+    @Published var extensionPhase: ExtensionRuntime.Phase = .notStarted
+    var extensionPhaseError = ""
     @Published var commands: [ScriptCommand] = []
     @Published var thumbnails: [UUID: UIImage] = [:]
     @Published var favicons: [UUID: UIImage] = [:]
@@ -52,9 +54,16 @@ import WebKit
         super.init()
         loadFaviconCache()
         let saved = profile.tabs.isEmpty ? [SavedTab()] : profile.tabs
-        tabs = saved.map { BrowserTab(saved: $0, session: self) }
+        tabs = saved.map { BrowserTab(saved: $0, session: self, mount: false) }
         for tab in tabs { tab.bridgeTabID = allocateBridgeTabID() }
-        selectedID = saved.contains(where: { $0.id == profile.selectedTabID }) ? profile.selectedTabID : saved.first?.id
+        if saved.contains(where: { $0.id == profile.selectedTabID }) {
+            selectedID = profile.selectedTabID
+        } else if let group = profile.settings.activeGroupID, let match = saved.first(where: { $0.groupID == group }) {
+            selectedID = match.id
+        } else {
+            selectedID = saved.first?.id
+        }
+        rebalanceResidence()
     }
     func start() async {
         if #available(iOS 18.4, *) {
@@ -94,6 +103,7 @@ import WebKit
         }
         for tab in tabs { tab.teardown() }
         tabs.removeAll()
+        extensionPhase = .suspended
     }
     @discardableResult func addTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false, groupID: UUID? = nil, windowID: UUID? = nil) -> BrowserTab {
         var saved = SavedTab(isPrivate: isPrivate, groupID: groupID)
@@ -115,12 +125,33 @@ import WebKit
         else if !isPrivate, profile.settings.homepage == "custom", let home = URL(string: profile.settings.homepageURL), !profile.settings.homepageURL.isEmpty { tab.navigate(home) }
         else if !isPrivate, profile.settings.homepage == "blank" { tab.isHome = false; tab.navigate(URL(string: "about:blank")!) }
         if saved.autoRefreshSeconds > 0 { tab.setAutoRefresh(saved.autoRefreshSeconds) }
+        rebalanceResidence()
         persistTabs(); return tab
     }
     func select(_ tab: BrowserTab) {
-        let previous = activeTab; selectedID = tab.id
+        let previous = activeTab
+        tab.lastActiveAt = Date()
+        selectedID = tab.id
         if #available(iOS 18.4, *) { extensionController.didActivateTab(tab, previousActiveTab: previous) }
-        tab.restoreIfNeeded(); persistTabs()
+        model?.updateProfile(profileID) { $0.settings.activeGroupID = tab.isPrivate ? $0.settings.activeGroupID : tab.groupID }
+        rebalanceResidence()
+        tab.restoreIfNeeded()
+        persistTabs()
+    }
+    func rebalanceResidence() {
+        let plan = TabResidence.assign(slots: tabs.map {
+            TabResidence.Slot(id: $0.id, lastActiveAt: $0.lastActiveAt, terminated: $0.phase == .terminated)
+        }, activeID: selectedID)
+        for tab in tabs {
+            let next = plan[tab.id] ?? .suspended
+            if next == .suspended {
+                tab.suspend()
+            } else if next == .terminated {
+                tab.phase = .terminated
+            } else {
+                tab.wake(as: next)
+            }
+        }
     }
     func close(_ tab: BrowserTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
@@ -151,6 +182,7 @@ import WebKit
             if model?.windows.selection[windowID] == tab.id { model?.windows.replace(siblings.last?.id, in: windowID) }
             if wasActive, let fallback = main.last { select(fallback) }
         }
+        rebalanceResidence()
         persistTabs()
     }
     func persistTabs() {
@@ -204,6 +236,7 @@ import WebKit
     func refreshScripts() {
         guard isActive else { return }
         for tab in tabs {
+            guard tab.webViewIfLive() != nil else { continue }
             let allowed = tab.userscriptsAllowed
             tab.scriptEngine.configure(tab.webView.configuration.userContentController, scripts: allowed ? profile.scripts : [])
             installPageTools(on: tab)
@@ -227,10 +260,11 @@ import WebKit
         }
     }
     func clearWebsiteData() async {
-        for tab in tabs { tab.webView.stopLoading() }
+        for tab in tabs { tab.webViewIfLive()?.stopLoading() }
         await dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
         model?.updateProfile(profileID) { $0.history.removeAll() }
-        for tab in tabs where !tab.isHome { tab.webView.reload() }
+        for tab in tabs where !tab.isHome && tab.webViewIfLive() != nil { tab.webView.reload() }
+        rebalanceResidence()
     }
     func extensionLoaded(_ id: UUID) -> Bool { extensionContextBox[id] != nil }
     func dismissExtensionPopup() {
@@ -441,8 +475,18 @@ extension BrowserSession {
 @MainActor final class BrowserTab: NSObject, ObservableObject, Identifiable {
     let id: UUID
     weak var session: BrowserSession?
-    let webView: WKWebView
+    private var heldWebView: WKWebView?
+    private var pendingConfiguration: WKWebViewConfiguration?
     let scriptEngine = UserScriptEngine()
+    var phase: TabPhase = .suspended
+    var scrollX = 0.0
+    var scrollY = 0.0
+    var webView: WKWebView {
+        if let heldWebView { return heldWebView }
+        mountWebView()
+        return heldWebView!
+    }
+    func webViewIfLive() -> WKWebView? { heldWebView }
     @Published var pageTitle: String
     @Published var address: String
     @Published var progress: Double = 0
@@ -454,6 +498,7 @@ extension BrowserSession {
     @Published var desktop: Bool
     private var observations: [NSKeyValueObservation] = []
     private var restored = false
+    private var scrollApplied = false
     private var downloads: [ObjectIdentifier: URL] = [:]
     var isPrivate: Bool
     var groupID: UUID?
@@ -472,45 +517,90 @@ extension BrowserSession {
     @Published var liveTexts: [[String: String]] = []
     var webKitDownloadIDs: [ObjectIdentifier: UUID] = [:]
     var lastActiveAt = Date()
-    var snapshot: SavedTab { SavedTab(id: id, url: isHome || isPrivate ? "" : address, title: pageTitle, desktop: desktop, groupID: groupID, autoRefreshSeconds: autoRefreshSeconds) }
+    var snapshot: SavedTab { SavedTab(id: id, url: isHome || isPrivate ? "" : address, title: pageTitle, desktop: desktop, groupID: groupID, autoRefreshSeconds: autoRefreshSeconds, scrollX: scrollX, scrollY: scrollY) }
     var userscriptsAllowed: Bool {
-        let host = webView.url?.host ?? URL(string: address)?.host
+        let host = webViewIfLive()?.url?.host ?? URL(string: address)?.host
         return session?.profile.site(for: host)?.userScriptsEnabled ?? true
     }
 
-    init(saved: SavedTab, session: BrowserSession, configuration supplied: WKWebViewConfiguration? = nil) {
+    init(saved: SavedTab, session: BrowserSession, configuration supplied: WKWebViewConfiguration? = nil, mount: Bool = true) {
         id = saved.id; self.session = session; pageTitle = saved.title; address = saved.url; isHome = saved.url.isEmpty; desktop = saved.desktop
         isPrivate = saved.isPrivate; groupID = saved.groupID; autoRefreshSeconds = saved.autoRefreshSeconds
+        scrollX = saved.scrollX; scrollY = saved.scrollY
+        pendingConfiguration = supplied
         if let supplied {
             if #available(iOS 18.4, *) {
                 isExtensionPage = session.allExtensionContexts().contains { $0.webViewConfiguration === supplied }
             }
         }
-        let configuration = supplied ?? WKWebViewConfiguration()
-        configuration.websiteDataStore = saved.isPrivate ? session.privateStore : session.dataStore
-        if #available(iOS 18.4, *) { configuration.webExtensionController = session.extensionController }
-        configuration.userContentController = WKUserContentController()
-        configuration.allowsInlineMediaPlayback = true
-        configuration.allowsPictureInPictureMediaPlayback = true
-        configuration.allowsAirPlayForMediaPlayback = true
-        configuration.mediaTypesRequiringUserActionForPlayback = .audio
-        configuration.defaultWebpagePreferences.preferredContentMode = saved.desktop ? .desktop : .mobile
-        webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         scriptEngine.tab = self
-        scriptEngine.configure(configuration.userContentController, scripts: session.profile.scripts)
-        webView.navigationDelegate = self; webView.uiDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
-        webView.isInspectable = session.profile.settings.inspectable
-        webView.scrollView.keyboardDismissMode = .onDrag
+        if mount { mountWebView() }
+    }
+    private func mountWebView() {
+        guard heldWebView == nil else { return }
+        let configuration = pendingConfiguration ?? WKWebViewConfiguration()
+        if pendingConfiguration == nil {
+            configuration.websiteDataStore = isPrivate ? (session?.privateStore ?? .nonPersistent()) : (session?.dataStore ?? .default())
+            if #available(iOS 18.4, *), let session { configuration.webExtensionController = session.extensionController }
+            configuration.userContentController = WKUserContentController()
+            configuration.allowsInlineMediaPlayback = true
+            configuration.allowsPictureInPictureMediaPlayback = true
+            configuration.allowsAirPlayForMediaPlayback = true
+            configuration.mediaTypesRequiringUserActionForPlayback = .audio
+            configuration.defaultWebpagePreferences.preferredContentMode = desktop ? .desktop : .mobile
+        }
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        heldWebView = view
+        if let session { scriptEngine.configure(configuration.userContentController, scripts: session.profile.scripts) }
+        view.navigationDelegate = self
+        view.uiDelegate = self
+        view.allowsBackForwardNavigationGestures = true
+        view.isInspectable = session?.profile.settings.inspectable ?? true
+        view.scrollView.keyboardDismissMode = .onDrag
         observations = [
-            webView.observe(\.title, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionTitle: true) } },
-            webView.observe(\.url, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionURL: true) } },
-            webView.observe(\.estimatedProgress, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionLoading: true) } },
-            webView.observe(\.isLoading, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionLoading: true) } },
-            webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState() } },
-            webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState() } }
+            view.observe(\.title, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionTitle: true) } },
+            view.observe(\.url, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionURL: true) } },
+            view.observe(\.estimatedProgress, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionLoading: true) } },
+            view.observe(\.isLoading, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState(extensionLoading: true) } },
+            view.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState() } },
+            view.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in Task { @MainActor in self?.syncState() } }
         ]
+        if phase == .suspended || phase == .terminated { phase = .liveBackground }
+        scrollApplied = false
+    }
+    func suspend() {
+        guard let view = heldWebView else { if phase != .terminated { phase = .suspended }; return }
+        scrollX = view.scrollView.contentOffset.x
+        scrollY = view.scrollView.contentOffset.y
+        releaseView()
+        restored = false
+        phase = .suspended
+    }
+    func wake(as next: TabPhase) {
+        if heldWebView == nil {
+            phase = .restoring
+            mountWebView()
+            session?.installPageTools(on: self)
+            phase = next
+            restoreIfNeeded()
+        } else if phase != .terminated {
+            phase = next
+        }
+    }
+    private func releaseView() {
+        guard let view = heldWebView else { return }
+        refreshTask?.cancel()
+        view.stopLoading()
+        observations.removeAll()
+        if pageHandlerInstalled {
+            view.configuration.userContentController.removeScriptMessageHandler(forName: "rikuganPage", contentWorld: .page)
+            pageHandlerInstalled = false
+        }
+        scriptEngine.teardown(view.configuration.userContentController)
+        view.navigationDelegate = nil
+        view.uiDelegate = nil
+        heldWebView = nil
     }
     func syncState(extensionTitle: Bool = false, extensionURL: Bool = false, extensionLoading: Bool = false) {
         progress = webView.estimatedProgress; isLoading = webView.isLoading
@@ -535,7 +625,10 @@ extension BrowserSession {
     }
     func navigate(_ url: URL) {
         restored = true; isHome = false; pageError = nil; address = url.absoluteString
-        webView.load(URLRequest(url: url)); session?.persistTabs()
+        if phase == .terminated || phase == .suspended || heldWebView == nil { phase = .restoring }
+        webView.load(URLRequest(url: url))
+        if phase == .restoring { phase = session?.selectedID == id ? .active : .liveBackground }
+        session?.persistTabs()
     }
     func loadInput(_ input: String) {
         let engine = session?.profile.searchEngine ?? "https://www.google.com/search?q="
@@ -559,13 +652,8 @@ extension BrowserSession {
     }
     func teardown() {
         refreshTask?.cancel(); refreshTask = nil
-        webView.stopLoading(); observations.removeAll()
-        if pageHandlerInstalled {
-            webView.configuration.userContentController.removeScriptMessageHandler(forName: "rikuganPage", contentWorld: .page)
-            pageHandlerInstalled = false
-        }
-        scriptEngine.teardown(webView.configuration.userContentController)
-        webView.navigationDelegate = nil; webView.uiDelegate = nil
+        releaseView()
+        phase = .terminated
     }
 }
 
@@ -576,6 +664,10 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         syncState(extensionTitle: true, extensionURL: true, extensionLoading: true); session?.recordVisit(self); applyDecorations(); captureThumbnail(); captureIcon()
+        if !scrollApplied, scrollX != 0 || scrollY != 0 {
+            scrollApplied = true
+            webView.scrollView.setContentOffset(CGPoint(x: scrollX, y: scrollY), animated: false)
+        }
     }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { applyDecorations() }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -584,7 +676,11 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         if (error as NSError).code != NSURLErrorCancelled { pageError = error.localizedDescription }
     }
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { pageError = "页面进程已被系统回收，点击重新载入。" }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        phase = .terminated
+        pageError = "页面进程已被系统回收。JavaScript 堆、WebSocket 和未保存的页面状态无法恢复，重新载入会重新请求当前 URL。"
+        session?.model?.noteRuntime("WebContent terminated \(address)")
+    }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences,
                  decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
         let host = navigationAction.request.url?.host

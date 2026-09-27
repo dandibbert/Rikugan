@@ -1,0 +1,292 @@
+import Foundation
+
+enum TabPhase: String, Codable, Equatable {
+    case active
+    case liveBackground
+    case suspended
+    case restoring
+    case terminated
+}
+
+enum TabResidence {
+    static let liveBudget = 8
+
+    struct Slot: Equatable {
+        var id: UUID
+        var lastActiveAt: Date
+        var terminated = false
+    }
+
+    /// Active tab stays resident. The newest background tabs fill the remaining budget.
+    /// Older tabs become suspended. A suspended tab reloads its URL later; its JS heap does not survive.
+    static func assign(slots: [Slot], activeID: UUID?, budget: Int = liveBudget) -> [UUID: TabPhase] {
+        let limit = max(1, budget)
+        var result: [UUID: TabPhase] = [:]
+        let active = slots.first { $0.id == activeID } ?? slots.max { $0.lastActiveAt < $1.lastActiveAt }
+        if let active {
+            result[active.id] = active.terminated ? .terminated : .active
+        }
+        let rest = slots.filter { $0.id != active?.id }.sorted { $0.lastActiveAt > $1.lastActiveAt }
+        var live = result.isEmpty ? 0 : 1
+        for slot in rest {
+            if live < limit {
+                result[slot.id] = .liveBackground
+                live += 1
+            } else {
+                result[slot.id] = .suspended
+            }
+        }
+        return result
+    }
+}
+
+enum TabGroupEdit {
+    struct TabRef: Equatable {
+        var id: UUID
+        var groupID: UUID?
+        var isPrivate: Bool
+        var order: Int
+    }
+
+    enum Deletion: Equatable {
+        case ungroup
+        case closeTabs
+    }
+
+    static func reorder<T>(_ items: [T], from: Int, to: Int) -> [T] {
+        guard items.indices.contains(from), items.indices.contains(to), from != to else { return items }
+        var copy = items
+        let item = copy.remove(at: from)
+        copy.insert(item, at: to)
+        return copy
+    }
+
+    static func move(_ tabs: [TabRef], id: UUID, to groupID: UUID?, groups: [TabGroup]) -> [TabRef]? {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
+        if tabs[index].isPrivate { return nil }
+        if let groupID, !groups.contains(where: { $0.id == groupID }) { return nil }
+        var copy = tabs
+        copy[index].groupID = groupID
+        return copy
+    }
+
+    static func reorderWithinGroup(_ tabs: [TabRef], id: UUID, direction: Int) -> [TabRef] {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return tabs }
+        let group = tabs[index].groupID
+        let privateTab = tabs[index].isPrivate
+        let peers = tabs.enumerated().filter { $0.element.groupID == group && $0.element.isPrivate == privateTab }
+        guard let peerIndex = peers.firstIndex(where: { $0.element.id == id }) else { return tabs }
+        let destination = peerIndex + direction
+        guard peers.indices.contains(destination) else { return tabs }
+        var copy = tabs
+        let from = peers[peerIndex].offset
+        let to = peers[destination].offset
+        let item = copy.remove(at: from)
+        copy.insert(item, at: to)
+        return copy
+    }
+
+    static func delete(groups: [TabGroup], tabs: [TabRef], id: UUID, disposition: Deletion) -> (groups: [TabGroup], tabs: [TabRef]) {
+        let nextGroups = groups.filter { $0.id != id }
+        let nextTabs: [TabRef]
+        switch disposition {
+        case .ungroup:
+            nextTabs = tabs.map { tab in
+                var copy = tab
+                if copy.groupID == id { copy.groupID = nil }
+                return copy
+            }
+        case .closeTabs:
+            nextTabs = tabs.filter { $0.groupID != id }
+        }
+        return (nextGroups, nextTabs)
+    }
+}
+
+enum ExtensionRuntime {
+    enum Phase: String, Equatable {
+        case notStarted
+        case starting
+        case ready
+        case idle
+        case suspended
+        case waking
+        case failed
+    }
+
+    static func beginLoad(from phase: Phase) -> Phase {
+        switch phase {
+        case .ready, .idle, .suspended: return .waking
+        default: return .starting
+        }
+    }
+}
+
+enum ProfileArchive {
+    static let currentVersion = 3
+    static let omitted = ["passwords", "keychain", "cookies", "session secrets", "extension binaries", "font file bytes"]
+
+    enum Mode: String, Equatable { case merge, replace }
+
+    struct Document: Codable, Equatable {
+        var formatVersion = currentVersion
+        var exportedAt = Date()
+        var appVersion = "0.2.0"
+        var includesUserscriptSource = true
+        var includesExtensionBinaries = false
+        var omitted = ProfileArchive.omitted
+        var settings = BrowserSettings()
+        var siteSettings: [SiteSettings] = []
+        var tabGroups: [TabGroup] = []
+        var tabs: [SavedTab] = []
+        var activeGroupID: UUID?
+        var activeTabID: UUID?
+        var userscripts: [UserScript]?
+        var bookmarks: [PageRecord] = []
+        var bookmarkFolders: [BookmarkFolder] = []
+        var searchEngine = "https://www.google.com/search?q="
+        var searchHistory: [String] = []
+    }
+
+    struct Preview: Equatable {
+        var formatVersion: Int
+        var appVersion: String
+        var tabCount: Int
+        var groupCount: Int
+        var scriptCount: Int?
+        var includesUserscriptSource: Bool
+        var includesExtensionBinaries: Bool
+        var omitted: [String]
+    }
+
+    static func export(profile: BrowserProfile, appVersion: String, now: Date = Date()) -> Document {
+        var settings = profile.settings
+        settings.activeGroupID = profile.settings.activeGroupID
+        return Document(
+            formatVersion: currentVersion,
+            exportedAt: now,
+            appVersion: appVersion,
+            includesUserscriptSource: true,
+            includesExtensionBinaries: false,
+            omitted: omitted,
+            settings: settings,
+            siteSettings: profile.siteSettings,
+            tabGroups: profile.tabGroups,
+            tabs: profile.tabs.filter { !$0.isPrivate },
+            activeGroupID: profile.settings.activeGroupID,
+            activeTabID: profile.selectedTabID,
+            userscripts: profile.scripts,
+            bookmarks: profile.bookmarks,
+            bookmarkFolders: profile.bookmarkFolders,
+            searchEngine: profile.searchEngine,
+            searchHistory: profile.searchHistory
+        )
+    }
+
+    static func decode(_ data: Data) throws -> Document {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw RikuganError.message("备份不是 JSON 对象，当前资料没有改动。")
+        }
+        let format = (object["formatVersion"] as? Int) ?? (object["version"] as? Int)
+        guard let format else { throw RikuganError.message("备份缺少 formatVersion，已拒绝。") }
+        guard format == 2 || format == currentVersion else { throw RikuganError.message("不支持的备份格式 \(format)。") }
+        let decoder = JSONDecoder()
+        if format == 2 {
+            let legacy = try decoder.decode(PortableBackup.self, from: data)
+            return Document(
+                formatVersion: 2,
+                exportedAt: legacy.exportedAt,
+                appVersion: "0.2.0",
+                includesUserscriptSource: false,
+                includesExtensionBinaries: false,
+                omitted: omitted,
+                settings: legacy.settings,
+                siteSettings: legacy.siteSettings,
+                tabGroups: legacy.tabGroups,
+                tabs: legacy.tabs.filter { !$0.isPrivate },
+                activeGroupID: legacy.settings.activeGroupID,
+                activeTabID: legacy.selectedTabID,
+                userscripts: nil,
+                bookmarks: legacy.bookmarks,
+                bookmarkFolders: legacy.bookmarkFolders,
+                searchEngine: legacy.searchEngine,
+                searchHistory: legacy.searchHistory
+            )
+        }
+        let document = try decoder.decode(Document.self, from: data)
+        guard document.formatVersion == currentVersion else { throw RikuganError.message("不支持的备份格式 \(document.formatVersion)。") }
+        guard document.tabs.allSatisfy({ !$0.isPrivate }) else { throw RikuganError.message("备份里不能带无痕标签。") }
+        return document
+    }
+
+    static func preview(_ data: Data) throws -> Preview {
+        let document = try decode(data)
+        return Preview(
+            formatVersion: document.formatVersion,
+            appVersion: document.appVersion,
+            tabCount: document.tabs.count,
+            groupCount: document.tabGroups.count,
+            scriptCount: document.userscripts?.count,
+            includesUserscriptSource: document.includesUserscriptSource,
+            includesExtensionBinaries: document.includesExtensionBinaries,
+            omitted: document.omitted
+        )
+    }
+
+    static func apply(_ document: Document, onto profile: BrowserProfile, mode: Mode) -> BrowserProfile {
+        var next = profile
+        switch mode {
+        case .replace:
+            next.tabs = document.tabs
+            next.tabGroups = document.tabGroups
+            next.selectedTabID = document.activeTabID
+            next.settings = document.settings
+            next.settings.activeGroupID = document.activeGroupID
+            next.siteSettings = document.siteSettings
+            next.bookmarks = document.bookmarks
+            next.bookmarkFolders = document.bookmarkFolders
+            next.searchEngine = document.searchEngine
+            next.searchHistory = document.searchHistory
+            if let scripts = document.userscripts { next.scripts = scripts }
+        case .merge:
+            var groups = next.tabGroups
+            for group in document.tabGroups where !groups.contains(where: { $0.id == group.id }) { groups.append(group) }
+            next.tabGroups = groups
+            var tabs = next.tabs
+            for tab in document.tabs where !tabs.contains(where: { $0.id == tab.id }) { tabs.append(tab) }
+            next.tabs = tabs
+            var sites = next.siteSettings
+            for site in document.siteSettings where !sites.contains(where: { $0.host == site.host }) { sites.append(site) }
+            next.siteSettings = sites
+            var bookmarks = next.bookmarks
+            for page in document.bookmarks where !bookmarks.contains(where: { $0.url == page.url }) { bookmarks.append(page) }
+            next.bookmarks = bookmarks
+            var folders = next.bookmarkFolders
+            for folder in document.bookmarkFolders where !folders.contains(where: { $0.id == folder.id }) { folders.append(folder) }
+            next.bookmarkFolders = folders
+            if let scripts = document.userscripts {
+                var kept = next.scripts
+                for script in scripts where !kept.contains(where: { $0.id == script.id }) { kept.append(script) }
+                next.scripts = kept
+            }
+            if next.settings.webFontFamily.isEmpty { next.settings.webFontFamily = document.settings.webFontFamily }
+            if next.settings.headingFontFamily.isEmpty { next.settings.headingFontFamily = document.settings.headingFontFamily }
+            if next.settings.monospaceFontFamily.isEmpty { next.settings.monospaceFontFamily = document.settings.monospaceFontFamily }
+            if next.settings.activeGroupID == nil { next.settings.activeGroupID = document.activeGroupID }
+            var rules = next.settings.customRules
+            for rule in document.settings.customRules where !rules.contains(where: { $0.id == rule.id }) { rules.append(rule) }
+            next.settings.customRules = rules
+            var subs = next.settings.subscriptions
+            for item in document.settings.subscriptions where !subs.contains(where: { $0.id == item.id }) { subs.append(item) }
+            next.settings.subscriptions = subs
+            var engines = next.settings.customEngines
+            for engine in document.settings.customEngines where !engines.contains(where: { $0.id == engine.id }) { engines.append(engine) }
+            next.settings.customEngines = engines
+            var fonts = next.settings.importedFonts
+            for font in document.settings.importedFonts where !fonts.contains(where: { $0.id == font.id }) { fonts.append(font) }
+            next.settings.importedFonts = fonts
+        }
+        next.tabs.removeAll { $0.isPrivate }
+        return next
+    }
+}
