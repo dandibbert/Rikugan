@@ -74,6 +74,8 @@ enum BackupImporter {
               ["favorites", "blank", "custom"].contains(settings.homepage),
               settings.reader.fontSize.isFinite, (8...100).contains(settings.reader.fontSize),
               settings.reader.lineHeight.isFinite, (0.5...5).contains(settings.reader.lineHeight),
+              ["system", "serif", "rounded", "monospaced"].contains(settings.reader.font),
+              ["sepia", "light", "dark"].contains(settings.reader.theme),
               settings.subscriptions.allSatisfy({ URL(string: $0.url)?.scheme == "https" && validURL($0.url) }) else {
             throw RikuganError.message("备份包含不支持的设置值或订阅地址。")
         }

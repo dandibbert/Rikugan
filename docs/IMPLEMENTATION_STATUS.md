@@ -37,6 +37,8 @@ Element Picker 修正 iPhone 触摸选择：不再依赖 mousemove，pointer/tou
 
 iPad 已有 NavigationSplitView Sidebar、桌面式横向标签条和 WindowGroup 多窗口入口；标签组 UI 补上重命名/删除，删除只把组内标签移回未分组、不关闭页面。Split View / Stage Manager 的系统窗口行为仍需要真机 iPad 验收。
 
+网页触发的权限、JS alert/confirm/input、外部 App/弹窗确认、Element Picker 确认、打印以及扩展 popup/权限提示优先使用触发它的 WKWebView 所在 UIWindowScene presenter，降低 iPad 多窗口时弹到错误窗口的风险；全局设置类提示仍使用当前 key window。
+
 网页翻译会缓存本次译文映射，“显示原文/显示译文”直接恢复或重放同一批文本，不依赖重复触发相同 Translation configuration；切换目标语言会清空旧译文并真正启动新目标语言翻译。
 
 ## 0.3.0 已交付

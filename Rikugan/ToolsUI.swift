@@ -39,18 +39,26 @@ struct ReaderSheet: View {
     @State private var title = ""
     @State private var author = ""
     @State private var text = ""
+    @State private var preferences = false
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(title.isEmpty ? tab.pageTitle : title).font(.system(size: model.profile.settings.reader.fontSize + 6, weight: .bold))
+                    Text(title.isEmpty ? tab.pageTitle : title).font(readerFont(size: model.profile.settings.reader.fontSize + 6, weight: .bold))
                     if !author.isEmpty { Text(author).font(.subheadline).foregroundStyle(.secondary) }
-                    Text(text.isEmpty ? "没有识别到正文。" : text).font(.system(size: model.profile.settings.reader.fontSize)).lineSpacing(model.profile.settings.reader.fontSize * (model.profile.settings.reader.lineHeight - 1))
+                    Text(text.isEmpty ? "没有识别到正文。" : text)
+                        .font(readerFont(size: model.profile.settings.reader.fontSize))
+                        .lineSpacing(model.profile.settings.reader.fontSize * (model.profile.settings.reader.lineHeight - 1))
                 }.padding(22).frame(maxWidth: 720, alignment: .leading)
             }
+            .foregroundStyle(foreground)
             .background(theme.ignoresSafeArea())
             .navigationTitle("阅读模式")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Aa") { preferences = true }.accessibilityLabel("阅读设置") }
+                ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+            }
+            .sheet(isPresented: $preferences) { ReaderPreferencesView() }
         }.task { await load() }
     }
     private var theme: Color {
@@ -60,11 +68,63 @@ struct ReaderSheet: View {
         default: return Color(red: 0.96, green: 0.93, blue: 0.86)
         }
     }
+    private var foreground: Color { model.profile.settings.reader.theme == "dark" ? Color(white: 0.92) : Color(white: 0.12) }
+    private func readerFont(size: Double, weight: Font.Weight = .regular) -> Font {
+        let design: Font.Design
+        switch model.profile.settings.reader.font {
+        case "serif": design = .serif
+        case "rounded": design = .rounded
+        case "monospaced": design = .monospaced
+        default: design = .default
+        }
+        return .system(size: size, weight: weight, design: design)
+    }
     private func load() async {
         guard let value = await PageTools.call("RikuganPageTools.extractArticle()", in: tab.webView) as? [String: Any] else { return }
         title = value["title"] as? String ?? ""
         author = value["author"] as? String ?? ""
         text = value["text"] as? String ?? ""
+    }
+}
+
+struct ReaderPreferencesView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("字体") {
+                    Picker("样式", selection: setting(\.font)) {
+                        Text("系统").tag("system")
+                        Text("衬线").tag("serif")
+                        Text("圆体").tag("rounded")
+                        Text("等宽").tag("monospaced")
+                    }
+                    Stepper(value: setting(\.fontSize), in: 12...32, step: 1) {
+                        LabeledContent("字号", value: String(Int(model.profile.settings.reader.fontSize)))
+                    }
+                    Stepper(value: setting(\.lineHeight), in: 1.2...2.2, step: 0.1) {
+                        LabeledContent("行高", value: String(format: "%.1f", model.profile.settings.reader.lineHeight))
+                    }
+                }
+                Section("主题") {
+                    Picker("主题", selection: setting(\.theme)) {
+                        Text("米色").tag("sepia")
+                        Text("浅色").tag("light")
+                        Text("深色").tag("dark")
+                    }.pickerStyle(.segmented)
+                }
+                Text("设置保存在当前身份中，并应用到之后打开的阅读模式。正文提取不会修改原网页。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            .navigationTitle("阅读设置")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
+    }
+    private func setting<T>(_ key: WritableKeyPath<ReaderSettings, T>) -> Binding<T> {
+        Binding(get: { model.profile.settings.reader[keyPath: key] }, set: { value in
+            model.updateProfile(model.profile.id) { $0.settings.reader[keyPath: key] = value }
+        })
     }
 }
 

@@ -67,7 +67,7 @@ struct BrowserShell: View {
                             Button("重命名") { renameGroup(group) }
                             Button("删除标签组", role: .destructive) { confirmDeleteGroup(group) }
                         }
-                        ForEach(session.tabs.filter { $0.groupID == group.id }) { row($0) }
+                        ForEach(session.tabs.filter { $0.groupID == group.id && !$0.isPrivate }) { row($0) }
                     }
                     Text("未分组").font(.headline)
                     ForEach(session.tabs.filter { $0.groupID == nil && !$0.isPrivate }) { row($0) }
@@ -101,7 +101,7 @@ struct BrowserShell: View {
         Button { session.select(tab) } label: { HStack { Image(systemName: tab.isPrivate ? "eyeglasses" : "globe"); Text(tab.pageTitle).lineLimit(1) } }
     }
     private func renameGroup(_ group: TabGroup) {
-        BrowserPresentation.input(title: "重命名标签组", message: nil, initial: group.name) { value in
+        BrowserPresentation.input(title: "重命名标签组", message: "", initial: group.name) { value in
             guard let value else { return }
             let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
             if !name.isEmpty { session.renameGroup(group.id, to: name) }
@@ -254,7 +254,7 @@ struct BrowserPage: View {
             Divider()
             Button("分享", systemImage: "square.and.arrow.up") { share() }
             Button("打印", systemImage: "printer") { tab.printPage() }.disabled(tab.isHome)
-            Button("创建 PDF", systemImage: "doc.richtext") { Task { if let url = await tab.makePDF() { BrowserPresentation.share([url]) } } }.disabled(tab.isHome)
+            Button("创建 PDF", systemImage: "doc.richtext") { Task { if let url = await tab.makePDF() { BrowserPresentation.share([url], from: tab.existingWebView) } } }.disabled(tab.isHome)
             Button("定时刷新", systemImage: "timer") { tool = .refresh }
             Button("脚本菜单", systemImage: "terminal") { openPanel(.commands) }
             Button("此网站", systemImage: "slider.horizontal.3") { tool = .site }
@@ -296,7 +296,7 @@ struct BrowserPage: View {
     }
     private func share() {
         guard let url = tab.webView.url else { return }
-        BrowserPresentation.share([url])
+        BrowserPresentation.share([url], from: tab.existingWebView)
     }
 }
 
@@ -461,15 +461,17 @@ struct TabsView: View {
             Button("关闭") { session.close(tab) }
             Button("关闭其他") { session.closeOthers(keeping: tab) }
             Button("复制链接") { UIPasteboard.general.string = tab.address }
-            Menu("移到标签组") {
-                Button("未分组") { session.move(tab, to: nil) }
-                ForEach(model.profile.tabGroups) { group in Button(group.name) { session.move(tab, to: group.id) } }
+            if !tab.isPrivate {
+                Menu("移到标签组") {
+                    Button("未分组") { session.move(tab, to: nil) }
+                    ForEach(model.profile.tabGroups) { group in Button(group.name) { session.move(tab, to: group.id) } }
+                }
             }
         }
         .swipeActions { Button("关闭", role: .destructive) { session.close(tab) } }
     }
     private func renameGroup(_ group: TabGroup) {
-        BrowserPresentation.input(title: "重命名标签组", message: nil, initial: group.name) { value in
+        BrowserPresentation.input(title: "重命名标签组", message: "", initial: group.name) { value in
             guard let value else { return }
             let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
             if !name.isEmpty { session.renameGroup(group.id, to: name) }
@@ -620,7 +622,7 @@ struct LibraryView: View {
     }
     private func open(_ raw: String) { if let url = URL(string: raw) { session.activeTab?.navigate(url) }; dismiss() }
     private func renameFolder(_ item: BookmarkFolder) {
-        BrowserPresentation.input(title: "重命名文件夹", message: nil, initial: item.name) { value in
+        BrowserPresentation.input(title: "重命名文件夹", message: "", initial: item.name) { value in
             guard let value else { return }
             let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else { return }

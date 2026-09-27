@@ -156,14 +156,14 @@ extension BrowserTab: WKScriptMessageHandler {
         info.jobName = pageTitle
         controller.printInfo = info
         controller.printFormatter = webView.viewPrintFormatter()
-        guard let view = BrowserPresentation.presenter?.view else { return }
+        guard let view = BrowserPresentation.presenter(for: webView)?.view else { return }
         controller.present(from: view.bounds, in: view, animated: true, completionHandler: nil)
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "rikuganPage", let body = message.body as? [String: Any], body["action"] as? String == "picker",
               let selector = body["selector"] as? String, !selector.isEmpty, let host = webView.url?.host else { return }
         let rule = "\(host)##\(selector)"
-        BrowserPresentation.confirm(title: "隐藏这个元素？", message: rule) { [weak self] allowed in
+        BrowserPresentation.confirm(title: "隐藏这个元素？", message: rule, from: webView) { [weak self] allowed in
             guard allowed, let self, let session = self.session else { return }
             session.model?.updateProfile(session.profileID) { profile in
                 profile.settings.customRules.append(CustomBlockRule(text: rule))

@@ -47,7 +47,11 @@ final class WebsiteResourceFetcher: NSObject, URLSessionDataDelegate, URLSession
             let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
             let domainOK = host == domain || (cookie.domain.hasPrefix(".") && host.hasSuffix("." + domain))
             let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
-            return domainOK && path.hasPrefix(cookiePath)
+            let pathOK: Bool
+            if path == cookiePath { pathOK = true }
+            else if cookiePath.hasSuffix("/") { pathOK = path.hasPrefix(cookiePath) }
+            else { pathOK = path.hasPrefix(cookiePath + "/") }
+            return domainOK && pathOK
         }
         guard !matches.isEmpty else { return nil }
         return HTTPCookie.requestHeaderFields(with: matches)["Cookie"]

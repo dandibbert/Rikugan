@@ -283,8 +283,8 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
     func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] { tabs.filter { !$0.isPrivate } }
     func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { activeTab?.isPrivate == false ? activeTab : nil }
     func isPrivate(for context: WKWebExtensionContext) -> Bool { false }
-    func frame(for context: WKWebExtensionContext) -> CGRect { BrowserPresentation.presenter?.view.bounds ?? .zero }
-    func screenFrame(for context: WKWebExtensionContext) -> CGRect { UIScreen.main.bounds }
+    func frame(for context: WKWebExtensionContext) -> CGRect { activeTab?.existingWebView?.window?.bounds ?? BrowserPresentation.presenter?.view.bounds ?? .zero }
+    func screenFrame(for context: WKWebExtensionContext) -> CGRect { activeTab?.existingWebView?.window?.windowScene?.screen.bounds ?? UIScreen.main.bounds }
     func webExtensionController(_ controller: WKWebExtensionController, openWindowsFor context: WKWebExtensionContext) -> [any WKWebExtensionWindow] { [self] }
     func webExtensionController(_ controller: WKWebExtensionController, focusedWindowFor context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { self }
     func webExtensionController(_ controller: WKWebExtensionController, openNewTabUsing configuration: WKWebExtension.TabConfiguration,
@@ -302,7 +302,7 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
                                 in tab: (any WKWebExtensionTab)?, for context: WKWebExtensionContext,
                                 completionHandler: @escaping (Set<WKWebExtension.Permission>, Date?) -> Void) {
         guard isActive else { completionHandler([], nil); return }
-        BrowserPresentation.confirm(title: context.webExtension.displayName ?? "扩展授权", message: "申请额外权限：\n" + permissions.map(\.rawValue).sorted().joined(separator: "\n")) { [weak self] allowed in
+        BrowserPresentation.confirm(title: context.webExtension.displayName ?? "扩展授权", message: "申请额外权限：\n" + permissions.map(\.rawValue).sorted().joined(separator: "\n"), from: (tab as? BrowserTab)?.existingWebView) { [weak self] allowed in
             if allowed { self?.saveOptionalPermissions(context: context, permissions: permissions.map(\.rawValue)) }
             completionHandler(allowed ? permissions : [], nil)
         }
@@ -311,7 +311,7 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
                                 in tab: (any WKWebExtensionTab)?, for context: WKWebExtensionContext,
                                 completionHandler: @escaping (Set<WKWebExtension.MatchPattern>, Date?) -> Void) {
         guard isActive else { completionHandler([], nil); return }
-        BrowserPresentation.confirm(title: context.webExtension.displayName ?? "网站授权", message: "允许读取和更改以下网站的数据？\n" + patterns.map(\.string).sorted().joined(separator: "\n")) { [weak self] allowed in
+        BrowserPresentation.confirm(title: context.webExtension.displayName ?? "网站授权", message: "允许读取和更改以下网站的数据？\n" + patterns.map(\.string).sorted().joined(separator: "\n"), from: (tab as? BrowserTab)?.existingWebView) { [weak self] allowed in
             if allowed { self?.saveOptionalPermissions(context: context, patterns: patterns.map(\.string)) }
             completionHandler(allowed ? patterns : [], nil)
         }
@@ -320,12 +320,12 @@ extension BrowserSession: WKWebExtensionControllerDelegate, WKWebExtensionWindow
                                 in tab: (any WKWebExtensionTab)?, for context: WKWebExtensionContext,
                                 completionHandler: @escaping (Set<URL>, Date?) -> Void) {
         guard isActive else { completionHandler([], nil); return }
-        BrowserPresentation.confirm(title: context.webExtension.displayName ?? "网站授权", message: urls.map(\.absoluteString).sorted().joined(separator: "\n")) { allowed in completionHandler(allowed ? urls : [], nil) }
+        BrowserPresentation.confirm(title: context.webExtension.displayName ?? "网站授权", message: urls.map(\.absoluteString).sorted().joined(separator: "\n"), from: (tab as? BrowserTab)?.existingWebView) { allowed in completionHandler(allowed ? urls : [], nil) }
     }
     func webExtensionController(_ controller: WKWebExtensionController, didUpdate action: WKWebExtension.Action, forExtensionContext context: WKWebExtensionContext) { objectWillChange.send() }
     func webExtensionController(_ controller: WKWebExtensionController, presentActionPopup action: WKWebExtension.Action,
                                 for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
-        guard isActive, let presenter = BrowserPresentation.presenter, let content = action.popupViewController else { completionHandler(RikuganError.message("无法显示扩展弹窗。")); return }
+        guard isActive, let presenter = BrowserPresentation.presenter(for: activeTab?.existingWebView), let content = action.popupViewController else { completionHandler(RikuganError.message("无法显示扩展弹窗。")); return }
         let popup = PopupPresenter(action: action, content: content)
         popupPresenter = popup
         presenter.present(popup.navigation, animated: true) { completionHandler(nil) }

@@ -12,6 +12,7 @@ final class WebsiteResourceFetcherTests: XCTestCase {
         let header = WebsiteResourceFetcher.cookieHeader(for: url, cookies: [valid, wrongPath, sibling])
         XCTAssertEqual(header, "auth=yes")
         XCTAssertNil(WebsiteResourceFetcher.cookieHeader(for: URL(string: "http://sub.example.com/account/image.png")!, cookies: [valid]))
+        XCTAssertNil(WebsiteResourceFetcher.cookieHeader(for: URL(string: "https://sub.example.com/accounting/image.png")!, cookies: [valid]))
     }
 
     @MainActor func testAuthenticatedWebsiteStoreImageFetch() async throws {

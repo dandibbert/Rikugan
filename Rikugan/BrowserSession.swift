@@ -414,7 +414,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
             session?.model?.message = "已拦截外部 App 跳转。"; return
         }
         if external == "allow" { UIApplication.shared.open(url); return }
-        BrowserPresentation.confirm(title: "\(host ?? url.scheme ?? "网页") 想打开外部 App", message: url.absoluteString) { allowed in if allowed { UIApplication.shared.open(url) } }
+        BrowserPresentation.confirm(title: "\(host ?? url.scheme ?? "网页") 想打开外部 App", message: url.absoluteString, from: webView) { allowed in if allowed { UIApplication.shared.open(url) } }
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
@@ -433,7 +433,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         let popup = session.profile.site(for: host)?.popups ?? "ask"
         if popup == "block" { return nil }
         if popup == "ask" {
-            BrowserPresentation.confirm(title: host.isEmpty ? "弹窗" : host, message: "这个网页想打开新标签页。") { allowed in
+            BrowserPresentation.confirm(title: host.isEmpty ? "弹窗" : host, message: "这个网页想打开新标签页。", from: webView) { allowed in
                 if allowed, let url = navigationAction.request.url { session.addTab(url: url, activate: true, configuration: configuration, isPrivate: self.isPrivate, groupID: self.groupID) }
             }
             return nil
@@ -443,15 +443,15 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
     func webViewDidClose(_ webView: WKWebView) { session?.close(self) }
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping () -> Void) {
-        BrowserPresentation.alert(title: frame.securityOrigin.host, message: message, completion: completionHandler)
+        BrowserPresentation.alert(title: frame.securityOrigin.host, message: message, from: webView, completion: completionHandler)
     }
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping (Bool) -> Void) {
-        BrowserPresentation.confirm(title: frame.securityOrigin.host, message: message, completion: completionHandler)
+        BrowserPresentation.confirm(title: frame.securityOrigin.host, message: message, from: webView, completion: completionHandler)
     }
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
-        BrowserPresentation.input(title: frame.securityOrigin.host, message: prompt, initial: defaultText, completion: completionHandler)
+        BrowserPresentation.input(title: frame.securityOrigin.host, message: prompt, initial: defaultText, from: webView, completion: completionHandler)
     }
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
                  type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
@@ -467,7 +467,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         let current = WebPermissionPolicy.aggregate(kinds.map { session?.profile.permission(host: host, kind: $0) ?? "ask" })
         if current == "allow" { decisionHandler(.grant); return }
         if current == "block" { decisionHandler(.deny); return }
-        BrowserPresentation.choice(title: host, message: "\(title)权限") { [weak self] choice in
+        BrowserPresentation.choice(title: host, message: "\(title)权限", from: existingWebView) { [weak self] choice in
             if choice != "ask" {
                 self?.session?.model?.updateProfile(self?.session?.profileID ?? UUID()) { profile in
                     let normalizedHost = host.lowercased()
@@ -483,43 +483,44 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
 }
 
 @MainActor enum BrowserPresentation {
-    static var presenter: UIViewController? {
-        let root = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    static func presenter(for sourceView: UIView?) -> UIViewController? {
+        let root = sourceView?.window?.rootViewController ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows).first(where: \.isKeyWindow)?.rootViewController
         var top = root
         while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
         return top
     }
-    static func alert(title: String, message: String, completion: @escaping () -> Void) {
-        guard let presenter, !(presenter is UIAlertController) else { completion(); return }
+    static var presenter: UIViewController? { presenter(for: nil) }
+    static func alert(title: String, message: String, from sourceView: UIView? = nil, completion: @escaping () -> Void) {
+        guard let presenter = presenter(for: sourceView), !(presenter is UIAlertController) else { completion(); return }
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "好", style: .default) { _ in completion() })
         presenter.present(alert, animated: true)
     }
-    static func confirm(title: String, message: String, completion: @escaping (Bool) -> Void) {
-        guard let presenter, !(presenter is UIAlertController) else { completion(false); return }
+    static func confirm(title: String, message: String, from sourceView: UIView? = nil, completion: @escaping (Bool) -> Void) {
+        guard let presenter = presenter(for: sourceView), !(presenter is UIAlertController) else { completion(false); return }
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completion(false) })
         alert.addAction(UIAlertAction(title: "允许", style: .default) { _ in completion(true) })
         presenter.present(alert, animated: true)
     }
-    static func choice(title: String, message: String, completion: @escaping (String) -> Void) {
-        guard let presenter, !(presenter is UIAlertController) else { completion("ask"); return }
+    static func choice(title: String, message: String, from sourceView: UIView? = nil, completion: @escaping (String) -> Void) {
+        guard let presenter = presenter(for: sourceView), !(presenter is UIAlertController) else { completion("ask"); return }
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "允许", style: .default) { _ in completion("allow") })
         alert.addAction(UIAlertAction(title: "禁止", style: .destructive) { _ in completion("block") })
         alert.addAction(UIAlertAction(title: "仅此一次询问", style: .cancel) { _ in completion("ask") })
         presenter.present(alert, animated: true)
     }
-    static func share(_ items: [Any]) {
-        guard let presenter else { return }
+    static func share(_ items: [Any], from sourceView: UIView? = nil) {
+        guard let presenter = presenter(for: sourceView) else { return }
         let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
         sheet.popoverPresentationController?.sourceView = presenter.view
         sheet.popoverPresentationController?.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.maxY - 60, width: 1, height: 1)
         presenter.present(sheet, animated: true)
     }
-    static func input(title: String, message: String, initial: String?, completion: @escaping (String?) -> Void) {
-        guard let presenter, !(presenter is UIAlertController) else { completion(nil); return }
+    static func input(title: String, message: String, initial: String?, from sourceView: UIView? = nil, completion: @escaping (String?) -> Void) {
+        guard let presenter = presenter(for: sourceView), !(presenter is UIAlertController) else { completion(nil); return }
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addTextField { $0.text = initial }
         alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completion(nil) })
