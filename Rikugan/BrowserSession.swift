@@ -40,8 +40,8 @@ import WebKit
         if let selected = tabs.first(where: { $0.id == selectedID && $0.windowID == nil }) { return selected }
         return tabs.first { $0.windowID == nil }
     }
-    static func shouldPersistTab(isPrivate: Bool, windowID: UUID?) -> Bool { !isPrivate && windowID == nil }
-    static func faviconKey(_ host: String) -> String {
+    nonisolated static func shouldPersistTab(isPrivate: Bool, windowID: UUID?) -> Bool { !isPrivate && windowID == nil }
+    nonisolated static func faviconKey(_ host: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-"))
         let mapped = host.lowercased().unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
         return String(mapped.prefix(180))

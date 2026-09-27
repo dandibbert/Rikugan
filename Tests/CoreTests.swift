@@ -478,10 +478,10 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(try loaded.get(), ["1+1", "body{color:red}"])
         let missingFile = ExtensionBridge.loadSources(["missing.js"], packages: [(url: directory, directory: true)], strict: true)
         guard case .failure(let missingMessage) = missingFile else { return XCTFail("missing file should fail") }
-        XCTAssertTrue(missingMessage.contains("missing file"))
+        XCTAssertTrue(missingMessage.message.contains("missing file"))
         let invalidFile = ExtensionBridge.loadSources(["../secret.js"], packages: [(url: directory, directory: true)], strict: true)
         guard case .failure(let invalidMessage) = invalidFile else { return XCTFail("invalid path should fail") }
-        XCTAssertTrue(invalidMessage.contains("invalid file"))
+        XCTAssertTrue(invalidMessage.message.contains("invalid file"))
         let reply = ExtensionBridge.pageReply(id: "rg1", result: ["rikugan-demo": ["title": "Rikugan", "message": "通知已创建"]], error: nil)
         XCTAssertTrue(reply.contains("通知已创建"))
         XCTAssertTrue(reply.contains("__rgExtHostDone"))
