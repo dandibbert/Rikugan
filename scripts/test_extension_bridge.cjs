@@ -681,6 +681,7 @@ function load(extra) {
   assert.equal(backgroundSource.includes('/* rikugan-extension-bridge */'), false);
   assert.equal(backgroundSource.includes('setInterval'), false);
   assert.equal(backgroundSource.includes('removeListener'), false);
+  assert.ok(backgroundSource.includes('function registerRuntimeListener'));
   function webkit18Send(state, message) {
     if (ExtensionRuntimeDrop(state)) return undefined;
     let reply;
@@ -805,13 +806,17 @@ function load(extra) {
   assert.equal(documentReply.visits, 1);
 
   const demoManifest = JSON.parse(fs.readFileSync('Examples/WebExtension/manifest.json', 'utf8'));
-  assert.equal(demoManifest.background.type, 'module');
-  assert.deepEqual(demoManifest.background.scripts, ['background.js']);
+  assert.equal(demoManifest.background.page, 'background.html');
   assert.equal(demoManifest.background.persistent, false);
-  assert.equal(demoManifest.background.preferred_environment, undefined);
+  assert.equal(demoManifest.background.scripts, undefined);
+  assert.equal(demoManifest.background.type, undefined);
   assert.equal(demoManifest.background.service_worker, undefined);
   assert.deepEqual(backgroundFilesPatched(demoManifest), []);
   assert.deepEqual(backgroundFilesPatched({ background: { service_worker: 'background.js' } }), ['background.js']);
+  assert.deepEqual(backgroundFilesPatched({ background: { scripts: ['background.js'], type: 'module', persistent: false } }), []);
+  const backgroundPage = fs.readFileSync('Examples/WebExtension/background.html', 'utf8');
+  assert.match(backgroundPage, /<script src="background.js"><\/script>/);
+  assert.equal(backgroundPage.includes('type="module"'), false);
 
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

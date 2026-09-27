@@ -172,9 +172,9 @@ extension BrowserSession {
     /// Waits until background content has loaded, without parking the install alert forever.
     /// Xcode 16.4 does not call `loadBackgroundContent`'s completion when a service worker
     /// fails to register. A non-persistent document background finishes through
-    /// `didFinishDocumentLoad`. The demo matches `WKWebExtensionAPIRuntime.SendMessageFromContentScript`:
-    /// `background.scripts` with `type: module`, and the module file is left unpatched so
-    /// its single `onMessage` listener is the one that test registers.
+    /// `didFinishDocumentLoad`. The demo background is an unpatched classic script in
+    /// `background.html`. The API test's generated `type=module` page still finished
+    /// document load here without a listener the content script could call.
     @available(iOS 18.4, *)
     @discardableResult
     func warmExtensionBackground(id: UUID) async -> Bool {

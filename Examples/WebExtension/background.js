@@ -96,11 +96,25 @@ function onRuntimeMessage(message, sender, sendResponse) {
   }
   return Promise.resolve(payload);
 }
-// Tools/TestWebKitAPI WKWebExtensionAPIRuntime.SendMessageFromContentScript
-// registers this listener once, from an unpatched type=module document
-// background, and the content script awaits browser.runtime.sendMessage.
-// Removing and re-adding the same function on a timer clears
-// m_backgroundContentEventListeners whenever the next add is dropped, and a
-// 40s republish still left the content-script reply undefined.
-const messageEvents = api && api.runtime && api.runtime.onMessage;
-if (messageEvents && typeof messageEvents.addListener === 'function') messageEvents.addListener(onRuntimeMessage);
+// The API test loads `<script type="module" src="background.js">` from its
+// generated background page. This app's copy of that page still finished
+// didFinishDocumentLoad (the install alert appeared) and the content script
+// still got an empty sendMessage reply, so that module did not leave a
+// listener. A classic script in background.html is not a CORS module fetch.
+// Register once, after the parser has the document, without clearing it.
+function registerRuntimeListener() {
+  const events = api && api.runtime && api.runtime.onMessage;
+  if (!events || typeof events.addListener !== 'function') return false;
+  events.addListener(onRuntimeMessage);
+  return true;
+}
+function bootBackground() {
+  if (registerRuntimeListener()) return;
+  let reloaded = false;
+  try { reloaded = sessionStorage.getItem('rikugan-bg-reload') === '1'; } catch (error) {}
+  if (reloaded || typeof location === 'undefined' || typeof location.reload !== 'function') return;
+  try { sessionStorage.setItem('rikugan-bg-reload', '1'); } catch (error) {}
+  location.reload();
+}
+if (typeof document !== 'undefined' && document.readyState === 'loading' && typeof document.addEventListener === 'function') document.addEventListener('DOMContentLoaded', bootBackground);
+else bootBackground();

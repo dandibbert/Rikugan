@@ -5,7 +5,7 @@
   "description": "Tests content scripts, background messaging, storage.local, tabs.query, scripting and notifications.",
   "permissions": ["storage", "tabs", "scripting", "notifications"],
   "host_permissions": ["https://example.com/*", "http://127.0.0.1/*"],
-  "background": {"scripts": ["background.js"], "type": "module", "persistent": false},
+  "background": {"page": "background.html", "persistent": false},
   "action": {"default_title": "Rikugan Demo", "default_popup": "popup.html"},
   "content_scripts": [{"matches": ["https://example.com/*", "http://127.0.0.1/*"], "js": ["content.js"], "run_at": "document_end"}]
 }
