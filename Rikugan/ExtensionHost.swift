@@ -206,7 +206,7 @@ extension BrowserSession {
             context.loadBackgroundContent { error in
                 let message = error?.localizedDescription
                 Task { @MainActor in
-                    if error == nil { self?.attachBackgroundExtensionHost(context) }
+                    if error == nil { self.attachBackgroundExtensionHost(context) }
                     finish(error == nil, message)
                 }
             }
