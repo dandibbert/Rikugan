@@ -92,7 +92,7 @@ App 内「设置 → 兼容性矩阵」列出每个 `chrome.*` 命名空间的 S
 
 - 支持 `@match @include @exclude @exclude-match @run-at(document-start/body/end/idle) @grant @connect @require @resource @icon @downloadURL @updateURL @noframes @inject-into`。
 - GM API：见 App 内矩阵。`GM_getValue` 等使用每个脚本独立的原生存储，不使用网页 localStorage；`GM_addValueChangeListener` 支持跨标签页。
-- `@grant none`、`@inject-into page` 或声明 `unsafeWindow` 的脚本运行在页面环境（`unsafeWindow` 完整可用）；其他脚本运行在独立的隔离环境，其中 `unsafeWindow` 看不到页面 JS 全局变量（已在矩阵中标为 Partial）。
+- **运行环境（安全边界，见 [docs/SECURITY.md](docs/SECURITY.md)）**：只使用“页面安全”授权（`none`、`unsafeWindow`、`GM_info`、`GM_log`、`GM_addStyle`、`GM_addElement`、`window.onurlchange`）的脚本，以及 `@inject-into page` 的脚本，运行在页面环境，`unsafeWindow` 就是真实页面窗口，但**没有任何特权桥**：不注入凭据、不注入存储值，`GM_setValue` / `GM_xmlhttpRequest` / `GM_openInTab` 等会抛出明确错误（脚本详情页有橙色警告）。其他声明了特权 GM API 的脚本一律运行在各自的隔离环境（WKContentWorld），特权调用由 WebKit 报告的内容环境鉴权，页面 JS 无法伪造；在隔离环境中 `unsafeWindow` 看不到页面 JS 全局变量（矩阵中标为 Partial）。
 - `GM_xmlhttpRequest` 在原生侧执行并逐跳检查 `@connect`；默认携带该网站 Cookie（`anonymous: true` 可关闭）。
 
 ## 自检

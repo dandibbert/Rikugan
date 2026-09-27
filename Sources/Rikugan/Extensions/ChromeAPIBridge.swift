@@ -114,10 +114,10 @@ import UserNotifications
             return nil
         case "runtime._reportError":
             let text = String((argsDict["message"] as? String ?? "").prefix(300))
-            runtime.recordRuntimeError(ext, "[\(ctx)] \(text)")
+            runtime.recordRuntimeError(ext, "[\(ctx)] \(text)", context: ctx)
             return nil
         case "runtime._reportUnsupported":
-            runtime.recordUnsupported(ext, argsDict["api"] as? String ?? "?")
+            runtime.recordUnsupported(ext, argsDict["api"] as? String ?? "?", context: ctx)
             return nil
         case "runtime._readResource":
             let path = argsDict["path"] as? String ?? ""
@@ -720,6 +720,7 @@ import UserNotifications
         for target in targets { deliverPortEvent(target, portID: state.id, type: "disconnect", message: nil) }
     }
 
+    func portCount(extID: String) -> Int { ports.values.filter { $0.extID == extID && $0.connected }.count }
     func hasOpenPorts(extID: String) -> Bool { ports.values.contains { $0.extID == extID && $0.connected } }
     var openPortCount: Int { ports.count }
 

@@ -66,8 +66,15 @@ import WebKit
             ctx.record("页面伪造 \(key) 被拒绝", outcome.hasPrefix("rejected:"), String(outcome.prefix(160)))
         }
         let globals = page["suspiciousGlobals"] ?? ""
-        let leakedGlobals = globals.split(separator: ",").map(String.init).filter { $0.range(of: "__rikuganGM|token", options: [.regularExpression, .caseInsensitive]) != nil }
-        ctx.record("页面全局中没有 GM 分发函数或凭据", leakedGlobals.isEmpty, "suspicious=\(globals.isEmpty ? "none" : globals)")
+        // Dispatch functions or anything credential-like; native interfaces (DOMTokenList) excluded.
+        let nativeInterfaces: Set<String> = ["DOMTokenList"]
+        let leakedGlobals = globals.split(separator: ",").map(String.init).filter {
+            !nativeInterfaces.contains($0) && $0.range(of: "__rikuganGM|token|secret|credential", options: [.regularExpression, .caseInsensitive]) != nil
+        }
+        ctx.record("页面全局中没有 GM 分发函数或凭据", leakedGlobals.isEmpty, "leaked=\(leakedGlobals) all=\(globals.isEmpty ? "none" : globals)")
+        let markers = page["runMarkers"] ?? "missing"
+        ctx.record("页面可见的脚本运行标记只含 true（不含凭据 / 值）",
+                   markers == "none" || markers.split(separator: ",").allSatisfy { $0 == "boolean:true" }, markers)
         ctx.record("页面拦截到的 GM 桥消息数为 0（页面环境脚本不发任何特权消息）", page["capturedGM"] == "0", page["capturedGM"] ?? "nil")
         ctx.record("页面 HTML 中不含脚本存储值", page["htmlHasSecret"] == "false", page["htmlHasSecret"] ?? "nil")
         ctx.record("页面拿不到受害脚本的分发函数", page["dispatchFunction"] == "undefined", page["dispatchFunction"] ?? "nil")
@@ -108,6 +115,18 @@ import WebKit
         let rejected = SecurityLog.shared.totalRejected - rejectedBefore
         ctx.record("拒绝均有记录（SecurityLog）", rejected >= mustReject.count, "\(rejected) rejections logged")
         ctx.extras["securityLog"] = SecurityLog.shared.entries.suffix(40).map(\.message)
+
+        // Diagnostics export privacy: the bug-report file carries the rejection count but none of the
+        // secrets, stored values or full URLs present in this run.
+        ErrorLog.shared.record("probe https://user:pw@private.example/path/secret-page?token=abc", source: "security-suite")
+        let exported = (try? DiagnosticsReport.collect().json()).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let leaks = ["victim-secret", "a-secret", "secret-page", "token=abc", "user:pw", "/sec/index.html"].filter { exported.contains($0) }
+        ctx.record("诊断导出不含存储值 / 秘密 / 完整网址", !exported.isEmpty && leaks.isEmpty, leaks.isEmpty ? "\(exported.count) bytes" : "leaked: \(leaks)")
+        let required = ["\"backgroundRuntime\"", "\"security\"", "\"featureFlags\"", "\"compatibilityMatrixVersion\"", "\"manualTests\"", "\"gitCommit\"", "\"privacy\"", "not CI results"]
+        let missing = required.filter { !exported.contains($0) }
+        ctx.record("诊断导出包含必需字段（后台、安全、开关、矩阵版本、人工清单、commit、隐私声明）", missing.isEmpty, missing.isEmpty ? "ok" : "missing: \(missing)")
+        ctx.record("诊断导出中的安全拒绝计数与日志一致", exported.contains("\"rejectedPrivilegedCalls\" : \(SecurityLog.shared.totalRejected)"))
+        ctx.record("诊断导出中的网址只保留域名", exported.contains("https://private.example/…"))
 
         // Legitimate paths still work (the fixes did not break the victims).
         if let command = tab.menuCommands.first(where: { $0.title == "Victim command" }) {

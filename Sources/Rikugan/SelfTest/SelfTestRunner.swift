@@ -21,7 +21,17 @@ import WebKit
     /// Per-invocation nonce from the test runner (`-RikuganRunID`); echoed in the summary and the
     /// JSON report so a stale or foreign result can never be mistaken for this run's result.
     static var runID = "manual-" + UUID().uuidString
-    static let processLaunchedAt = Date()
+    /// When this process actually started, from the kernel (not a lazily initialised `Date()`,
+    /// which would be taken at first use). Lets CI detect a crash + relaunch between the start of
+    /// a suite and its report.
+    static let processLaunchedAt: Date = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return Date() }
+        let start = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000)
+    }()
 
     static func configureFromLaunchArguments() {
         let args = ProcessInfo.processInfo.arguments
@@ -107,7 +117,11 @@ import WebKit
         services.adBlock.addCustomRule("127.0.0.1##.rikugan-ad-test")
         let bgReady = await ctx.waitUntil(15) { ext.background?.isReady == true }
         ctx.record("后台 Service Worker 启动", bgReady, ext.background?.diagnostics ?? "no background host")
-        _ = await ctx.waitUntil(20) { !services.adBlock.isCompiling }
+        // The element-hiding rule is applied from the compiled cosmetic index at navigation time:
+        // wait for that exact condition (not merely "not compiling"), bounded, and report it.
+        let cosmeticReady = await ctx.waitUntil(60) {
+            !services.adBlock.isCompiling && services.adBlock.cosmeticRules(forHost: "127.0.0.1").selectors.contains(".rikugan-ad-test")
+        }
         let dnrReady = await ctx.waitForDNRCompile(after: installStarted)
         ctx.record("DNR 规则编译", dnrReady && !profile.extensions.dnrLists.isEmpty, "\(profile.extensions.dnrStatus.convertedRules) rules")
 
@@ -148,7 +162,8 @@ import WebKit
         check("data-gmxhr", "GM_xmlhttpRequest")
         ctx.record("GM_addStyle", snapshot["gm"] == "rgb(4, 5, 6)", snapshot["gm"] ?? "")
         check("data-unsafe-window", "unsafeWindow")
-        ctx.record("AdBlock 元素隐藏规则", snapshot["ad"] == "true", snapshot["ad"] ?? "")
+        ctx.record("AdBlock 元素隐藏规则", snapshot["ad"] == "true",
+                   "hidden=\(snapshot["ad"] ?? "nil") ruleIndexedBeforeOpen=\(cosmeticReady) compiling=\(services.adBlock.isCompiling) cosmetic=\(services.adBlock.stats.cosmetic)")
         // Menu command.
         if let command = tab.menuCommands.first {
             tab.runMenuCommand(command)

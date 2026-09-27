@@ -53,6 +53,10 @@ struct SettingsView: View {
                     NavigationLink { SelfTestView() } label: { Label("自检（扩展 / 脚本 / 拦截）", systemImage: "stethoscope") }
                     NavigationLink { AboutView() } label: { Label("关于 Rikugan", systemImage: "info.circle") }
                 }
+                Section {
+                    Text(BuildInfo.line).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                        .accessibilityIdentifier("build-info")
+                }
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
@@ -418,6 +422,11 @@ struct DeveloperSettingsView: View {
                 Toggle("应用内控制台（实验）", isOn: $services.prefs.consoleCaptureEnabled)
                 Toggle("位置权限按网站询问", isOn: $services.prefs.geolocationShim)
             } footer: { Text("应用内检查器可查看 console 输出、执行 JavaScript、查看 DOM 与资源。新设置在下次加载页面时生效。") }
+            Section("测试与调试") {
+                NavigationLink { BackgroundRuntimesView() } label: { Label("扩展后台运行时", systemImage: "gearshape.2") }
+                NavigationLink { ManualTestChecklistView() } label: { Label("人工测试清单", systemImage: "checklist") }
+                NavigationLink { SecurityLogView() } label: { Label("安全拒绝记录", systemImage: "lock.shield") }
+            }
             Section {
                 Toggle("在设置中显示“诊断”页", isOn: $services.prefs.showDiagnostics)
                 NavigationLink { DiagnosticsView() } label: { Label("打开诊断", systemImage: "waveform.path.ecg") }

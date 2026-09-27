@@ -136,9 +136,9 @@ jobs:
         include:
           - { suite: core, test: testSelfTestSuitePasses, min: 28 }
           - { suite: pageworld, test: testPageWorldSuite, min: 40 }
-          - { suite: security, test: testSecuritySuite, min: 40 }
+          - { suite: security, test: testSecuritySuite, min: 48 }
           - { suite: fonts, test: testFontSuite, min: 18 }
-          - { suite: dnr, test: testDNRSuite, min: 18 }
+          - { suite: dnr, test: testDNRSuite, min: 26 }
           - { suite: lifecycle, test: testTabLifecycleSuite, min: 22 }
           - { suite: stress, test: testBackgroundStressSuite, min: 33 }
           - { suite: archive, test: testArchiveRoundTripSuite, min: 14 }
@@ -169,10 +169,19 @@ jobs:
           compat-dir: compat-packages
           min-checks: "3"
           allow-fail: "true"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compat-sources
+          path: |
+            compat-packages/sources.json
+            compat-packages/violentmonkey-mv3-probe.json
+          if-no-files-found: warn
+          retention-days: 30
 
   release:
     name: Publish prerelease
-    needs: [core-tests, ipa, simtests]
+    needs: [core-tests, ipa, simtests, compat]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -181,11 +190,52 @@ jobs:
         with:
           name: Rikugan-unsigned-ipa
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: selftest-compat
+          path: compat-artifact
+      - uses: actions/download-artifact@v4
+        with:
+          name: compat-sources
+          path: compat-artifact/sources
+      - name: Compatibility report, build metadata, instructions
+        run: |
+          TAG="v${APP_VERSION}-build.${GITHUB_RUN_NUMBER}"
+          REPORT=$(find compat-artifact -name compat.json | head -1)
+          {
+            echo "# Rikugan ${TAG} — real extension compatibility (iOS Simulator, CI)"
+            echo
+            echo "Commit \`${GITHUB_SHA}\` · run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "These are simulator observations, not device results. See docs/COMPATIBILITY.md for the interpretation."
+            echo
+            python3 scripts/selftest_report.py "$(dirname "$REPORT")"
+            if [ -f compat-artifact/sources/violentmonkey-mv3-probe.json ]; then
+              echo; echo "## Violentmonkey MV3 availability probe"; echo; echo '```json'
+              cat compat-artifact/sources/violentmonkey-mv3-probe.json; echo '```'
+            fi
+          } > dist/compatibility-report.md
+          cp docs/MANUAL_TESTING.md dist/MANUAL_TESTING.md
+          python3 - <<PY
+          import json, os, hashlib
+          ipa = [f for f in os.listdir("dist") if f.endswith(".ipa")][0]
+          meta = {
+              "app": "Rikugan", "version": os.environ["APP_VERSION"], "build": int(os.environ["GITHUB_RUN_NUMBER"]),
+              "tag": "${TAG}", "commit": os.environ["GITHUB_SHA"], "commitShort": os.environ["GITHUB_SHA"][:12],
+              "branch": os.environ["GITHUB_REF_NAME"],
+              "run": f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
+              "ipa": ipa, "ipaSha256": hashlib.sha256(open(f"dist/{ipa}", "rb").read()).hexdigest(),
+              "signed": False,
+              "ciResults": "Swift/JS unit tests, verifier tests and simulator suites core, pageworld, security, fonts, dnr, lifecycle, stress, archive passed in this run (simulator only; each result verified against a per-run nonce).",
+              "installedCommitCheck": "Settings → bottom line shows 'commit <12 chars>'; must equal commitShort.",
+          }
+          json.dump(meta, open("dist/build-metadata.json", "w"), indent=2)
+          PY
+          cat dist/build-metadata.json
       - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${APP_VERSION}-build.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" dist/*.ipa dist/SHA256SUMS.txt \
+          gh release create "$TAG" dist/*.ipa dist/SHA256SUMS.txt dist/build-metadata.json dist/compatibility-report.md dist/MANUAL_TESTING.md \
             --title "Rikugan ${APP_VERSION} (build ${GITHUB_RUN_NUMBER}, ${GITHUB_REF_NAME})" \
             --target "$GITHUB_SHA" --prerelease --notes-file docs/RELEASE_NOTES.md

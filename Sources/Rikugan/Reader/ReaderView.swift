@@ -121,7 +121,7 @@ struct ReaderView: View {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = RikuganWebView(frame: .zero, configuration: configuration, purpose: "reader")
         super.init()
         webView.navigationDelegate = self
         webView.isOpaque = false

@@ -20,10 +20,11 @@ import Foundation
 
     func clear() { entries.removeAll() }
 
-    /// Reduces http(s) URLs to scheme + host so paths / query strings never reach the log.
+    /// Reduces http(s)/ws(s) URLs to scheme + host (credentials in the authority dropped) so paths,
+    /// query strings and user:password never reach the log.
     nonisolated static func scrub(_ text: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"(https?://[^/\s"'?#]+)[^\s"']*"#) else { return text }
-        return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1/…")
+        guard let regex = try? NSRegularExpression(pattern: #"((?:https?|wss?)://)(?:[^/\s"'?#@]*@)?([^/\s"'?#]+)[^\s"']*"#, options: [.caseInsensitive]) else { return text }
+        return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1$2/…")
     }
 }
 

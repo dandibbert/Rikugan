@@ -1,21 +1,29 @@
 import SwiftUI
 import WebKit
+import CryptoKit
 
-/// Snapshot of the app's runtime state for the Diagnostics page and its export.
-/// Contains no page content, cookies, passwords, userscript source or storage values; URLs are
-/// reduced to their host.
+/// Snapshot of the app's runtime state for the Diagnostics page and its single-file bug-report
+/// export. Contains no passwords, cookies, Keychain items, page or form contents, userscript
+/// source or stored values, extension storage, or archive contents; URLs are reduced to their host.
 struct DiagnosticsReport: Codable {
     struct Build: Codable { var appVersion: String; var gitCommit: String; var buildDate: String; var device: String; var os: String; var isSimulator: Bool }
     struct Tabs: Codable { var windows: Int; var tabs: Int; var active: Int; var liveBackground: Int; var suspended: Int; var restoring: Int; var terminated: Int
         var liveWebViews: Int; var registeredWebViews: Int; var groups: Int }
     struct ExtensionInfo: Codable { var id: String; var name: String; var version: String; var enabled: Bool; var manifestVersion: Int
-        var background: String?; var backgroundState: String?; var backgroundDetail: String?; var unsupportedCalls: [String: Int] }
+        var background: String?; var backgroundState: String?; var backgroundDetail: String?; var unsupportedCalls: [String: Int]
+        var recentErrors: [String] = [] }
     struct ScriptInfo: Codable { var name: String; var version: String; var enabled: Bool; var world: String; var grants: [String] }
     struct DNR: Codable { var probed: Bool; var redirect: Bool; var modifyHeaders: Bool; var redirectCompiles: Bool; var modifyHeadersCompiles: Bool; var convertedRules: Int; var lists: Int; var skipped: [String: [String]] }
     struct Environment: Codable { var appGroup: Bool; var shareExtensionEmbedded: Bool; var webInspector: Bool; var profile: String; var profileCount: Int }
     struct APISummary: Codable { var namespaces: Int; var supported: Int; var partial: Int; var unsupported: Int; var methodsImplemented: Int; var methodsMissing: Int }
 
+    struct Security: Codable { var rejectedPrivilegedCalls: Int; var recent: [SecurityLog.Entry] }
+
+    static let privacyStatement = "Contains: build, OS/device model, tab and background-runtime counters, extension and userscript names/versions/grants, feature flags, compatibility-matrix version, DNR skipped-rule summary, recent runtime/security log lines (URLs reduced to domains), manual test statuses. Does NOT contain: passwords, cookies, Keychain secrets, page or form contents, browsing URLs beyond domains, userscript source or GM stored values, extension storage, or archive contents."
+
+    var reportFormat = "rikugan-diagnostics/2"
     var generatedAt = Date()
+    var privacy = DiagnosticsReport.privacyStatement
     var build: Build
     var environment: Environment
     var tabs: Tabs
@@ -24,6 +32,12 @@ struct DiagnosticsReport: Codable {
     var chromeAPI: APISummary
     var dnr: DNR
     var errors: [ErrorLog.Entry]
+    var backgroundRuntime: BackgroundRuntimeSummary
+    var security: Security
+    var featureFlags: [String: String]
+    var compatibilityMatrixVersion: String
+    /// Entered by a person on the Manual Test Checklist page — not CI results.
+    var manualTests: ManualTestStore.Export
 
     @MainActor static func collect() -> DiagnosticsReport {
         let services = AppServices.shared
@@ -57,7 +71,8 @@ struct DiagnosticsReport: Codable {
                                  background: loaded?.manifest.backgroundKind,
                                  backgroundState: loaded?.background?.state.rawValue,
                                  backgroundDetail: loaded?.background?.diagnostics,
-                                 unsupportedCalls: runtime.unsupportedCalls[record.id] ?? [:])
+                                 unsupportedCalls: runtime.unsupportedCalls[record.id] ?? [:],
+                                 recentErrors: record.lastErrors.suffix(5).map(ErrorLog.scrub))
         }
         let scripts = services.profile.userscripts.scripts.map {
             ScriptInfo(name: $0.metadata.name, version: $0.metadata.version, enabled: $0.enabled,
@@ -80,13 +95,36 @@ struct DiagnosticsReport: Codable {
             shareExtensionEmbedded: plugins.contains { $0.hasSuffix(".appex") },
             webInspector: services.prefs.webInspectorEnabled,
             profile: services.profile.info.name, profileCount: services.profiles.profiles.count)
+        let security = Security(rejectedPrivilegedCalls: SecurityLog.shared.totalRejected, recent: Array(SecurityLog.shared.entries.suffix(30)))
         return DiagnosticsReport(build: build, environment: environment, tabs: tabs, extensions: extensions, userscripts: scripts,
-                                 chromeAPI: api, dnr: dnr, errors: ErrorLog.shared.entries)
+                                 chromeAPI: api, dnr: dnr, errors: ErrorLog.shared.entries,
+                                 backgroundRuntime: BackgroundRuntimeSummary.collect(), security: security,
+                                 featureFlags: featureFlags(services.prefs), compatibilityMatrixVersion: matrixVersion(),
+                                 manualTests: ManualTestStore.shared.export())
+    }
+
+    /// Non-sensitive switches only (no API keys, server URLs, homepage or search templates).
+    static func featureFlags(_ p: Preferences) -> [String: String] {
+        ["adBlockEnabled": "\(p.adBlockEnabled)", "pageDarkMode": p.pageDarkMode.rawValue, "webFontEnabled": "\(p.webFontEnabled)",
+         "mediaSnifferEnabled": "\(p.mediaSnifferEnabled)", "consoleCaptureEnabled": "\(p.consoleCaptureEnabled)",
+         "webInspectorEnabled": "\(p.webInspectorEnabled)", "geolocationShim": "\(p.geolocationShim)", "blockPopups": "\(p.blockPopups)",
+         "preventAppStoreRedirect": "\(p.preventAppStoreRedirect)", "preventExternalAppRedirect": "\(p.preventExternalAppRedirect)",
+         "restoreTabs": "\(p.restoreTabs)", "autofillEnabled": "\(p.autofillEnabled)", "defaultDesktopMode": "\(p.defaultDesktopMode)",
+         "translationProvider": p.translationProvider, "maxLiveBackgroundTabs": "\(p.maxLiveBackgroundTabs)",
+         "backgroundIdleSeconds": "\(p.backgroundIdleSeconds)", "showDiagnostics": "\(p.showDiagnostics)"]
+    }
+
+    /// Content hash of the bundled chrome.* matrix plus the GM matrix size — identifies exactly
+    /// which compatibility claims this build ships.
+    static func matrixVersion() -> String {
+        let data = Bundle.main.url(forResource: "chrome-api-matrix", withExtension: "json").flatMap { try? Data(contentsOf: $0) } ?? Data()
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined().prefix(12)
+        return "chrome-api-matrix sha256:\(digest) (\(ChromeAPIMatrix.entries.count) namespaces); GM matrix \(GMCompatibility.table.count) rows"
     }
 
     func json() throws -> Data {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
         return try encoder.encode(self)
     }
@@ -120,6 +158,23 @@ struct DiagnosticsView: View {
                 row("存活 WKWebView（全部用途）", "\(report.tabs.liveWebViews)")
                 row("已注册的标签页 WebView", "\(report.tabs.registeredWebViews)")
             }
+            Section {
+                row("已安装 / 运行中 / 已挂起（驻留）", "\(report.backgroundRuntime.installedExtensions) / \(report.backgroundRuntime.runningBackgrounds) / \(report.backgroundRuntime.parkedBackgrounds)")
+                row("浏览器标签页 WebView / WKWebView 总数", "\(report.backgroundRuntime.liveBrowserWebViews) / \(report.backgroundRuntime.totalWKWebViews)")
+                ForEach(report.backgroundRuntime.extensions.filter(\.hasBackground), id: \.id) { ext in
+                    Text("\(ext.name)：\(ext.state)\(ext.parked ? "（驻留）" : "") · 唤醒 \(ext.wakeCount) · 冷启动 \(ext.coldStartCount) · 卡住恢复 \(ext.stuckStartRecoveries) · 端口 \(ext.activePorts)")
+                        .font(.caption2.monospaced())
+                }
+                NavigationLink { BackgroundRuntimesView() } label: { Label("后台运行时控制", systemImage: "gearshape.2") }
+            } header: { Text("扩展后台运行时") } footer: { Text(BackgroundRuntimeSummary.memoryNote) }
+            Section("安全") {
+                row("被拒绝的特权调用", "\(report.security.rejectedPrivilegedCalls)")
+                ForEach(report.security.recent.suffix(5).reversed()) { entry in Text(entry.message).font(.caption2.monospaced()).foregroundStyle(.secondary) }
+            }
+            Section {
+                row("通过 / 失败 / 不适用 / 未测试", "\(report.manualTests.counts["pass"] ?? 0) / \(report.manualTests.counts["fail"] ?? 0) / \(report.manualTests.counts["notApplicable"] ?? 0) / \(report.manualTests.counts["untested"] ?? 0)")
+                NavigationLink { ManualTestChecklistView() } label: { Label("人工测试清单", systemImage: "checklist") }
+            } header: { Text("人工测试（非 CI 结果）") }
             Section("扩展") {
                 if report.extensions.isEmpty { Text("未安装扩展").foregroundStyle(.secondary) }
                 ForEach(report.extensions, id: \.id) { ext in
@@ -166,9 +221,13 @@ struct DiagnosticsView: View {
                 HStack { Text("最近错误"); Spacer(); Button("清除") { errors.clear() }.font(.caption) }
             }
             Section {
-                Button { export() } label: { Label("导出诊断信息（JSON）", systemImage: "square.and.arrow.up") }
-            } footer: {
-                Text("导出内容不含网页内容、Cookie、密码、脚本源码与存储值；错误中的网址只保留域名。")
+                row("兼容性矩阵版本", report.compatibilityMatrixVersion)
+                Button { export() } label: { Label("导出诊断报告（单个 JSON 文件）", systemImage: "square.and.arrow.up") }
+            } header: { Text("导出") } footer: {
+                Text("""
+                包含：构建与 commit、系统与设备型号、标签页与后台运行时计数、扩展和用户脚本的名称 / 版本 / 权限、功能开关、兼容性矩阵版本、DNR 跳过规则摘要、最近的运行时与安全日志（网址只保留域名）、人工测试状态（标注为人工结果，非 CI）。
+                不包含：密码、Cookie、钥匙串内容、网页与表单内容、完整浏览网址、脚本源码与 GM 存储值、扩展存储、归档内容。导出前你可以在分享面板中查看文件。
+                """)
             }
         }
         .navigationTitle("诊断")

@@ -24,7 +24,11 @@
     const h = window.webkit && window.webkit.messageHandlers;
     R.handlers = h ? ['rikugan', 'gm', 'chrome', 'tools', 'userscript'].filter((n) => { try { return !!h[n]; } catch (_) { return false; } }).join(',') : 'none';
     R.suspiciousGlobals = Object.getOwnPropertyNames(window).filter((k) => /rikugan|__rk|^GM|token/i.test(k)).join(',');
-    R.htmlHasSecret = String(document.documentElement.outerHTML.includes('victim-secret'));
+    // Built by concatenation so this inline script's own source does not contain the value.
+    const secretValue = ['victim', 'secret'].join('-');
+    R.htmlHasSecret = String(document.documentElement.outerHTML.includes(secretValue));
+    // Per-script run markers (page-world scripts) must hold nothing but `true`.
+    R.runMarkers = Object.getOwnPropertyNames(window).filter((k) => k.startsWith('__rikuganUS_')).map((k) => typeof window[k] + ':' + String(window[k])).join(',') || 'none';
     R.capturedGM = String(window.__captured.filter((m) => m && (m.ch === 'gm' || m.token)).length);
     const post = (m) => {
       try { return h.rikugan.postMessage(m).then((v) => 'resolved:' + JSON.stringify(v), (e) => 'rejected:' + (e && e.message || e)); }

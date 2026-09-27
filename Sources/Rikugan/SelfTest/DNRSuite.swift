@@ -61,7 +61,7 @@ import WebKit
         ctx.extras["observations"] = [
             "hls": ctx.server.requested("/dnr/block-hls.m3u8") ? "HLS playlist request reached the server (not blockable here)" :
                 (ctx.server.requests.contains { $0.path.hasSuffix(".m3u8") } ? "blocked" : "no HLS request observed (video element did not load)"),
-            "downloads": "not automated: downloads are started from navigation responses and share the main_frame / sub_frame decision",
+            "downloads": "see the download / HLS phase (downloadPhase) — run with the rules active",
         ]
 
         // Redirect.
@@ -98,6 +98,9 @@ import WebKit
                        "outcome": mainBlocked ? "blocked" : "NOT blocked"])
         ctx.extras["matrix"] = matrix
 
+        // Downloads and media with the rules active.
+        await downloadPhase(ctx, tab: tab, extID: ext.id, capabilities: capabilities)
+
         // Behavioural probe: apply raw redirect / modify-headers content rules straight to a tab
         // and observe what WebKit really does. Rikugan's enabled set must match this.
         await behaviourProbe(ctx, compiles: compiles, enabled: capabilities)
@@ -112,6 +115,119 @@ import WebKit
         let unblocked = await ctx.waitUntil(10) { ctx.server.requested("/dnr/block-image.png") }
         ctx.record("卸载扩展后规则移除", unblocked, "block-image requested=\(unblocked)")
         ctx.manager.close(tab)
+    }
+
+    /// Downloads and media sniffing while DNR rules are active. WebKit boundary: content rules
+    /// apply only to loads made by WebKit (navigations → WKDownload, page fetch / XHR). Rikugan's
+    /// own URLSession downloads (direct links, media sniffer, HLS segments, GM_download) are not
+    /// seen by content rules at all — they can never be blocked *or* corrupted by DNR.
+    static func downloadPhase(_ ctx: SelfTestContext, tab: BrowserTab, extID: String, capabilities: DNRConverter.Capabilities) async {
+        let downloads = ctx.services.downloads
+        func fixture(_ path: String) -> Data { (try? Data(contentsOf: ctx.root.appendingPathComponent(String(path.dropFirst())))) ?? Data() }
+        func item(for path: String) -> DownloadItem? { downloads.items.first { $0.sourceURL?.path == path } }
+        func finished(_ path: String) async -> DownloadItem? {
+            _ = await ctx.waitUntil(20) {
+                guard let item = item(for: path) else { return false }
+                if case .downloading = item.state { return false }
+                return true
+            }
+            return item(for: path)
+        }
+        func bytes(_ item: DownloadItem?) -> Data { item?.fileURL.flatMap { try? Data(contentsOf: $0) } ?? Data() }
+        func describe(_ item: DownloadItem?) -> String {
+            guard let item else { return "no download item" }
+            return "state=\(item.state) name=\(item.fileName) bytes=\(bytes(item).count)"
+        }
+        var created: [DownloadItem] = []
+        var report: [String: String] = [:]
+
+        // 1. A download blocked by a main_frame rule never reaches the server and creates no item.
+        ctx.server.clearLog()
+        tab.load(ctx.url("/dnr/dl/block-download.bin"))
+        _ = await ctx.waitUntil(8) { tab.webView?.isLoading == false }
+        let blockedItem = item(for: "/dnr/dl/block-download.bin")
+        ctx.record("下载 · 被 block 规则拦截的下载不发出请求、不产生下载项", !ctx.server.requested("/dnr/dl/block-download.bin") && blockedItem == nil,
+                   "requested=\(ctx.server.requested("/dnr/dl/block-download.bin")) item=\(blockedItem != nil)")
+
+        // 2. An ordinary (navigation → WKDownload) download works with DNR on and its bytes are
+        //    untouched, although its body contains the blocked URL strings.
+        tab.load(ctx.url("/dnr/dl/file.bin"))
+        let navItem = await finished("/dnr/dl/file.bin")
+        if let navItem { created.append(navItem) }
+        let expected = fixture("/dnr/dl/file.bin")
+        ctx.record("下载 · 普通下载（WKDownload）在 DNR 开启时完成且字节一致", navItem?.state == .completed && bytes(navItem) == expected && !expected.isEmpty,
+                   describe(navItem) + " expected=\(expected.count)")
+
+        // 3. Direct (URLSession) download of the same file: not subject to content rules.
+        let directURL = ctx.url("/dnr/dl/file.bin?direct=1")
+        let direct = downloads.download(url: directURL, suggestedName: "direct.bin", from: tab)
+        if let direct { created.append(direct) }
+        _ = await ctx.waitUntil(20) { if let direct, case .downloading = direct.state { return false }; return true }
+        ctx.record("下载 · 直接下载（URLSession）在 DNR 开启时完成且字节一致", direct?.state == .completed && bytes(direct) == expected, describe(direct))
+
+        // 4. Skipped redirect rule: the original resource is downloaded, unmodified, under its own
+        //    name — not reported as redirected / blocked.
+        ctx.server.clearLog()
+        tab.load(ctx.url("/dnr/dl/redirect-dl.bin"))
+        if capabilities.redirect {
+            _ = await ctx.waitUntil(20) { downloads.items.contains { $0.fileName.hasPrefix("other") && $0.state == .completed } }
+            ctx.record("下载 · redirect 规则生效（WebKit 执行）", ctx.server.requested("/dnr/dl/other.bin") && !ctx.server.requested("/dnr/dl/redirect-dl.bin"))
+        } else {
+            let redirected = await finished("/dnr/dl/redirect-dl.bin")
+            if let redirected { created.append(redirected) }
+            ctx.record("下载 · 被跳过的 redirect 规则：下载原始资源、内容未被改写、未被报告为拦截",
+                       redirected?.state == .completed && bytes(redirected) == fixture("/dnr/dl/redirect-dl.bin")
+                           && ctx.server.requested("/dnr/dl/redirect-dl.bin") && !ctx.server.requested("/dnr/dl/other.bin")
+                           && redirected?.fileName.hasPrefix("redirect-dl") == true,
+                       describe(redirected) + " other.bin requested=\(ctx.server.requested("/dnr/dl/other.bin"))")
+        }
+
+        // 5. Skipped modifyHeaders rule: the request goes out without the header, the download is
+        //    intact and not reported as modified.
+        ctx.server.clearLog()
+        tab.load(ctx.url("/dnr/dl/headers-dl.bin"))
+        let headersItem = await finished("/dnr/dl/headers-dl.bin")
+        if let headersItem { created.append(headersItem) }
+        let sentHeader = ctx.server.requests.first { $0.path == "/dnr/dl/headers-dl.bin" }?.headers["x-rikugan-dnr"]
+        if capabilities.modifyHeaders {
+            ctx.record("下载 · modifyHeaders 规则生效（WebKit 执行）", sentHeader == "dl", "header=\(sentHeader ?? "nil")")
+        } else {
+            ctx.record("下载 · 被跳过的 modifyHeaders 规则：请求未带该头、下载完整",
+                       sentHeader == nil && headersItem?.state == .completed && bytes(headersItem) == fixture("/dnr/dl/headers-dl.bin"),
+                       describe(headersItem) + " header=\(sentHeader ?? "nil")")
+        }
+        let skipped = ctx.profile.extensions.dnrStatus.skipped[extID] ?? []
+        report["skippedRules"] = skipped.joined(separator: " | ")
+        if !capabilities.redirect || !capabilities.modifyHeaders {
+            ctx.record("下载 · 被跳过的规则在诊断中标为“跳过”（未应用）", skipped.contains { $0.contains("16") } || skipped.contains { $0.contains("17") } || capabilities.redirect,
+                       "skipped=\(skipped.count)")
+        }
+
+        // 6. Media sniffer with rules active: allowed HLS / MP4 responses are listed; the
+        //    DNR-blocked playlist is not (it never produced a response).
+        ctx.server.clearLog()
+        tab.load(ctx.url("/dnr/dl/media.html"))
+        _ = await ctx.waitUntil(15) { await ctx.attr(tab, "data-media-done") == "1" }
+        let mediaResult = await ctx.attr(tab, "data-media-result") ?? "nil"
+        _ = await ctx.waitUntil(5) { tab.sniffedMedia.contains { $0.url.path == "/dnr/dl/stream.m3u8" } && tab.sniffedMedia.contains { $0.url.path == "/dnr/dl/clip.mp4" } }
+        let sniffed = tab.sniffedMedia.map { "\($0.kind):\($0.url.path)" }
+        report["sniffed"] = sniffed.joined(separator: ", ")
+        report["mediaPage"] = mediaResult
+        ctx.record("媒体嗅探 · DNR 开启时仍检测到 HLS 与 MP4", tab.sniffedMedia.contains { $0.url.path == "/dnr/dl/stream.m3u8" && $0.kind == "hls" }
+                       && tab.sniffedMedia.contains { $0.url.path == "/dnr/dl/clip.mp4" }, "\(sniffed) page=\(mediaResult)")
+        ctx.record("媒体嗅探 · 被 DNR 拦截的媒体请求未被列为可下载", mediaResult.contains("\"blocked\":\"blocked\"")
+                       && !ctx.server.requested("/dnr/block-hls.m3u8") && !tab.sniffedMedia.contains { $0.url.path == "/dnr/block-hls.m3u8" },
+                   "page=\(mediaResult) sniffed=\(sniffed)")
+
+        // 7. HLS download (URLSession) of the sniffed playlist with rules active: segments joined in order.
+        let hls = downloads.download(url: ctx.url("/dnr/dl/stream.m3u8"), suggestedName: "dnr-hls.ts", from: tab)
+        if let hls { created.append(hls) }
+        _ = await ctx.waitUntil(20) { if let hls, case .downloading = hls.state { return false }; return true }
+        let joined = fixture("/dnr/dl/seg0.ts") + fixture("/dnr/dl/seg1.ts")
+        ctx.record("HLS · DNR 开启时下载完成且分段按序拼接", hls?.state == .completed && bytes(hls) == joined, describe(hls) + " expected=\(joined.count)")
+
+        ctx.extras["downloads"] = report
+        for item in created { downloads.remove(item, deleteFile: true) }
     }
 
     static func behaviourProbe(_ ctx: SelfTestContext, compiles: DNRConverter.Capabilities, enabled: DNRConverter.Capabilities) async {

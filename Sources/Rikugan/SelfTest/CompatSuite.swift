@@ -120,14 +120,44 @@ import WebKit
             // Popup.
             if let popupPath = manifest.actionPopup, let url = URL(string: ext.baseURL + popupPath) {
                 let errorsBefore = ext.record.lastErrors.count
+                let popupStart = Date()
+                let unsupportedBefore = runtime.unsupportedCalls[ext.id] ?? [:]
                 let holder = PopupHolder()
                 holder.load(ExtensionRuntime.PopupRequest(extID: ext.id, url: url, tabID: tab.numericID, title: source.name), runtime: runtime)
                 if let webView = holder.webView { BackgroundHostContainer.shared.attach(webView) }
                 let loaded = await ctx.waitUntil(15) { holder.webView?.isLoading == false && holder.webView?.url != nil }
-                let bodyText = (try? await holder.webView?.rkCall("return document.body ? document.body.innerText.length : -1;")) as? Int ?? -1
+                // Popups are usually client-rendered after async chrome.* calls: wait for rendered
+                // text (condition-based, bounded) instead of sampling right after load.
+                var bodyText = -1
+                _ = await ctx.waitUntil(10) {
+                    bodyText = (try? await holder.webView?.rkCall("return document.body ? document.body.innerText.length : -1;")) as? Int ?? -1
+                    return bodyText > 0
+                }
                 let newErrors = ext.record.lastErrors.dropFirst(errorsBefore).filter { !$0.hasPrefix("[content]") }
+                // Evidence for an empty popup: DOM shape, the ordered chrome.* calls made while it
+                // was open (any context), the first failing / unsupported one, and new unsupported APIs.
+                let dom = (try? await holder.webView?.rkCall("""
+                    const b = document.body;
+                    return JSON.stringify({ readyState: document.readyState, title: document.title,
+                      textContent: b ? b.textContent.trim().length : -1, html: b ? b.innerHTML.length : -1,
+                      elements: document.querySelectorAll('*').length,
+                      bodyChildren: b ? [...b.children].slice(0, 6).map(e => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + '[' + e.childElementCount + ']') : [],
+                      scripts: [...document.scripts].map(s => (s.type || 'classic') + ':' + (s.src ? s.src.split('/').pop() : 'inline')).slice(0, 8),
+                      viewport: innerWidth + 'x' + innerHeight,
+                      chromeNamespaces: typeof chrome === 'object' ? Object.keys(chrome).length : -1 });
+                    """)) as? String ?? "unavailable"
+                let calls = (runtime.apiCallLog[ext.id] ?? []).filter { $0.at >= popupStart }
+                let popupCalls = calls.filter { $0.context == "popup" }
+                let firstFailure = calls.first { $0.error != nil }
+                let newUnsupported = (runtime.unsupportedCalls[ext.id] ?? [:]).filter { $0.value > (unsupportedBefore[$0.key] ?? 0) }.keys.sorted()
+                let callList = calls.prefix(25).map { "\($0.context):\($0.api)" + ($0.error.map { "!(\($0))" } ?? "") }
+                report["popupProbe"] = ["dom": dom, "calls": callList, "popupCallCount": popupCalls.count,
+                                        "firstFailure": firstFailure.map { "\($0.context):\($0.api) → \($0.error ?? "")" } ?? "none",
+                                        "newUnsupported": newUnsupported, "errors": Array(newErrors.prefix(5))]
+                let failure = firstFailure.map { " firstFailure=\($0.context):\($0.api) → \($0.error ?? "")" } ?? " firstFailure=none"
                 areas["popup"] = area(loaded && bodyText > 0 && newErrors.isEmpty ? "ok" : "fail",
-                                      "loaded=\(loaded) textLength=\(bodyText) errors=\(newErrors.prefix(3).joined(separator: " | "))")
+                                      "loaded=\(loaded) textLength=\(bodyText) errors=\(newErrors.prefix(3).joined(separator: " | "))"
+                                        + (bodyText > 0 ? "" : failure + " unsupported=\(newUnsupported) popupCalls=\(popupCalls.count) calls=\(callList.prefix(12).joined(separator: ",")) dom=\(dom)"))
                 holder.webView?.removeFromSuperview()
                 holder.close(runtime: runtime)
             } else {

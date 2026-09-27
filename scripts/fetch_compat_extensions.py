@@ -98,8 +98,48 @@ def main():
             entry["downloadError"] = f"{type(e).__name__}: {e}"
         sources.append(entry)
         print(key, entry.get("version"), entry.get("downloadError", "ok"))
+    probe = violentmonkey_mv3_probe()
+    print("violentmonkey MV3 probe:", json.dumps(probe))
     with open(os.path.join(OUT, "sources.json"), "w") as f:
         json.dump(sources, f, indent=2)
+    with open(os.path.join(OUT, "violentmonkey-mv3-probe.json"), "w") as f:
+        json.dump(probe, f, indent=2)
+
+
+def violentmonkey_mv3_probe():
+    """Evidence for "does an MV3 Violentmonkey build exist for Chrome/Edge?": reads the manifest of
+    the Chrome Web Store / Edge Add-ons packages and of every zip asset in the last 15 GitHub
+    releases (prereleases included). Rikugan does not add MV2 support; this only records facts."""
+    found = []
+    stores = [("chrome-web-store", "https://clients2.google.com/service/update2/crx?response=redirect&prodversion=138.0.0.0"
+               "&acceptformat=crx2,crx3&x=id%3Djinjaccalgkegednnccohejagnlnfdag%26installsource%3Dondemand%26uc"),
+              ("edge-addons", "https://edge.microsoft.com/extensionwebstorebase/v1/crx?response=redirect&prodversion=138.0.0.0"
+               "&x=id%3Deeagobfjdenkkddmbclomhiblgggliao%26installsource%3Dondemand%26uc")]
+    for label, url in stores:
+        try:
+            data = get(url)
+            version, mv = manifest_version(data)
+            found.append({"source": label, "version": version, "manifestVersion": mv})
+        except Exception as e:
+            found.append({"source": label, "error": f"{type(e).__name__}: {e}"})
+    try:
+        releases = json.loads(get("https://api.github.com/repos/violentmonkey/violentmonkey/releases?per_page=15", "application/vnd.github+json"))
+        downloads = 0
+        for release in releases:
+            for asset in release.get("assets", []):
+                if not asset["name"].lower().endswith(".zip") or asset.get("size", 0) > 8_000_000 or downloads >= 12:
+                    continue
+                downloads += 1
+                try:
+                    version, mv = manifest_version(get(asset["browser_download_url"]))
+                    found.append({"source": "github", "tag": release["tag_name"], "prerelease": release.get("prerelease"),
+                                  "asset": asset["name"], "version": version, "manifestVersion": mv})
+                except Exception as e:
+                    found.append({"source": "github", "tag": release["tag_name"], "asset": asset["name"], "error": f"{type(e).__name__}: {e}"})
+    except Exception as e:
+        found.append({"source": "github", "error": f"{type(e).__name__}: {e}"})
+    mv3 = [f for f in found if f.get("manifestVersion") == 3]
+    return {"mv3BuildFound": bool(mv3), "mv3": mv3, "checked": found}
 
 
 if __name__ == "__main__":

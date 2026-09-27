@@ -26,11 +26,18 @@
     const isMediaType = (t) => /^(video|audio)\//i.test(t || '') || /mpegurl|dash\+xml/i.test(t || '');
     const origFetch = window.fetch;
     if (origFetch) {
+      // Reported only once a response actually arrived: a request blocked by a content rule (DNR /
+      // ad blocking) or failing on the network is never listed as downloadable media.
       window.fetch = function (input, init) {
         const url = typeof input === 'string' ? input : (input && input.url) || String(input);
-        if (mediaRe.test(url)) report(url, 'fetch');
         const p = origFetch.apply(this, arguments);
-        p.then((r) => { try { const t = r.headers.get('content-type'); if (isMediaType(t)) report(r.url || url, 'fetch', t); } catch (_) {} }, () => {});
+        p.then((r) => {
+          try {
+            const t = r.headers.get('content-type');
+            if (isMediaType(t)) report(r.url || url, 'fetch', t);
+            else if ((r.status > 0 || r.type === 'opaque') && mediaRe.test(r.url || url)) report(r.url || url, 'fetch', t);
+          } catch (_) {}
+        }, () => {});
         return p;
       };
     }
@@ -38,8 +45,17 @@
     XMLHttpRequest.prototype.open = function (method, url) {
       try {
         const u = String(url);
-        if (mediaRe.test(u)) report(u, 'xhr');
-        this.addEventListener('load', () => { try { const t = this.getResponseHeader('content-type'); if (isMediaType(t)) report(this.responseURL || u, 'xhr', t); } catch (_) {} });
+        const xhr = this;
+        let done = false;
+        xhr.addEventListener('readystatechange', () => {
+          if (done || xhr.readyState < 2 || xhr.status === 0) return;   // headers received; 0 = blocked / failed
+          done = true;
+          try {
+            const t = xhr.getResponseHeader('content-type');
+            const final = xhr.responseURL || u;
+            if (isMediaType(t) || mediaRe.test(final)) report(final, 'xhr', t);
+          } catch (_) {}
+        });
       } catch (_) {}
       return origOpen.apply(this, arguments);
     };

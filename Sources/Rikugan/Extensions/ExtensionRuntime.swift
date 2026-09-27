@@ -100,8 +100,19 @@ import Combine
     struct APIStat: Codable { var calls = 0; var errors = 0; var contexts: Set<String> = []; var lastError: String? }
     private(set) var apiStats: [String: [String: APIStat]] = [:]
 
+    /// Ordered call log per extension (bounded) — lets the compatibility report name the *first*
+    /// failing or unsupported call of a context (e.g. a popup that renders nothing).
+    struct APICallEvent: Codable { let at: Date; let api: String; let context: String; let error: String? }
+    private(set) var apiCallLog: [String: [APICallEvent]] = [:]
+
+    private func logCall(_ extID: String, _ event: APICallEvent) {
+        apiCallLog[extID, default: []].append(event)
+        if let count = apiCallLog[extID]?.count, count > 1000 { apiCallLog[extID]?.removeFirst(count - 1000) }
+    }
+
     func recordAPICall(_ extID: String, api: String, context: String, error: String?) {
         guard !extID.isEmpty, !api.isEmpty else { return }
+        logCall(extID, APICallEvent(at: Date(), api: api, context: context, error: error.map { String($0.prefix(200)) }))
         var stat = apiStats[extID, default: [:]][api, default: APIStat()]
         stat.calls += 1
         stat.contexts.insert(context)
@@ -112,16 +123,25 @@ import Combine
     /// Unsupported chrome.* calls per extension (shown in Diagnostics / compatibility reports).
     @Published private(set) var unsupportedCalls: [String: [String: Int]] = [:]
 
-    func recordUnsupported(_ ext: LoadedExtension, _ api: String) {
+    func recordUnsupported(_ ext: LoadedExtension, _ api: String, context: String = "?") {
         unsupportedCalls[ext.id, default: [:]][api, default: 0] += 1
+        logCall(ext.id, APICallEvent(at: Date(), api: api, context: context, error: "unsupported"))
     }
 
-    func recordRuntimeError(_ ext: LoadedExtension, _ message: String) {
+    func recordRuntimeError(_ ext: LoadedExtension, _ message: String, context: String = "?") {
+        logCall(ext.id, APICallEvent(at: Date(), api: "(error)", context: context, error: String(message.prefix(200))))
         updateRecord(ext.id) { record in
             record.lastErrors.append(message)
             if record.lastErrors.count > 20 { record.lastErrors.removeFirst(record.lastErrors.count - 20) }
         }
         ErrorLog.shared.record(message, source: ext.displayName)
+    }
+
+    /// Developer: clears per-extension runtime error lists, unsupported-call and recovery counters.
+    func clearRuntimeErrorCounters() {
+        for record in records { updateRecord(record.id) { $0.lastErrors = [] } }
+        unsupportedCalls = [:]
+        for ext in loaded.values { ext.background?.resetCounters() }
     }
 
     func updateRecord(_ id: String, _ change: (inout InstalledExtension) -> Void) {
@@ -691,6 +711,13 @@ enum BackgroundState: String {
     private(set) var stuckStartRecoveries = 0
     /// Timeline of the last failed start (kept after the failure resets the live timeline).
     private(set) var lastFailureTimeline: [String] = []
+    /// Observability counters (Diagnostics / Developer). Bookkeeping only — no behaviour depends on them.
+    private(set) var wakeCount = 0
+    private(set) var coldStartCount = 0
+    private(set) var lastWakeAt: Date?
+    private(set) var lastSuspendAt: Date?
+    /// A suspended background keeps its WKWebView parked on about:blank (see `parkWebView`).
+    var isParked: Bool { parkedWebView != nil }
     private var navigationStarted = false
     private var recoveredThisAttempt = false
     private var startWatchdog: Task<Void, Never>?
@@ -736,6 +763,7 @@ enum BackgroundState: String {
         launchedAt = Date()
         timeline.removeAll()
         note("launch \(newState.rawValue)")
+        if newState == .waking { wakeCount += 1; lastWakeAt = Date() }
         // Wake reuses the parked web view (see `suspend`); only a cold start creates one.
         let webView: WKWebView
         if let parked = parkedWebView {
@@ -744,6 +772,7 @@ enum BackgroundState: String {
             note("reusing parked web view")
         } else {
             webView = makeWebView()
+            coldStartCount += 1
         }
         self.webView = webView
         runtime.registerPage(webView, extID: ext.id, kind: "background")
@@ -855,6 +884,8 @@ enum BackgroundState: String {
         idleTimer?.invalidate()
         parkWebView()
         state = .suspended
+        lastSuspendAt = Date()
+        note("suspended (\(reason))")
     }
 
     /// Suspension destroys the JS context (navigates to about:blank, like a terminated MV3 service
@@ -902,6 +933,31 @@ enum BackgroundState: String {
             webView.removeFromSuperview()
         }
         webView = nil
+    }
+
+    // MARK: Developer controls (Settings → Developer → Background runtimes)
+
+    /// Wakes a suspended / not-started / failed background through the normal request path.
+    func developerWake() {
+        if state == .failed { restartsAfterFailure = 0 }
+        Task { _ = await awaitReady() }
+    }
+
+    /// Stops the runtime and discards its web views (parked one included), then cold-starts it.
+    func developerRecreate() {
+        stop()
+        restartsAfterFailure = 0
+        start()
+    }
+
+    /// Resets error / recovery counters (the state timeline is kept).
+    func resetCounters() {
+        stuckStartRecoveries = 0
+        restartsAfterFailure = 0
+        wakeCount = 0
+        coldStartCount = 0
+        failureReason = state == .failed ? failureReason : nil
+        lastFailureTimeline = []
     }
 
     // MARK: Requests

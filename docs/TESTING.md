@@ -21,8 +21,9 @@ Rikugan 的验证分三级。**每一级只证明它能证明的东西**：CI �
 | Build for simulator tests | `build-for-testing` 一次，产物供下列任务复用 | 是 |
 | Simulator: core | 原有端到端自检：测试扩展（内容脚本、消息、Port、存储、Popup、scripting、权限、后台、DNR、Unsupported API）+ 测试脚本（GM API、@exclude、刷新、无痕）+ 元素隐藏 | 是 |
 | Simulator: pageworld | 真实页面上的 `@grant none` / 已授权隔离脚本 / `unsafeWindow` 读写调用 / `@inject-into page`；事件双向；reload、pushState、同源 iframe、`window.open` 新标签页 | 是 |
+| Simulator: security | 对抗测试：恶意页面（18 项伪造尝试：GM 存储 / XHR / 标签页 / 菜单 / 通知、冒充页面环境脚本、冒充扩展 A 的内容脚本 / 页面 / 后台、工具通道、跨源历史、分发函数）与恶意扩展 B（冒充 A 读写存储、发消息、调用 tabs、注入 / 断开 A 的 Port、冒充用户脚本）。**断言效果**：受害者的值 / 存储 / Port / 标签页 / 菜单 / 规则 / 历史都不变，拒绝都有记录，合法路径仍可用，诊断导出不泄露秘密。详见 [SECURITY.md](SECURITY.md) | 是 |
 | Simulator: fonts | 导入 TTF 与 TTC（拆分为两个字体）；正文 / 标题 / 等宽规则；图标字体（class、私有区字符、连字图标）不被替换；emoji 回退；页面自定义 @font-face；动态插入内容；实时生效；网站覆盖、网站禁用、排除列表。用专门的测试字体（`x` 宽 2em、图标宽 3em）按**像素宽度**判定是否真正渲染 | 是 |
-| Simulator: dnr | 以本地服务器请求日志判定：image / stylesheet / script / XHR / fetch / font / media / sub_frame / main_frame 的 block（每项都有对照请求，对照未到达则判为“无法判定”而非通过）；allow 优先级；redirect 与 modifyHeaders（WebKit 支持则验证生效，不支持则验证被明确跳过并报告）；卸载后规则移除；HLS / 下载作为观察项记录 | 是 |
+| Simulator: dnr | 以本地服务器请求日志判定：image / stylesheet / script / XHR / fetch / font / media / sub_frame / main_frame 的 block（每项都有对照请求，对照未到达则判为“无法判定”而非通过）；allow 优先级；redirect 与 modifyHeaders（WebKit 支持则验证生效，不支持则验证被明确跳过并报告）；卸载后规则移除。**下载 / 媒体（规则生效期间）**：被 block 的下载不发请求、不产生下载项；普通下载（WKDownload）与直接下载（URLSession）字节完全一致（文件内容里含被拦截的网址字符串）；被跳过的 redirect / modifyHeaders 规则不会让下载被改写、改名或被报告为拦截；媒体嗅探仍能检测到 HLS 与 MP4，被 DNR 拦截的媒体请求不会被列为可下载；HLS 下载分段按序拼接 | 是 |
 | Simulator: lifecycle | 36 个标签页 / 3 个组；LRU 挂起；快速切换 80 次；挂起→恢复（网址、后退历史、滚动位置）；关闭 / 重新打开；WebContent 终止处理（见下方说明）；移动 / 调整组顺序 / 两种删除组方式；会话快照往返；内存警告；BrowserTab 与 WKWebView 泄漏检查；每步检查“无重复 WebView、注册表一致” | 是 |
 | Simulator: stress | 扩展后台运行时 30 轮：冷启动→消息、冷启动→Port、启动中发消息（排队）、3 个并发 Port、存储往返、空闲→挂起、唤醒（验证是新的运行时实例）、打开的 Port 阻止挂起、关闭标签页时 Port 断开、启动期间 Popup 发消息、关闭。**每步有独立期限，不重试；任何一轮失败即任务失败** | 是 |
 | Simulator: archive | 真实存储上的 导出→重置→导入（替换）、合并两次不重复、损坏 / 未来版本 / 非本应用文件被拒绝且数据不变、v1 文件迁移、导入前备份 | 是 |
@@ -32,6 +33,23 @@ Rikugan 的验证分三级。**每一级只证明它能证明的东西**：CI �
 
 - 在 Job Summary 中输出逐项结果表；
 - 上传 `selftest-<suite>` artifact（JSON 报告、`.xcresult`、日志）。JSON 报告的 `environment` 字段是 `simulator`。
+
+**结果完整性（防止旧结果或伪造结果通过）**：
+
+1. 每次调用前，任务生成随机 runID（`ci-<run>-<attempt>-<suite>-<UUID>`）并记录开始时间；runID 经 `TEST_RUNNER_RIKUGAN_RUN_ID` → UI 测试 → App 启动参数 `-RikuganRunID` 传入 App。
+2. App 在套件开始时删除该套件旧的报告。报告中写入：`runID`、`suiteName`、`processID`、`processLaunchedAt`、`startedAt`、`finishedAt`（未完成时为 null）、`result`（PASS / FAIL / IN PROGRESS）、`assertionCount`、`failureCount`。
+3. UI 测试要求屏幕上的结果文字包含本次的 runID。
+4. 之后 `scripts/verify_selftest_result.py` 独立校验 JSON，不满足以下任一条件即任务失败：
+   - runID、套件名一致；
+   - `finishedAt` 存在且不早于 `startedAt`；
+   - 两个时间都晚于本任务开始时间；
+   - 进程启动时间不晚于套件开始时间（崩溃后重启、再跑出旧结果的情况会被识别）；
+   - 断言数不少于该套件的下限（`build.yml` 中的 `min`），且与记录的结果条数一致；
+   - 失败数与结果一致；结果为 PASS。
+   
+   超时未产生新结果时，报告不存在或仍为 IN PROGRESS，都算失败。
+5. 因此 XCUITest 自身的快照超时可以只记录、不判失败：判定通道是这份校验过的报告。
+6. `scripts/test_verify_selftest.py`（core 任务中运行）有 15 个负面测试，包括“上一次运行留下的 PASS 被拒绝”“同一 runID 但早于任务开始”“崩溃重启”“截断”“计数不一致”。compat 是报告性质，允许 FAIL，但仍要求结果是本次、已完成。
 
 **测试原则**：等待一律是“轮询一个具体条件直到固定期限，失败时报告观察到的状态”，不使用固定 sleep 掩盖竞态，不重试被测操作，不因为超时而加长期限。
 
@@ -53,6 +71,7 @@ stress 套件在连续 3 次完整运行中的结果：
 | 36326890854 | 5b24cab | 27/30：129 次中 5 次，换新 WebView 后仍卡住（都在“挂起后唤醒”） |
 | 36329596521 | 8fa1d76 | **30/30**，改为挂起时保留 WebView（about:blank）之后 |
 | 36331210498 | 6ab6af0 | **30/30（284 s），129 次启动中 0 次导航未开始** |
+| 36332418737 | 3cfe319（仅文档） | **28/30**：130 次启动中 3 次导航未开始；第 16 轮（冷启动→sendMessage）与第 22 轮（挂起后唤醒）在换新 WebView 后仍卡住 → 任务失败 |
 
 随后 commit 8cb052f 的 core 套件出现了同一现象：新建的后台 WKWebView 调用 `load()` 后，WebKit **60 s 内都没有开始导航**（时间线只有 `launch starting`）。同一 App 中的测试页、扩展 Popup（同类配置）都正常加载，主线程也在响应。所以这不是“慢”，而是新建 WebView 的导航偶发地卡在 WebKit 内部，根因在 WebKit 的进程启动 / 导航派发中，无法从外部确认。
 
@@ -69,6 +88,14 @@ stress 套件在连续 3 次完整运行中的结果：
 据此修改设计：挂起时不再销毁 WebView，而是导航到 `about:blank`。JS 上下文被销毁，语义与 MV3 Service Worker 被终止相同：内存状态全部丢失，唤醒后重新注册监听器。唤醒时在同一个 WebView 中重新加载后台页，不再反复新建。代价是每个挂起的扩展保留一个空闲的 WebContent 进程；系统结束该进程时会释放这个 WebView。新建时卡住的恢复机制（5 s）保留，用于冷启动。
 
 实测频率（修改前）：run 36325781215 中 128 次后台启动有 2 次导航未开始，均被恢复。但当时等待期限是 10 s，其中一次恢复太慢，所在那一轮仍超出了测试自己的 15 s 消息期限（29/30）。之后把期限改为 5 s，测试期限不变。
+
+**3cfe319 之后的结论（如实记录）**：保留 WebView 的设计降低了频率，但没有消除问题，冷启动与唤醒都仍会偶发卡住。按本阶段要求，没有设备证据之前**不再修改这一架构**，只增加证据采集：
+
+- 卡住时记录 WebView 自身状态（isLoading、进度、URL、是否在窗口中）、同时加载中的标签页数、各用途 WKWebView 数量；
+- 保留最近一次失败启动的完整时间线；
+- stress 报告先列证据，再列摘要。
+
+诊断页与“开发者 → 扩展后台运行时”中可以看到每个扩展的唤醒次数、冷启动次数、卡住恢复次数和状态时间线，用于在 PlayCover / 真机上收集同类证据。若 stress 再次失败，CI 为红，不会发布。
 
 ### 本地运行
 
@@ -92,19 +119,12 @@ App 内：设置 → 自检，可选择任意套件运行（会修改当前身�
 
 PlayCover 把 iOS 应用作为 iPad 应用运行在 Apple Silicon Mac 上。它适合快速确认**签名后的 IPA** 能启动和基本可用，但它不是 iPhone：内存上限、后台策略、分享扩展、App Group、触控手势都不同。**PlayCover 通过不得记为 iPhone / iPad 通过。**
 
-1. 下载 CI 发布的 `Rikugan-*-unsigned.ipa`，校验 `SHA256SUMS.txt`。
-2. 在 PlayCover 中导入 IPA（PlayCover 会自行签名）。
-3. 启动后打开 设置 → 开发者 → 打开诊断，记录：版本、Git commit、构建时间、设备（应显示 Mac 的 iPad 形态）、App Group 状态、分享扩展状态。
-4. 冒烟项（每项记录 通过 / 失败 / 不适用）：
-   - [ ] 打开 https://example.com、搜索关键词、前进后退、刷新
-   - [ ] 新建 10 个标签页，创建 2 个组，拖动排序，切换组，重启 App 后标签页与组恢复
-   - [ ] 设置 → 自检 → 运行 `core`，结果为 PASS（记录 n/m）
-   - [ ] 设置 → 自检 → 运行 `pageworld`、`fonts`、`archive`
-   - [ ] 安装一个 `.user.js`（例如 Greasy Fork 上的脚本），确认在目标网站运行
-   - [ ] 从文件安装一个扩展 ZIP，打开 Popup
-   - [ ] 导出归档 → 重置（导入空归档或删除数据）→ 导入，确认恢复
-   - [ ] 诊断 → 导出诊断信息，确认 JSON 中没有网址路径、Cookie、密码
-5. 结果记录格式：`PlayCover <版本> · macOS <版本> · <Mac 型号> · Rikugan <版本 / commit> · 结果`。
+步骤见 [MANUAL_TESTING.md](MANUAL_TESTING.md)：
+
+1. 校验 IPA；
+2. 确认已安装的 commit（设置页底部）；
+3. 按顺序执行冒烟清单，在 App 内“人工测试清单”记录结果；
+4. 导出单个诊断文件并附在反馈中。
 
 ---
 

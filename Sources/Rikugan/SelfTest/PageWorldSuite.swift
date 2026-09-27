@@ -27,6 +27,8 @@ import WebKit
         ctx.record("世界选择：特权 GM + unsafeWindow → isolated（安全）", worlds["PW privileged unsafeWindow"] == "isolated", worlds["PW privileged unsafeWindow"] ?? "missing")
 
         let tab = await ctx.open("/pageworld/index.html")
+        ctx.record("测试页面加载", tab.webView?.url?.path == "/pageworld/index.html",
+                   "url=\(tab.webView?.url?.absoluteString ?? "nil") loading=\(tab.webView?.isLoading ?? false) lifecycle=\(tab.lifecycle) title=\(tab.webView?.title ?? "nil") requested=\(ctx.server.requested("/pageworld/index.html"))")
         let markers = ["data-none-value", "data-iso-value", "data-unsafe-value", "data-inject-value", "data-pu-value"]
         let allRan = await ctx.waitUntil(10) { let a = await ctx.attrs(tab); return markers.allSatisfy { a[$0] != nil } }
         ctx.record("五个脚本均已注入", allRan, (await ctx.attrs(tab)).keys.filter { $0.hasPrefix("data-") }.sorted().joined(separator: ","))
