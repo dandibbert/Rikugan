@@ -9,7 +9,8 @@ Sources:
   - GitHub releases (latest at run time; the resolved tag and asset are recorded):
       Dark Reader           darkreader/darkreader        asset *chrome-mv3*.zip
       uBlock Origin Lite    uBlockOrigin/uBOL-home       asset *chromium*.zip
-      Violentmonkey         violentmonkey/violentmonkey  asset *webext*.zip (Chrome build)
+      Violentmonkey         violentmonkey/violentmonkey  asset Violentmonkey-mv3-*.zip (MV3 Chrome build;
+                            the *webext* asset is the MV2 build)
   - Chrome Web Store CRX (current version, read from the manifest after download):
       Tampermonkey          dhdgffkkebhmkfjojejmpbldmpobfkfo
       Immersive Translate   bpoadfkcbjbfhfodiogcnhhhpibjhbnh
@@ -27,7 +28,7 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "compat"
 GITHUB = [
     ("darkreader", "Dark Reader", "darkreader/darkreader", r"chrome-mv3.*\.zip$|mv3.*chrome.*\.zip$"),
     ("ubol", "uBlock Origin Lite", "uBlockOrigin/uBOL-home", r"chromium.*\.zip$"),
-    ("violentmonkey", "Violentmonkey", "violentmonkey/violentmonkey", r"webext.*\.zip$"),
+    ("violentmonkey", "Violentmonkey", "violentmonkey/violentmonkey", r"^Violentmonkey-mv3-.*\.zip$"),
 ]
 CWS = [
     ("tampermonkey", "Tampermonkey", "dhdgffkkebhmkfjojejmpbldmpobfkfo"),

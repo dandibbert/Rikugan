@@ -15,15 +15,15 @@
   - 沉浸式翻译：注入的界面元素。
 - 下载失败记为“未测试”，不会记为通过或失败。
 
-## 当前结果（CI run 36321777638，commit 84b0094，iOS 26.2 模拟器；与 run 36318483508 结果一致）
+## 当前结果（CI run 36321777638，commit 84b0094，iOS 26.2 模拟器；Popup 列按 run 36334562568 修正后的探测更新）
 
 | 扩展 | 版本 | 来源 | 安装 | 后台 | 内容脚本 | Popup | storage | messaging | ports | scripting | tabs | DNR | 行为 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Dark Reader | 4.9.133 | GitHub `darkreader-chrome-mv3.zip` | ✅ | ✅ 1.0 s | ✅ | ✅ | ✅ 39 | ✅ 15 | ⚪ | 🟡 ¹ | ✅ | — | ✅ 页面变暗（body `rgb(24,26,27)`） |
 | uBlock Origin Lite | 2026.926.2202 | GitHub `uBOLite_*.chromium.zip` | ✅ | ✅ 0.8 s | — | ✅ | ✅ 109 | ⚪ | ⚪ | ✅ | ✅ | 🟡 ² | ✅ 广告脚本被拦截，对照请求正常 |
 | Violentmonkey | 2.49.0 | GitHub `Violentmonkey-webext-*.zip` | ❌ ³ | — | — | — | — | — | — | — | — | — | — |
-| Tampermonkey | 5.5.0 | Chrome 应用商店 CRX | ✅ | ✅ 0.9 s | — | ❌ ⁴ | ✅ 23 | ✅ | ✅ 6 | ⚪ | ✅ | 🟡 ⁵ | ❌ ⁴ |
-| 沉浸式翻译 | 1.33.3 | Chrome 应用商店 CRX | ✅ | ✅ 1.0 s | ✅ | ❌ ⁶ | ✅ 463 | 🟡 ⁶ | ⚪ | ⚪ | ✅ | ❌ ⁶ | ✅ 界面元素已注入 |
+| Tampermonkey | 5.5.0 | Chrome 应用商店 CRX | ✅ | ✅ 0.9 s | — | ✅ ⁴ | ✅ 23 | ✅ | ✅ 6 | ⚪ | ✅ | 🟡 ⁵ | ❌ ⁴ |
+| 沉浸式翻译 | 1.33.3 | Chrome 应用商店 CRX | ✅ | ✅ 1.0 s | ✅ | ✅ ⁶ | ✅ 463 | 🟡 ⁶ | ⚪ | ⚪ | ✅ | ❌ ⁶ | ✅ 界面元素已注入 |
 
 （数字为观察到的调用次数；⚪ = 该扩展在测试期间没有调用这类 API。）
 
@@ -35,13 +35,25 @@
    - 1,860 条被跳过并列出：`redirect` 与 `modifyHeaders` 规则，以及 WebKit 正则不支持的 `regexFilter`；
    - 实际效果：在无扩展基线下能加载的广告脚本，安装后被拦截，对照请求仍正常；
    - uBOL 会调用 `chrome.userScripts`（不支持），只影响其“自定义过滤器 / 脚本注入”类功能，报告中有记录。
-3. **Violentmonkey**：Chrome 版仍是 **Manifest V2**，安装时被明确拒绝（“仅支持 Manifest V3 扩展（当前 manifest_version = 2）”）。
-4. **Tampermonkey**：MV3 版的核心依赖 `chrome.userScripts`（`configureWorld`、`onUserScriptConnect`）和 `webRequest`（`onBeforeRequest` 等），Rikugan 都不提供，所以 Popup 为空，无法用它注入脚本。后台、存储、消息、Port 正常。**替代方案**：Rikugan 内置用户脚本管理器（GM API、`unsafeWindow`、`@inject-into`）。
+3. **Violentmonkey**：
+   - 上表中的结果来自 GitHub 的 `Violentmonkey-webext-*.zip`。该文件是 **Manifest V2** 版本，安装时被明确拒绝（“仅支持 Manifest V3 扩展（当前 manifest_version = 2）”）。
+   - **MV3 版本存在**。run 36334562568 的探测（`compat-sources/violentmonkey-mv3-probe.json`）读取了各发布渠道的 manifest：
+     - Chrome 应用商店 2.49.0：MV3；
+     - Edge 加载项 2.49.0：MV3；
+     - GitHub v2.49.0 与 v2.48.0 的 `Violentmonkey-mv3-*.zip`：MV3；
+     - v2.49.1–v2.49.3 的 beta：MV3。
+   - 因此 CI 改为下载 `Violentmonkey-mv3-*.zip`，下一次报告会测试 MV3 版本。Rikugan 不增加 MV2 支持。
+4. **Tampermonkey**：MV3 版的核心依赖 `chrome.userScripts`（`configureWorld`、`onUserScriptConnect`）和 `webRequest`（`onBeforeRequest` 等），Rikugan 都不提供，所以无法用它注入脚本（Popup 本身能渲染，见 6）。后台、存储、消息、Port 正常。**替代方案**：Rikugan 内置用户脚本管理器（GM API、`unsafeWindow`、`@inject-into`）。
 5. **Tampermonkey DNR**：24 条规则使用 `redirect`，被跳过并列出。
 6. **沉浸式翻译**：
    - 内容脚本注入并在页面上生成界面元素；实际翻译需要其在线服务，本套件不验证。
    - **DNR ❌**：唯一的规则集中 32 条规则全部是 `modifyHeaders`，WebKit 不支持，全部被跳过（明确列出，不是静默失效）。
-   - **Popup ❌**：页面加载但内容为空，没有记录到脚本错误。它申请了 `sidePanel`、`offscreen`、`webRequest`，Rikugan 都不提供，这是最可能的原因，未进一步确认。
+   - **Popup：之前的“空白 ❌”是测试方法错误，不是扩展的问题。**
+     - 旧的探测在页面加载完成后立刻读取文字，而沉浸式翻译的 Popup 由客户端渲染，读取时还没渲染完。
+     - 改为等待渲染出文字（有上限），并记录 DOM、按顺序记录 chrome.* 调用和第一个失败的调用之后（run 36334562568）：Popup 渲染出 277 个字符，没有脚本错误。
+     - 所以**不存在阻塞 Popup 的 API**。Popup 打开期间唯一不支持的调用是 `runtime.getContexts`（查询 offscreen 文档），被明确拒绝，不影响渲染。
+     - Tampermonkey 的 Popup 同样是测试方法造成的“空白”（修正后 153 个字符）；它的核心功能仍依赖 `chrome.userScripts`，所以行为 ❌ 不变。
+     - `sidePanel` / `offscreen` / `webRequest` 仍不提供，依赖它们的功能（例如侧边栏翻译）不可用。
    - **messaging 🟡**：17 次调用中 1 次 `tabs.sendMessage` 返回 “Receiving end does not exist”，目标标签页没有它的内容脚本，与 Chrome 行为一致。
    - 后台报错 “Cannot find menu item with id toggleTranslatePage”：它更新了一个不存在的右键菜单项，原因未确认，已记录。
 
