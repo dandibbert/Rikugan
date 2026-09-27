@@ -263,25 +263,39 @@ function load(extra) {
     if (message && message.source === 'rikugan-bg-probe') return probe;
     return Promise.resolve(backgroundListener(message));
   }
+  const portLog = [];
+  function originalConnect(info) {
+    return {
+      name: info.name,
+      postMessage(message) { portLog.push({ name: info.name, n: message.n, from: message.from }); }
+    };
+  }
   const coldWindow = { addEventListener() {}, removeEventListener() {}, postMessage() {}, top: null };
   coldWindow.top = coldWindow;
   const coldHost = load({
     window: coldWindow,
     location: { protocol: 'http:' },
-    chrome: { runtime: { sendMessage: originalSend, onMessage: { addListener() {} } } }
+    chrome: { runtime: { sendMessage: originalSend, connect: originalConnect, onMessage: { addListener() {} } } }
   });
   assert.equal(coldHost.__rikuganBackgroundGate.state, 'starting');
-  const first = coldHost.chrome.runtime.sendMessage({ n: 1 });
-  const second = coldHost.chrome.runtime.sendMessage({ n: 2 });
+  const first = coldHost.chrome.runtime.sendMessage({ n: 1, from: 'content' });
+  const popupMessage = coldHost.chrome.runtime.sendMessage({ n: 2, from: 'popup' });
   const earlyPort = coldHost.chrome.runtime.connect({ name: 'early', tabId: 3 });
+  earlyPort.postMessage({ n: 1, from: 'content' });
+  earlyPort.postMessage({ n: 2, from: 'popup' });
   assert.equal(heard.length, 0);
+  assert.equal(portLog.length, 0);
   assert.equal(earlyPort.pending, true);
   assert.equal(coldHost.__rikuganBackgroundGate.pendingCount(), 2);
   releaseProbe();
   assert.equal((await first).from, 'listener');
   assert.equal((await first).n, 1);
-  assert.equal((await second).n, 2);
+  assert.equal((await popupMessage).n, 2);
   assert.deepEqual(heard.map(message => message.n), [1, 2]);
+  assert.deepEqual(heard.map(message => message.from), ['content', 'popup']);
+  assert.deepEqual(portLog, [{ name: 'early', n: 1, from: 'content' }, { name: 'early', n: 2, from: 'popup' }]);
+  earlyPort.postMessage({ n: 3, from: 'after' });
+  assert.equal(portLog[portLog.length - 1].n, 3);
   assert.equal(earlyPort.pending, false);
   assert.equal(coldHost.__rikuganBackgroundGate.state, 'ready');
 
@@ -311,7 +325,11 @@ function load(extra) {
   const stressHeard = [];
   const gate = gateHost.__rikuganCreateBackgroundGate();
   const connected = [];
-  gate.onConnect(port => connected.push(port.name));
+  const portHeard = [];
+  gate.onConnect(port => {
+    connected.push(port.name);
+    port.onMessage.addListener(message => portHeard.push(message));
+  });
   gate.setTransport({
     sendMessage(message) {
       stressHeard.push(message);
@@ -323,7 +341,10 @@ function load(extra) {
     assert.equal(gate.state, 'starting');
     const cold = gate.enqueueMessage({ n: round, step: 'cold' });
     const early = gate.connect({ name: 'early-' + round, tabId: round });
+    early.postMessage({ n: round, step: 'port' });
+    early.postMessage({ n: round, step: 'port-2' });
     assert.equal(early.pending, true);
+    assert.equal(portHeard.filter(message => message.n === round).length, 0);
     gate.wake();
     assert.equal(gate.state, 'waking');
     assert.equal(gate.pendingCount(), 1);
@@ -332,10 +353,13 @@ function load(extra) {
     assert.equal((await cold).from, 'listener');
     assert.equal((await cold).step, 'cold');
     assert.equal(early.pending, false);
+    assert.deepEqual(portHeard.filter(message => message.n === round).map(message => message.step), ['port', 'port-2']);
     const live = gate.enqueueMessage({ n: round, step: 'live' });
     assert.equal((await live).step, 'live');
     const livePort = gate.connect({ name: 'live-' + round, tabId: round });
     assert.equal(livePort.pending, false);
+    livePort.postMessage({ n: round, step: 'port-live' });
+    assert.equal(portHeard.filter(message => message.n === round && message.step === 'port-live').length, 1);
     livePort.disconnect();
     assert.equal(livePort.disconnected, true);
     await gate.storageSet('round', round);

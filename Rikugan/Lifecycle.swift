@@ -120,10 +120,28 @@ enum TabInteraction {
         case "data":
             return blob
         case "keyed":
-            return try? NSKeyedUnarchiver.unarchivedObject(ofClasses: [NSDictionary.self, NSArray.self, NSString.self, NSNumber.self, NSData.self, NSDate.self], from: blob)
+            guard let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: blob) else { return nil }
+            unarchiver.requiresSecureCoding = false
+            return unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey)
         default:
             return try? PropertyListSerialization.propertyList(from: blob, options: [], format: nil)
         }
+    }
+}
+
+enum TabSnapshotGate {
+    static func shouldCapture(isHome: Bool, isPrivate: Bool) -> Bool { !isHome && !isPrivate }
+}
+
+enum DiagnosticsExport {
+    static let omitted = ["history", "cookies", "passwords", "page text"]
+    static let forbidden = ["history", "cookies", "passwords", "pageText", "cookie", "urls"]
+
+    static func sanitize(_ payload: [String: Any]) -> [String: Any] {
+        var copy = payload
+        for key in forbidden { copy.removeValue(forKey: key) }
+        copy["omitted"] = omitted
+        return copy
     }
 }
 

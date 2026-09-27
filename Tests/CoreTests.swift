@@ -704,6 +704,42 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(AdBlockEngine.verdict(url: URL(string: "https://news.example/")!, lines: lines, kind: "navigation"), .none)
         XCTAssertEqual(AdBlockEngine.canonicalResource("hls"), "media")
         XCTAssertEqual(AdBlockEngine.canonicalResource("download"), "download")
+
+        let opaque = OpaqueInteractionState(marker: "wk-interaction")
+        let coded = try XCTUnwrap(TabInteraction.encode(opaque))
+        let restored = try XCTUnwrap(TabInteraction.decode(coded) as? OpaqueInteractionState)
+        XCTAssertEqual(restored.marker, "wk-interaction")
+        let raw = Data("interaction-bytes".utf8)
+        let wrapped = try XCTUnwrap(TabInteraction.encode(raw))
+        XCTAssertEqual(TabInteraction.decode(wrapped) as? Data, raw)
+        XCTAssertFalse(TabSnapshotGate.shouldCapture(isHome: true, isPrivate: false))
+        XCTAssertFalse(TabSnapshotGate.shouldCapture(isHome: false, isPrivate: true))
+        XCTAssertTrue(TabSnapshotGate.shouldCapture(isHome: false, isPrivate: false))
+        let leaked: [String: Any] = ["tabs": 2, "history": ["https://secret.example"], "cookies": "sid=1", "passwords": "hidden", "pageText": "body"]
+        let clean = DiagnosticsExport.sanitize(leaked)
+        XCTAssertEqual(clean["tabs"] as? Int, 2)
+        XCTAssertNil(clean["history"])
+        XCTAssertNil(clean["cookies"])
+        XCTAssertNil(clean["passwords"])
+        XCTAssertNil(clean["pageText"])
+        XCTAssertEqual(clean["omitted"] as? [String], DiagnosticsExport.omitted)
+    }
+}
+
+final class OpaqueInteractionState: NSObject, NSSecureCoding {
+    static var supportsSecureCoding: Bool { true }
+    let marker: String
+    init(marker: String) {
+        self.marker = marker
+        super.init()
+    }
+    func encode(with coder: NSCoder) {
+        coder.encode(marker as NSString, forKey: "marker")
+    }
+    init?(coder: NSCoder) {
+        guard let marker = coder.decodeObject(of: [NSString.self], forKey: "marker") as? String else { return nil }
+        self.marker = marker
+        super.init()
     }
 }
 

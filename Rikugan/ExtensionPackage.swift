@@ -26,7 +26,7 @@ enum ChromeAPIMatrix {
     struct Method: Equatable { var api: String; var name: String; var level: String; var note: String }
     static let methods: [Method] = [
         .init(api: "runtime", name: "sendMessage", level: "Partial", note: "WebKit 提供时沿用。内容脚本在 background ready 之前调用会进入 BackgroundGate 队列。ready 后按顺序调用原来的 runtime.sendMessage，发送方拿到 background onMessage 的返回值。探测失败进入 failed，排队的 sendMessage 和 connect 拒绝为 background failed。shutdown 之后要等下一次 cold start 才再接受消息。"),
-        .init(api: "runtime", name: "connect", level: "Partial", note: "ready 前的 Port 保持 pending，ready 后触发 onConnect。disconnect、重新 connect、多个 port 和关闭标签都会结束对应 port。"),
+        .init(api: "runtime", name: "connect", level: "Partial", note: "ready 前的 Port 保持 pending，postMessage 先排队。ready 后调用原来的 runtime.connect，按顺序把排队的 postMessage 交给这个 Port，并触发 onConnect。disconnect、重新 connect、多个 port 和关闭标签都会结束对应 port。"),
         .init(api: "runtime", name: "sendNativeMessage", level: "Unsupported", note: "已列入 unsupportedAPIs。"),
         .init(api: "runtime", name: "connectNative", level: "Unsupported", note: "已列入 unsupportedAPIs。"),
         .init(api: "storage", name: "local", level: "Supported", note: "WKWebExtension 扩展存储，按身份隔离。"),

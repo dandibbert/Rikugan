@@ -908,7 +908,7 @@ struct DiagnosticsView: View {
             "runtimeLog": model.runtimeLog,
             "api": ChromeAPIMatrix.entries.map { ["api": $0.api, "level": $0.level] }
         ]
-        let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])) ?? Data()
+        let data = (try? JSONSerialization.data(withJSONObject: DiagnosticsExport.sanitize(payload), options: [.prettyPrinted, .sortedKeys])) ?? Data()
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Rikugan-diagnostics.json")
         try? data.write(to: url, options: .atomic)
         BrowserPresentation.share([url])

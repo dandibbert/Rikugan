@@ -396,16 +396,35 @@
     var listeners = [];
     var storage = Object.create(null);
     var originalSend = null;
+    var originalConnect = null;
     var seq = 1;
     function closed(message) { return state === 'failed' || state === 'shutdown'; }
     function closedError() { return new Error(state === 'shutdown' ? 'background shutdown' : 'background failed'); }
     function emit(port, name) {
-      (port[name] || []).forEach(function (fn) { try { fn(port); } catch (error) {} });
+      (port[name] || []).forEach(function (fn) { if (typeof fn === 'function') try { fn(port); } catch (error) {} });
+    }
+    function deliverPortMessage(port, message) {
+      if (port.real && typeof port.real.postMessage === 'function') {
+        try { port.real.postMessage(message); } catch (error) {}
+        return;
+      }
+      var list = port.onMessage || [];
+      for (var index = 0; index < list.length; index += 1) {
+        if (typeof list[index] === 'function') {
+          try { list[index](message, port); } catch (error) {}
+        }
+      }
     }
     function openPort(port) {
-      if (!port.pending) return;
+      if (port.opened || port.disconnected) return;
+      port.opened = true;
       port.pending = false;
+      if (typeof originalConnect === 'function') {
+        try { port.real = originalConnect({ name: port.name, tabId: port.tabId }); } catch (error) { port.real = null; }
+      }
       listeners.forEach(function (fn) { try { fn(port); } catch (error) {} });
+      var queued = port.outbound.splice(0);
+      queued.forEach(function (message) { deliverPortMessage(port, message); });
     }
     function deliver(item) {
       if (typeof originalSend !== 'function') {
@@ -425,6 +444,7 @@
       onConnect: function (fn) { listeners.push(fn); },
       setTransport: function (transport) {
         originalSend = transport && transport.sendMessage;
+        originalConnect = transport && transport.connect;
       },
       coldStart: function () { state = 'starting'; },
       start: function () {
@@ -469,16 +489,31 @@
       },
       connect: function (info) {
         if (closed()) throw closedError();
-        var port = { id: seq++, name: info && info.name || '', tabId: info && info.tabId, pending: state !== 'ready' && state !== 'idle', disconnected: false, onDisconnect: [], onMessage: [] };
+        var onMessage = [];
+        onMessage.addListener = function (fn) { onMessage.push(fn); };
+        onMessage.removeListener = function (fn) {
+          var index = onMessage.indexOf(fn);
+          if (index >= 0) onMessage.splice(index, 1);
+        };
+        var port = { id: seq++, name: info && info.name || '', tabId: info && info.tabId, pending: state !== 'ready' && state !== 'idle', opened: false, disconnected: false, onDisconnect: [], onMessage: onMessage, outbound: [], real: null };
         ports.push(port);
-        if (!port.pending) listeners.forEach(function (fn) { try { fn(port); } catch (error) {} });
+        port.postMessage = function (message) {
+          if (port.disconnected) return;
+          if (!port.opened) { port.outbound.push(message); return; }
+          deliverPortMessage(port, message);
+        };
         port.disconnect = function () {
           if (port.disconnected) return;
           port.disconnected = true;
+          port.outbound.splice(0);
           var index = ports.indexOf(port);
           if (index >= 0) ports.splice(index, 1);
+          if (port.real && typeof port.real.disconnect === 'function') {
+            try { port.real.disconnect(); } catch (error) {}
+          }
           emit(port, 'onDisconnect');
         };
+        if (!port.pending) openPort(port);
         return port;
       },
       closeTab: function (tabId) {
@@ -498,7 +533,7 @@
     if (!runtime) return gate;
     var originalSend = runtime.sendMessage;
     var originalConnect = runtime.connect;
-    if (typeof originalSend === 'function') gate.setTransport({ sendMessage: originalSend });
+    if (typeof originalSend === 'function' || typeof originalConnect === 'function') gate.setTransport({ sendMessage: originalSend, connect: originalConnect });
     runtime.sendMessage = function (message, options, callback) {
       var responseCallback = typeof options === 'function' ? options : callback;
       var task;

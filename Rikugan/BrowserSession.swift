@@ -198,6 +198,13 @@ import WebKit
         let selected = tabs.first { $0.id == selectedID && Self.shouldPersistTab(isPrivate: $0.isPrivate, windowID: $0.windowID) }?.id ?? snapshots.first?.id
         model?.updateProfile(profileID) { $0.tabs = snapshots.isEmpty ? [SavedTab()] : snapshots; $0.selectedTabID = selected }
     }
+    func storeThumbnail(_ image: UIImage, id: UUID) {
+        thumbnails[id] = image
+        guard let model, let data = image.jpegData(compressionQuality: 0.55) else { return }
+        let folder = model.directory(profileID).appendingPathComponent("Thumbnails", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? data.write(to: folder.appendingPathComponent(id.uuidString + ".jpg"), options: .atomic)
+    }
     func storeFavicon(_ image: UIImage, host: String) {
         let key = Self.faviconKey(host)
         guard !key.isEmpty else { return }
@@ -583,6 +590,16 @@ extension BrowserSession {
         scrollY = view.scrollView.contentOffset.y
         if #available(iOS 15, *) {
             interactionState = TabInteraction.encode(view.interactionState)
+        }
+        if TabSnapshotGate.shouldCapture(isHome: isHome, isPrivate: isPrivate) {
+            view.takeSnapshot(with: nil) { [weak self, view] image, _ in
+                _ = view
+                guard let self, let image else { return }
+                Task { @MainActor in self.session?.storeThumbnail(image, id: self.id) }
+            }
+        }
+        if let host = URL(string: address)?.host, let image = session?.favicons[id] {
+            session?.storeFavicon(image, host: host)
         }
         releaseView()
         restored = false

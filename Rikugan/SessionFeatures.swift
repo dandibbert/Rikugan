@@ -179,11 +179,7 @@ extension BrowserTab: WKScriptMessageHandler {
         webView.takeSnapshot(with: nil) { [weak self] image, _ in
             guard let self, let image else { return }
             Task { @MainActor in
-                self.session?.thumbnails[self.id] = image
-                guard let session = self.session, let model = session.model, let data = image.jpegData(compressionQuality: 0.55) else { return }
-                let folder = model.directory(session.profileID).appendingPathComponent("Thumbnails", isDirectory: true)
-                try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                try? data.write(to: folder.appendingPathComponent(self.id.uuidString + ".jpg"), options: .atomic)
+                self.session?.storeThumbnail(image, id: self.id)
             }
         }
     }
