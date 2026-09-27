@@ -33,8 +33,14 @@ struct AutofillItem: Codable, Identifiable, Equatable {
 enum AutofillPolicy {
     static func normalizedHost(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let url = URL(string: trimmed.contains("://") ? trimmed : "https://" + trimmed), let host = url.host?.lowercased() { return host }
-        return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let candidate: String
+        if trimmed.contains("://") { candidate = trimmed }
+        else { candidate = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
+        if let url = URL(string: candidate.contains("://") ? candidate : "https://" + candidate),
+           let host = url.host?.lowercased() {
+            return host.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        }
+        return candidate.trimmingCharacters(in: CharacterSet(charactersIn: "."))
     }
     static func canFill(_ item: AutofillItem, pageURL: URL?) -> Bool {
         let rule = normalizedHost(item.host)
