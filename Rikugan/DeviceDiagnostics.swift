@@ -55,8 +55,8 @@ struct DiagnosticReport: Codable, Equatable {
         }
 
         let plugIns = bundle.builtInPlugInsURL
-        let shareEmbedded = plugIns.flatMap { try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil) }
-            ?.contains(where: { $0.pathExtension == "appex" && $0.lastPathComponent.contains("RikuganShare") }) == true
+        let embeddedItems = plugIns.flatMap { try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil) } ?? []
+        let shareEmbedded = embeddedItems.contains { $0.pathExtension == "appex" && $0.lastPathComponent.contains("RikuganShare") }
         add("share-extension", "Share Extension 嵌入", shareEmbedded ? .pass : .fail,
             shareEmbedded ? "RikuganShare.appex 已嵌入；仍需从其他 App 的系统分享面板做一次真实往返测试。" : "安装包内没有发现 RikuganShare.appex。")
 

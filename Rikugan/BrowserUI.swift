@@ -483,24 +483,34 @@ struct LibraryView: View {
     @State private var folderName = ""
     @State private var addingFolder = false
     @State private var folder: UUID?
+    @State private var editingBookmark: PageRecord?
+    @State private var deletingFolder: BookmarkFolder?
     var body: some View {
         NavigationStack {
             List {
                 Picker("资料", selection: $selection) { Text("书签").tag(0); Text("历史").tag(1) }.pickerStyle(.segmented)
                 TextField("搜索", text: $query)
                 if selection == 0 {
-                    if model.profile.bookmarkFolders.isEmpty == false && folder == nil {
-                        ForEach(model.profile.bookmarkFolders) { item in Button(item.name, systemImage: "folder") { folder = item.id } }
+                    if folder != nil {
+                        Button("上一级", systemImage: "chevron.left") { folder = currentFolder?.parentID }
                     }
-                    if filteredBookmarks.isEmpty { ContentUnavailableView("还没有书签", systemImage: "book") }
+                    if !childFolders.isEmpty {
+                        Section("文件夹") {
+                            ForEach(childFolders) { item in
+                                Button(item.name, systemImage: "folder") { folder = item.id }
+                                    .contextMenu {
+                                        Button("重命名") { renameFolder(item) }
+                                        Button("删除文件夹", role: .destructive) { deletingFolder = item }
+                                    }
+                            }
+                        }
+                    }
+                    if filteredBookmarks.isEmpty { ContentUnavailableView("此位置没有书签", systemImage: "book") }
                     ForEach(filteredBookmarks) { page in
                         Button { open(page.url) } label: { VStack(alignment: .leading) { Text(page.title).lineLimit(1); Text(page.url).font(.caption).foregroundStyle(.secondary).lineLimit(1) } }
                             .swipeActions {
                                 Button("删除", role: .destructive) { model.updateProfile(session.profileID) { $0.bookmarks.removeAll { $0.id == page.id } } }
-                                Button("编辑") { BrowserPresentation.input(title: "编辑书签", message: page.url, initial: page.title) { title in
-                                    guard let title else { return }
-                                    model.updateProfile(session.profileID) { if let index = $0.bookmarks.firstIndex(where: { $0.id == page.id }) { $0.bookmarks[index].title = title } }
-                                } }
+                                Button("编辑") { editingBookmark = page }
                             }
                             .contextMenu {
                                 Menu("移动到") {
@@ -527,18 +537,35 @@ struct LibraryView: View {
                     }
                     Button("清除全部历史", role: .destructive) { model.updateProfile(session.profileID) { $0.history.removeAll() } }
                 }
-            }.navigationTitle("书签与历史")
+            }.navigationTitle(selection == 0 ? (currentFolder?.name ?? "书签") : "历史")
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { if selection == 0 { Button("文件夹", systemImage: "folder.badge.plus") { addingFolder = true } } }
                     ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
                 }
                 .alert("新建文件夹", isPresented: $addingFolder) {
                     TextField("名称", text: $folderName)
-                    Button("创建") { model.updateProfile(session.profileID) { $0.bookmarkFolders.append(BookmarkFolder(name: String(folderName.prefix(40)))) }; folderName = "" }
+                    Button("创建") {
+                        let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !name.isEmpty else { return }
+                        model.updateProfile(session.profileID) { $0.bookmarkFolders.append(BookmarkFolder(name: String(name.prefix(40)), parentID: folder)) }
+                        folderName = ""
+                    }
                     Button("取消", role: .cancel) {}
+                }
+                .confirmationDialog("删除文件夹「\(deletingFolder?.name ?? "")」？其中的书签和子文件夹会移动到上一级。", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }), titleVisibility: .visible) {
+                    Button("删除文件夹", role: .destructive) { if let deletingFolder { deleteFolder(deletingFolder) }; deletingFolder = nil }
+                }
+                .sheet(item: $editingBookmark) { page in
+                    BookmarkEditorSheet(page: page, folders: model.profile.bookmarkFolders) { updated in
+                        model.updateProfile(session.profileID) { profile in
+                            if let index = profile.bookmarks.firstIndex(where: { $0.id == updated.id }) { profile.bookmarks[index] = updated }
+                        }
+                    }
                 }
         }
     }
+    private var currentFolder: BookmarkFolder? { folder.flatMap { id in model.profile.bookmarkFolders.first { $0.id == id } } }
+    private var childFolders: [BookmarkFolder] { model.profile.bookmarkFolders.filter { $0.parentID == folder } }
     private var filteredBookmarks: [PageRecord] {
         model.profile.bookmarks.filter { page in
             (folder == nil || page.folderID == folder) && (query.isEmpty || page.title.localizedCaseInsensitiveContains(query) || page.url.localizedCaseInsensitiveContains(query))
@@ -558,6 +585,67 @@ struct LibraryView: View {
         return buckets.map { (title: $0.0, pages: $0.1) }
     }
     private func open(_ raw: String) { if let url = URL(string: raw) { session.activeTab?.navigate(url) }; dismiss() }
+    private func renameFolder(_ item: BookmarkFolder) {
+        BrowserPresentation.input(title: "重命名文件夹", message: nil, initial: item.name) { value in
+            guard let value else { return }
+            let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            model.updateProfile(session.profileID) { profile in
+                if let index = profile.bookmarkFolders.firstIndex(where: { $0.id == item.id }) { profile.bookmarkFolders[index].name = String(name.prefix(40)) }
+            }
+        }
+    }
+    private func deleteFolder(_ item: BookmarkFolder) {
+        model.updateProfile(session.profileID) { profile in
+            for index in profile.bookmarks.indices where profile.bookmarks[index].folderID == item.id { profile.bookmarks[index].folderID = item.parentID }
+            for index in profile.bookmarkFolders.indices where profile.bookmarkFolders[index].parentID == item.id { profile.bookmarkFolders[index].parentID = item.parentID }
+            profile.bookmarkFolders.removeAll { $0.id == item.id }
+        }
+        if folder == item.id { folder = item.parentID }
+    }
+}
+
+struct BookmarkEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let page: PageRecord
+    let folders: [BookmarkFolder]
+    var save: (PageRecord) -> Void
+    @State private var title: String
+    @State private var address: String
+    @State private var folderID: UUID?
+    @State private var error: String?
+    init(page: PageRecord, folders: [BookmarkFolder], save: @escaping (PageRecord) -> Void) {
+        self.page = page; self.folders = folders; self.save = save
+        _title = State(initialValue: page.title); _address = State(initialValue: page.url); _folderID = State(initialValue: page.folderID)
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("标题", text: $title)
+                TextField("网址", text: $address).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                Picker("文件夹", selection: $folderID) {
+                    Text("顶层").tag(UUID?.none)
+                    ForEach(folders) { folder in Text(folder.name).tag(Optional(folder.id)) }
+                }
+                if let error { Text(error).font(.footnote).foregroundStyle(.red) }
+            }.navigationTitle("编辑书签")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button("保存") { commit() }.bold() }
+                }
+        }
+    }
+    private func commit() {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URLRules.directURL(trimmed), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+            error = "书签网址必须是有效的 HTTP(S) 地址。"; return
+        }
+        var updated = page
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.title = String((cleanTitle.isEmpty ? url.host ?? url.absoluteString : cleanTitle).prefix(300))
+        updated.url = url.absoluteString; updated.folderID = folderID
+        save(updated); dismiss()
+    }
 }
 
 struct CommandsView: View {
@@ -623,14 +711,25 @@ struct SettingsView: View {
                     Button("清除网站数据与历史记录", role: .destructive) { clearing = true }
                 }
                 Section("工具栏快捷动作") {
-                    ForEach(ShortcutCatalog.all, id: \.id) { item in
-                        Toggle(item.title, isOn: Binding(get: { model.profile.settings.shortcuts.contains(item.id) }, set: { on in
-                            model.updateProfile(session.profileID) { profile in
-                                profile.settings.shortcuts.removeAll { $0 == item.id }
-                                if on { profile.settings.shortcuts.append(item.id) }
-                            }
-                        }))
+                    if model.profile.settings.shortcuts.isEmpty { Text("未添加快捷动作").foregroundStyle(.secondary) }
+                    ForEach(Array(model.profile.settings.shortcuts.enumerated()), id: \.element) { index, id in
+                        HStack {
+                            Label(ShortcutCatalog.title(id), systemImage: ShortcutCatalog.symbol(id))
+                            Spacer()
+                            Button { moveShortcut(index, -1) } label: { Image(systemName: "arrow.up") }
+                                .disabled(index == 0).buttonStyle(.borderless)
+                            Button { moveShortcut(index, 1) } label: { Image(systemName: "arrow.down") }
+                                .disabled(index == model.profile.settings.shortcuts.count - 1).buttonStyle(.borderless)
+                            Button(role: .destructive) { removeShortcut(id) } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless)
+                        }
                     }
+                    Menu("添加快捷动作", systemImage: "plus.circle") {
+                        ForEach(ShortcutCatalog.all.filter { !model.profile.settings.shortcuts.contains($0.id) }, id: \.id) { item in
+                            Button(item.title, systemImage: item.symbol) { addShortcut(item.id) }
+                        }
+                    }.disabled(model.profile.settings.shortcuts.count >= 6 || ShortcutCatalog.all.allSatisfy { model.profile.settings.shortcuts.contains($0.id) })
+                    Text("最多 6 个；列表顺序就是工具栏顺序。长按“更多”仍可直接调用全部快捷功能。").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("备份") {
                     NavigationLink("待处理分享（\(model.pendingShareCount)）") { ShareQueueView() }
@@ -663,6 +762,24 @@ struct SettingsView: View {
                         do { try model.importWallpaper(url) } catch { model.message = error.localizedDescription }
                     }
                 }
+        }
+    }
+    private func addShortcut(_ id: String) {
+        model.updateProfile(session.profileID) { profile in
+            guard profile.settings.shortcuts.count < 6,
+                  !profile.settings.shortcuts.contains(id),
+                  ShortcutCatalog.all.contains(where: { $0.id == id }) else { return }
+            profile.settings.shortcuts.append(id)
+        }
+    }
+    private func removeShortcut(_ id: String) {
+        model.updateProfile(session.profileID) { $0.settings.shortcuts.removeAll { $0 == id } }
+    }
+    private func moveShortcut(_ index: Int, _ delta: Int) {
+        model.updateProfile(session.profileID) { profile in
+            let target = index + delta
+            guard profile.settings.shortcuts.indices.contains(index), profile.settings.shortcuts.indices.contains(target) else { return }
+            profile.settings.shortcuts.swapAt(index, target)
         }
     }
 }

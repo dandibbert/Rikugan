@@ -147,7 +147,7 @@ enum BackupImporter {
         var seenShortcuts = Set<String>()
         result.settings.shortcuts = Array(backup.settings.shortcuts.filter { value in
             ShortcutCatalog.all.contains { $0.id == value } && seenShortcuts.insert(value).inserted
-        }.prefix(4))
+        }.prefix(6))
         result.siteSettings = backup.siteSettings
         result.searchEngine = backup.searchEngine
         result.searchHistory = Array(backup.searchHistory.prefix(500))

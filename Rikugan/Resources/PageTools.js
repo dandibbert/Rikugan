@@ -261,13 +261,23 @@
       input.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     };
-    const username = doc.querySelector('input[autocomplete="username"],input[type="email"],input[name*="user" i],input[name*="email" i]');
+    const username = doc.querySelector('input[autocomplete="username"],input[name*="user" i]');
     const password = doc.querySelector('input[type="password"]');
     const name = doc.querySelector('input[autocomplete="name"],input[name="name" i]');
+    const email = doc.querySelector('input[autocomplete="email"],input[type="email"],input[name*="email" i]');
+    const phone = doc.querySelector('input[autocomplete="tel"],input[type="tel"],input[name*="phone" i],input[name*="tel" i]');
+    const address = doc.querySelector('input[autocomplete="street-address"],input[autocomplete="address-line1"],textarea[autocomplete="street-address"],input[name*="address" i],textarea[name*="address" i]');
+    const cardNumber = doc.querySelector('input[autocomplete="cc-number"],input[name*="card" i],input[name*="cc-number" i]');
+    const cardName = doc.querySelector('input[autocomplete="cc-name"],input[name*="cardholder" i],input[name*="cc-name" i]');
     return {
       username: set(username, values.username),
       password: set(password, values.password),
-      name: set(name, values.name)
+      name: set(name, values.name),
+      email: set(email, values.email),
+      phone: set(phone, values.phone),
+      address: set(address, values.address),
+      cardNumber: set(cardNumber, values.cardNumber),
+      cardName: set(cardName, values.cardName)
     };
   }
   const api = { selector, setAppearance, setFont, collectTexts, applyTexts, restoreTexts, extractArticle, collectMedia, installNetHook, startPicker, find, clearFind, videoAction, fill, ensureStyle };

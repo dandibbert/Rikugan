@@ -19,6 +19,10 @@ GM XHR 新增原生 URLSessionDataTask 取消、总超时、下载进度与 read
 
 新增“真机验收诊断”：检查实际运行环境、主 App App Group 容器读写、Share Extension 是否嵌入、普通/无痕 WKWebsiteDataStore、扩展载入/DNR/内容拦截/下载及标签资源状态，并可导出脱敏 JSON。报告明确不读取 Cookie、历史、书签、脚本源码、页面 URL/标题或下载地址；系统默认浏览器 entitlement 仍以系统列表为准。真机分享往返仍需要用户在真实系统 Share Sheet 验证。
 
+书签管理补齐嵌套文件夹进入/返回、创建、重命名、删除（内容安全移动到上一级），书签编辑可同时修改标题、HTTP(S) URL 和所在文件夹；历史支持搜索、单项/按日/全部删除。Toolbar 快捷动作可添加、删除和排序，最多 6 个并按列表顺序显示；“更多”长按仍提供全部快捷功能。Omnibox 已有书签/历史/搜索历史本地建议和自定义搜索引擎 keyword shortcut。
+
+Autofill 的密码、身份、支付条目继续只存 Keychain（WhenUnlockedThisDeviceOnly），写入改为 update-or-insert，避免“先删除旧项再添加失败”导致丢数据；条目有数量/体积限制及网站匹配保护。身份实际填充 name/email/tel/address，支付实际填充 cc-name/cc-number，仍只在用户点按后执行且不自动提交；支付 CVV/完整自动支付流程不存储、不承诺。
+
 ## 0.3.0 已交付
 
 | 规格/缺口 | 实现 | 验证入口 |

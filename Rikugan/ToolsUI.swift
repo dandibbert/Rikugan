@@ -385,38 +385,77 @@ struct AutofillSheet: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.title.isEmpty ? item.kind : item.title).font(.headline)
                         Text(item.host).font(.caption).foregroundStyle(.secondary)
-                        if tab != nil { Button("填入当前网页") { Task { await fill(item) } }.font(.subheadline) }
-                    }
-                }.onDelete { index in items.remove(atOffsets: index); try? AutofillVault.save(profile: model.profile.id, items: items) }
+                        if let tab {
+                            let allowed = AutofillPolicy.canFill(item, pageURL: tab.existingWebView?.url ?? URL(string: tab.address))
+                            Button("填入当前网页") { Task { await fill(item) } }.font(.subheadline).disabled(!allowed)
+                            if !allowed { Text("网站不匹配；编辑条目的网站或使用对应站点的条目。").font(.caption2).foregroundStyle(.orange) }
+                        }
+                    }.contextMenu { Button("编辑") { draft = item; editing = true } }
+                }.onDelete(perform: deleteItems)
             }.navigationTitle("自动填充")
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("添加", systemImage: "plus") { editing = true } } }
                 .onAppear { items = AutofillVault.load(profile: model.profile.id) }
-                .sheet(isPresented: $editing) { AutofillEditor(draft: $draft) { items.append(draft); try? AutofillVault.save(profile: model.profile.id, items: items); draft = AutofillItem(kind: "password", title: "", host: "", username: "", secret: "") } }
+                .sheet(isPresented: $editing) { AutofillEditor(draft: $draft) { saveDraft() } }
         }
     }
     private func fill(_ item: AutofillItem) async {
         guard let tab else { return }
-        let payload: [String: String] = ["username": item.username, "password": item.secret, "name": item.name]
+        guard AutofillPolicy.canFill(item, pageURL: tab.existingWebView?.url ?? URL(string: tab.address)) else {
+            model.message = "这个自动填充条目不属于当前网站。"; return
+        }
+        let payload: [String: String] = [
+            "username": item.username,
+            "password": item.kind == "password" ? item.secret : "",
+            "name": item.name,
+            "email": item.email,
+            "phone": item.phone,
+            "address": item.address,
+            "cardNumber": item.kind == "payment" ? item.secret : "",
+            "cardName": item.kind == "payment" ? item.name : ""
+        ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) else { return }
         _ = await PageTools.call("RikuganPageTools.fill(\(json))", in: tab.webView)
+    }
+    private func saveDraft() -> Bool {
+        do {
+            let clean = try draft.validated()
+            var next = items
+            if let index = next.firstIndex(where: { $0.id == clean.id }) { next[index] = clean } else { next.append(clean) }
+            try AutofillVault.save(profile: model.profile.id, items: next)
+            items = next
+            draft = AutofillItem(kind: "password", title: "", host: "", username: "", secret: "")
+            return true
+        } catch { model.message = error.localizedDescription; return false }
+    }
+    private func deleteItems(_ offsets: IndexSet) {
+        var next = items; next.remove(atOffsets: offsets)
+        do { try AutofillVault.save(profile: model.profile.id, items: next); items = next }
+        catch { model.message = error.localizedDescription }
     }
 }
 
 struct AutofillEditor: View {
     @Binding var draft: AutofillItem
-    var save: () -> Void
+    var save: () -> Bool
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             Form {
                 Picker("类型", selection: $draft.kind) { Text("密码").tag("password"); Text("身份").tag("identity"); Text("支付备注").tag("payment") }
                 TextField("标题", text: $draft.title); TextField("网站", text: $draft.host).textInputAutocapitalization(.never)
-                TextField("用户名", text: $draft.username).textInputAutocapitalization(.never)
-                SecureField("密码或卡号", text: $draft.secret)
-                TextField("姓名", text: $draft.name); TextField("邮箱", text: $draft.email); TextField("电话", text: $draft.phone)
-                TextField("支付标签", text: $draft.paymentLabel); TextField("末四位", text: $draft.paymentLast4)
+                if draft.kind == "password" {
+                    TextField("用户名", text: $draft.username).textInputAutocapitalization(.never)
+                    SecureField("密码", text: $draft.secret)
+                } else if draft.kind == "identity" {
+                    TextField("姓名", text: $draft.name); TextField("邮箱", text: $draft.email).textInputAutocapitalization(.never)
+                    TextField("电话", text: $draft.phone).keyboardType(.phonePad); TextField("地址", text: $draft.address)
+                } else {
+                    TextField("持卡人姓名", text: $draft.name)
+                    SecureField("卡号", text: $draft.secret).keyboardType(.numberPad)
+                    TextField("支付标签", text: $draft.paymentLabel); TextField("末四位（可留空自动生成）", text: $draft.paymentLast4).keyboardType(.numberPad)
+                }
             }.navigationTitle("钥匙串条目")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("保存") { save(); dismiss() } }; ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("保存") { if save() { dismiss() } } }; ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
     }
 }

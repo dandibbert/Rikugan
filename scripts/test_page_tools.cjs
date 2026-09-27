@@ -38,4 +38,18 @@ sandbox.RikuganPageTools.setFont('');
 assert.equal(sandbox.RikuganPageTools.extractArticle(), null);
 const found = sandbox.RikuganPageTools.collectMedia();
 assert.ok(Array.isArray(found));
-console.log('PASS: page tools selector, appearance no-ops, and media collector');
+
+const inputs = Object.fromEntries(['username','password','name','email','phone','address','cardNumber','cardName'].map(key => [key, {
+  value: '', focus() {}, dispatchEvent() {}
+}]));
+const selectorMap = [
+  ['autocomplete="username"', 'username'], ['type="password"', 'password'], ['autocomplete="name"', 'name'],
+  ['autocomplete="email"', 'email'], ['autocomplete="tel"', 'phone'], ['autocomplete="street-address"', 'address'],
+  ['autocomplete="cc-number"', 'cardNumber'], ['autocomplete="cc-name"', 'cardName']
+];
+sandbox.document = { querySelector(selector) { const match = selectorMap.find(([needle]) => selector.includes(needle)); return match ? inputs[match[1]] : null; } };
+sandbox.Event = class Event { constructor(type) { this.type = type; } };
+const fill = sandbox.RikuganPageTools.fill({username:'user',password:'pass',name:'Name',email:'mail@example.com',phone:'123',address:'Road',cardNumber:'4111',cardName:'Card Name'});
+assert.deepEqual(JSON.parse(JSON.stringify(fill)), {username:true,password:true,name:true,email:true,phone:true,address:true,cardNumber:true,cardName:true});
+assert.deepEqual(Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value])), {username:'user',password:'pass',name:'Name',email:'mail@example.com',phone:'123',address:'Road',cardNumber:'4111',cardName:'Card Name'});
+console.log('PASS: page tools selector, appearance no-ops, media collector and password/identity/payment autofill mapping');
