@@ -96,6 +96,13 @@ struct ProfileInfo: Codable, Identifiable, Hashable {
         file.save(profiles)
     }
 
+    /// Registers a profile with a known ID (used by archive import so data directories line up).
+    func adopt(_ info: ProfileInfo) {
+        guard !profiles.contains(where: { $0.id == info.id }) else { return }
+        profiles.append(info)
+        file.save(profiles)
+    }
+
     func rename(_ id: UUID, name: String, symbol: String) {
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
         profiles[index].name = name
@@ -147,6 +154,8 @@ extension Notification.Name {
         tabs.removeValue(forKey: tab.numericID)
         if let webView = tab.webView { webViews.removeValue(forKey: ObjectIdentifier(webView)) }
     }
+    func unregister(webView: WKWebView) { webViews.removeValue(forKey: ObjectIdentifier(webView)) }
+    var liveWebViewCount: Int { webViews.values.filter { $0.value != nil }.count }
     func register(_ window: TabManager) { windows[window.numericID] = WeakBox(window) }
     func unregister(_ window: TabManager) { windows.removeValue(forKey: window.numericID) }
     func focus(_ window: TabManager) { lastFocusedWindowID = window.numericID }

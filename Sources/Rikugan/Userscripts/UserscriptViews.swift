@@ -141,7 +141,7 @@ struct UserscriptDetailView: View {
                     LabeledContent("版本", value: script.metadata.version)
                     if !script.metadata.author.isEmpty { LabeledContent("作者", value: script.metadata.author) }
                     LabeledContent("运行时机", value: script.metadata.runAt.rawValue)
-                    LabeledContent("运行环境", value: script.metadata.runsInPageWorld ? "页面环境（unsafeWindow 可用）" : "隔离环境")
+                    LabeledContent("运行环境", value: script.usesPageWorld ? "页面环境（unsafeWindow 可用）" : "隔离环境")
                     LabeledContent("上次更新", value: script.updatedAt.formatted(date: .abbreviated, time: .shortened))
                     if let checked = script.lastUpdateCheck { LabeledContent("上次检查", value: checked.formatted(date: .abbreviated, time: .shortened)) }
                 }

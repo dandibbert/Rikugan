@@ -24,6 +24,8 @@ struct InstalledUserScript: Codable, Identifiable, Hashable {
     }
 
     var name: String { metadata.name }
+    /// Page world (full `unsafeWindow`) vs isolated world — see UserScriptMetadata.runsInPageWorld(source:).
+    var usesPageWorld: Bool { metadata.runsInPageWorld(source: source) }
     var updateURL: URL? { (metadata.updateURL ?? metadata.downloadURL ?? sourceURL).flatMap(URL.init(string:)) }
     var downloadURL: URL? { (metadata.downloadURL ?? sourceURL).flatMap(URL.init(string:)) }
 }
@@ -194,7 +196,7 @@ struct BuiltUserScript {
             "runAt": meta.runAt.rawValue, "frameMode": frameMode,
             "include": rx(meta.includeRules()), "exclude": rx(meta.excludeRules()),
             "meta": metaDict, "metaStr": metadataBlock(script.source), "appVersion": AppServices.shared.appVersion,
-            "world": meta.runsInPageWorld ? "page" : "content", "incognito": isPrivate,
+            "world": script.usesPageWorld ? "page" : "content", "incognito": isPrivate,
         ]
         let prefix: String
         if let cached = sourceCache[cacheKey] { prefix = cached } else {

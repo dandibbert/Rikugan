@@ -20,6 +20,10 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>RikuganGitCommit</key>
+	<string>$(RIKUGAN_GIT_COMMIT)</string>
+	<key>RikuganBuildDate</key>
+	<string>$(RIKUGAN_BUILD_DATE)</string>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>zh_CN</string>

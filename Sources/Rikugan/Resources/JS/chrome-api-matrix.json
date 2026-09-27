@@ -1,0 +1,246 @@
+{
+  "_comment": "Single source of truth for Rikugan's chrome.* compatibility. Verified by scripts/test_js.cjs against ChromeRuntime.js and ChromeAPIBridge.swift. Levels: Supported | Partial | Unsupported. Entry format: [level, note]. js=true means implemented entirely in the JS shim.",
+  "namespaces": {
+    "runtime": {
+      "level": "Supported",
+      "reason": "Messaging, ports, lifecycle events and manifest/URL helpers work in content scripts, popup, options and the background runtime.",
+      "differences": ["getPlatformInfo().os is \"ios\" (not a Chrome enum value)", "External messaging (other extensions / web pages) is not available"],
+      "methods": {
+        "getURL": ["Supported", "", true],
+        "getManifest": ["Supported", "", true],
+        "sendMessage": ["Supported", "Queued until the background runtime is ready; explicit error if it fails to start"],
+        "connect": ["Supported", "Messages posted before the receiver connects are queued"],
+        "openOptionsPage": ["Supported", ""],
+        "reload": ["Supported", ""],
+        "getContexts": ["Partial", "Returns background / popup / tab contexts without documentId"],
+        "setUninstallURL": ["Partial", "Accepted but never opened", true],
+        "requestUpdateCheck": ["Partial", "Always resolves {status: 'no_update'}; updates are checked from the extension manager", true],
+        "getPlatformInfo": ["Partial", "os = 'ios', arch = 'arm64'", true],
+        "getBackgroundPage": ["Unsupported", "MV3 has no background page"],
+        "sendNativeMessage": ["Unsupported", "No native messaging hosts on iOS"],
+        "connectNative": ["Unsupported", "No native messaging hosts on iOS"],
+        "restart": ["Unsupported", "Chrome OS only"],
+        "onMessage": ["Supported", "sendResponse, return true and returned Promises are supported", true],
+        "onConnect": ["Supported", "", true],
+        "onInstalled": ["Supported", "Fired on install / update after the background is ready", true],
+        "onStartup": ["Supported", "Fired once per app launch", true],
+        "onSuspend": ["Supported", "Fired before the idle background runtime is suspended", true],
+        "onMessageExternal": ["Partial", "Never fires (no external senders)", true],
+        "onConnectExternal": ["Partial", "Never fires (no external senders)", true],
+        "onUpdateAvailable": ["Partial", "Never fires", true]
+      }
+    },
+    "storage": {
+      "level": "Supported",
+      "reason": "Per-extension native storage (not page localStorage).",
+      "differences": ["storage.sync is stored locally and not synchronised across devices", "storage.managed is always empty"],
+      "methods": {
+        "local.get": ["Supported", ""], "local.set": ["Supported", ""], "local.remove": ["Supported", ""], "local.clear": ["Supported", ""],
+        "local.getBytesInUse": ["Supported", ""], "local.getKeys": ["Supported", ""],
+        "sync.get": ["Partial", "Local only"], "sync.set": ["Partial", "Local only, 100 KB quota enforced"], "sync.remove": ["Partial", "Local only"], "sync.clear": ["Partial", "Local only"],
+        "session.get": ["Supported", "In memory"], "session.set": ["Supported", "In memory"], "session.remove": ["Supported", ""], "session.clear": ["Supported", ""],
+        "session.setAccessLevel": ["Partial", "Accepted; session storage is always visible to content scripts", true],
+        "managed.get": ["Partial", "Always empty"],
+        "onChanged": ["Supported", "Delivered to background, extension pages and content scripts", true]
+      }
+    },
+    "scripting": {
+      "level": "Supported",
+      "reason": "Runs in the extension's isolated WKContentWorld or the page world (MAIN).",
+      "differences": ["injectImmediately is ignored", "documentIds targets are not supported"],
+      "methods": {
+        "executeScript": ["Supported", "func + args, files, world ISOLATED/MAIN, allFrames, frameIds"],
+        "insertCSS": ["Supported", "Constructed stylesheets (not blocked by page CSP)"],
+        "removeCSS": ["Supported", ""],
+        "registerContentScripts": ["Partial", "Takes effect on the next navigation; always persisted"],
+        "getRegisteredContentScripts": ["Supported", ""],
+        "unregisterContentScripts": ["Supported", ""],
+        "updateContentScripts": ["Supported", ""]
+      }
+    },
+    "tabs": {
+      "level": "Partial",
+      "reason": "Core tab control works; tab moving, discarding, zoom and groups are not available.",
+      "differences": ["Private tabs are invisible to extensions", "audible / mutedInfo are always false"],
+      "methods": {
+        "query": ["Supported", "active, currentWindow, lastFocusedWindow, windowId, url, title, status, pinned, index"],
+        "get": ["Supported", ""], "getCurrent": ["Supported", ""], "create": ["Supported", ""],
+        "update": ["Partial", "url, active, pinned; muted / highlighted / openerTabId ignored"],
+        "remove": ["Supported", ""], "reload": ["Supported", ""], "duplicate": ["Supported", ""],
+        "goBack": ["Supported", ""], "goForward": ["Supported", ""],
+        "captureVisibleTab": ["Partial", "Active tab of the focused window only"],
+        "detectLanguage": ["Supported", ""], "sendMessage": ["Supported", ""], "connect": ["Supported", "Implemented through the runtime port router", true],
+        "executeScript": ["Partial", "MV2 compatibility wrapper around scripting.executeScript", true],
+        "insertCSS": ["Partial", "MV2 compatibility wrapper around scripting.insertCSS", true],
+        "getZoom": ["Partial", "Always 1", true], "getZoomSettings": ["Partial", "Static defaults", true],
+        "setZoom": ["Unsupported", "Page zoom is not exposed to extensions"],
+        "move": ["Unsupported", ""], "discard": ["Unsupported", ""], "group": ["Unsupported", ""], "ungroup": ["Unsupported", ""],
+        "highlight": ["Unsupported", ""], "setZoomSettings": ["Unsupported", ""],
+        "onCreated": ["Supported", "", true], "onUpdated": ["Partial", "status / url / title changes only", true],
+        "onActivated": ["Supported", "", true], "onRemoved": ["Supported", "", true],
+        "onReplaced": ["Partial", "Never fires", true], "onMoved": ["Partial", "Never fires", true],
+        "onHighlighted": ["Partial", "Never fires", true], "onAttached": ["Partial", "Never fires", true],
+        "onDetached": ["Partial", "Never fires", true], "onZoomChange": ["Partial", "Never fires", true]
+      }
+    },
+    "permissions": {
+      "level": "Supported",
+      "reason": "Optional permissions and host permissions with a user prompt.",
+      "differences": [],
+      "methods": {
+        "contains": ["Supported", ""], "getAll": ["Supported", ""], "request": ["Supported", "Shows a native confirmation sheet"],
+        "remove": ["Supported", ""], "addHostAccessRequest": ["Unsupported", ""],
+        "onAdded": ["Supported", "", true], "onRemoved": ["Supported", "", true]
+      }
+    },
+    "action": {
+      "level": "Supported",
+      "reason": "Toolbar button with popup, badge, title and icon (per tab or global).",
+      "differences": ["On iPhone the actions are grouped in the toolbar extension menu"],
+      "methods": {
+        "setBadgeText": ["Supported", ""], "getBadgeText": ["Supported", ""],
+        "setBadgeBackgroundColor": ["Supported", ""], "getBadgeBackgroundColor": ["Supported", ""],
+        "setBadgeTextColor": ["Supported", ""], "getBadgeTextColor": ["Supported", ""],
+        "setTitle": ["Supported", ""], "getTitle": ["Supported", ""], "setIcon": ["Supported", "path or imageData"],
+        "setPopup": ["Supported", ""], "getPopup": ["Supported", ""], "openPopup": ["Supported", ""],
+        "enable": ["Supported", ""], "disable": ["Supported", ""], "isEnabled": ["Supported", ""],
+        "getUserSettings": ["Partial", "isOnToolbar is always true", true],
+        "onClicked": ["Supported", "", true]
+      }
+    },
+    "contextMenus": {
+      "level": "Partial",
+      "reason": "Items appear in the link long-press menu and the page menu.",
+      "differences": ["Only page / link / selection / frame / all contexts are shown", "Nested sub-menus are shown flat"],
+      "methods": {
+        "create": ["Partial", "See differences"], "update": ["Supported", ""], "remove": ["Supported", ""], "removeAll": ["Supported", ""],
+        "onClicked": ["Supported", "", true]
+      }
+    },
+    "cookies": {
+      "level": "Partial",
+      "reason": "Reads and writes the profile's WKHTTPCookieStore; requires host permissions.",
+      "differences": ["Only the default cookie store", "partitionKey is ignored"],
+      "methods": {
+        "get": ["Supported", ""], "getAll": ["Supported", ""], "set": ["Supported", ""], "remove": ["Supported", ""],
+        "getAllCookieStores": ["Partial", "Single store '0'"],
+        "onChanged": ["Unsupported", "WKHTTPCookieStore observer changes are not forwarded"]
+      }
+    },
+    "downloads": {
+      "level": "Partial",
+      "reason": "Uses Rikugan's download manager.",
+      "differences": ["saveAs / conflictAction are ignored", "Downloads made by Rikugan are not subject to DNR rules"],
+      "methods": {
+        "download": ["Partial", "url, filename, headers"], "search": ["Partial", "id and state filters only"],
+        "pause": ["Supported", ""], "resume": ["Supported", ""], "cancel": ["Supported", ""], "erase": ["Supported", ""],
+        "open": ["Supported", ""], "show": ["Partial", "Opens the file preview"],
+        "showDefaultFolder": ["Partial", "No-op", true], "setUiOptions": ["Partial", "No-op", true],
+        "getFileIcon": ["Unsupported", ""], "removeFile": ["Unsupported", ""],
+        "onChanged": ["Partial", "Fired on completion only", true],
+        "onCreated": ["Unsupported", "Not fired"], "onErased": ["Unsupported", "Not fired"]
+      }
+    },
+    "webNavigation": {
+      "level": "Partial",
+      "reason": "Main-frame navigation events from WKNavigationDelegate; sub-frame navigations are not observable.",
+      "differences": ["frameId is always 0 in events", "processId is always -1"],
+      "methods": {
+        "getFrame": ["Partial", "Frames known to content scripts / page tools only"],
+        "getAllFrames": ["Partial", "Frames known to content scripts / page tools only"],
+        "onBeforeNavigate": ["Partial", "Main frame only", true], "onCommitted": ["Partial", "Main frame only", true],
+        "onDOMContentLoaded": ["Partial", "Main frame only", true], "onCompleted": ["Partial", "Main frame only", true],
+        "onErrorOccurred": ["Partial", "Main frame only", true], "onHistoryStateUpdated": ["Supported", "pushState / replaceState / popstate / hashchange", true],
+        "onCreatedNavigationTarget": ["Partial", "window.open / target=_blank only", true],
+        "onReferenceFragmentUpdated": ["Unsupported", "Hash changes are reported through onHistoryStateUpdated"],
+        "onTabReplaced": ["Unsupported", ""]
+      }
+    },
+    "declarativeNetRequest": {
+      "level": "Partial",
+      "reason": "Rules are compiled to WKContentRuleList. WebKit evaluates rules by list order, not DNR priority.",
+      "differences": ["allow / allowAllRequests use WebKit ignore-previous-rules (ordering, not priority)", "redirect and modifyHeaders depend on the WebKit version (probed at runtime, see Diagnostics)", "regexFilter must be expressible in WebKit's regex subset", "Rules do not apply to Rikugan's native downloads / GM_xmlhttpRequest"],
+      "methods": {
+        "updateDynamicRules": ["Supported", ""], "getDynamicRules": ["Supported", ""],
+        "updateSessionRules": ["Supported", ""], "getSessionRules": ["Supported", ""],
+        "updateEnabledRulesets": ["Supported", ""], "getEnabledRulesets": ["Supported", ""],
+        "isRegexSupported": ["Supported", "Reports WebKit regex support"],
+        "getAvailableStaticRuleCount": ["Partial", "Static value", true], "getDisabledRuleIds": ["Supported", "updateStaticRules is unsupported, so none are disabled", true],
+        "setExtensionActionOptions": ["Partial", "Accepted; no badge counts", true],
+        "getMatchedRules": ["Unsupported", "WKContentRuleList does not report matches"],
+        "testMatchOutcome": ["Unsupported", ""], "updateStaticRules": ["Unsupported", ""],
+        "onRuleMatchedDebug": ["Unsupported", "WKContentRuleList does not report matches"]
+      },
+      "actions": {
+        "block": ["Supported", ""], "allow": ["Partial", "Ordering-based"], "allowAllRequests": ["Partial", "Domain-level only"],
+        "upgradeScheme": ["Supported", ""], "redirect": ["Partial", "url / extensionPath / transform; no regexSubstitution; requires WebKit support"],
+        "modifyHeaders": ["Partial", "set / append / remove; requires WebKit support"]
+      }
+    },
+    "webRequest": {
+      "level": "Unsupported",
+      "reason": "WKWebView's public API cannot observe or intercept arbitrary network requests. Rikugan does not use private WebKit API.",
+      "differences": [],
+      "methods": {
+        "onBeforeRequest": ["Unsupported", ""], "onBeforeSendHeaders": ["Unsupported", ""], "onSendHeaders": ["Unsupported", ""],
+        "onHeadersReceived": ["Unsupported", ""], "onResponseStarted": ["Unsupported", ""], "onCompleted": ["Unsupported", ""],
+        "onErrorOccurred": ["Unsupported", ""], "onBeforeRedirect": ["Unsupported", ""], "onAuthRequired": ["Unsupported", ""],
+        "handlerBehaviorChanged": ["Unsupported", ""]
+      }
+    },
+    "i18n": {
+      "level": "Supported", "reason": "", "differences": [],
+      "methods": { "getMessage": ["Supported", "", true], "getUILanguage": ["Supported", "", true], "getAcceptLanguages": ["Supported", "", true], "detectLanguage": ["Supported", "NaturalLanguage framework"] }
+    },
+    "alarms": {
+      "level": "Partial", "reason": "Timers run while the app is in the foreground; iOS suspends them in the background.", "differences": ["Minimum period 30 s", "Alarms are not persisted across app launches"],
+      "methods": { "create": ["Partial", "See differences"], "get": ["Supported", ""], "getAll": ["Supported", ""], "clear": ["Supported", ""], "clearAll": ["Supported", ""], "onAlarm": ["Supported", "", true] }
+    },
+    "notifications": {
+      "level": "Partial", "reason": "In-app banner, local notification when the app is in the background.", "differences": ["No buttons / images / progress"],
+      "methods": { "create": ["Partial", ""], "update": ["Partial", ""], "clear": ["Supported", ""], "getAll": ["Supported", ""], "getPermissionLevel": ["Supported", "", true],
+        "onClicked": ["Supported", "", true], "onClosed": ["Partial", "Only fired by clear()", true], "onButtonClicked": ["Partial", "Never fires", true] }
+    },
+    "windows": {
+      "level": "Partial", "reason": "Each browser window (scene) is a chrome window.", "differences": ["create opens tabs in the focused window", "Window bounds are read-only"],
+      "methods": { "get": ["Supported", ""], "getCurrent": ["Supported", ""], "getLastFocused": ["Supported", ""], "getAll": ["Supported", ""],
+        "create": ["Partial", "Opens tabs in the focused window"], "update": ["Partial", "Returns the window unchanged"], "remove": ["Unsupported", ""],
+        "onCreated": ["Partial", "Never fires", true], "onRemoved": ["Partial", "Never fires", true], "onFocusChanged": ["Partial", "Never fires", true] }
+    },
+    "commands": {
+      "level": "Partial", "reason": "No global keyboard shortcuts on iOS.", "differences": [],
+      "methods": { "getAll": ["Supported", ""], "onCommand": ["Partial", "Never fires", true] }
+    },
+    "extension": {
+      "level": "Partial", "reason": "Legacy helpers.", "differences": [],
+      "methods": { "getURL": ["Supported", "", true], "getViews": ["Partial", "Always []", true], "getBackgroundPage": ["Partial", "Always null", true],
+        "isAllowedIncognitoAccess": ["Supported", "Always false (extensions do not run in private tabs)", true], "isAllowedFileSchemeAccess": ["Supported", "Always false", true] }
+    },
+    "tabGroups": { "level": "Unsupported", "reason": "Rikugan tab groups are not exposed to extensions yet.", "differences": [], "methods": {} },
+    "history": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "bookmarks": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "sidePanel": { "level": "Unsupported", "reason": "No side panel UI", "differences": [], "methods": {} },
+    "offscreen": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "identity": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "management": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "debugger": { "level": "Unsupported", "reason": "No DevTools protocol in WKWebView", "differences": [], "methods": {} },
+    "devtools": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "proxy": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "privacy": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "sessions": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "topSites": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "search": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "tts": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "idle": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "power": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "gcm": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "userScripts": { "level": "Unsupported", "reason": "Use Rikugan's built-in userscript manager", "differences": [], "methods": {} },
+    "declarativeContent": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "fontSettings": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "contentSettings": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "browsingData": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "system": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "enterprise": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "readingList": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} }
+  }
+}

@@ -29,6 +29,12 @@ import UIKit
         NotificationCenter.default.publisher(for: .rikuganProfileDidChange).sink { [weak self] _ in
             Task { @MainActor in self?.profileDidChange() }
         }.store(in: &cancellables)
+        NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification).sink { [weak self] _ in
+            Task { @MainActor in
+                ErrorLog.shared.record("Memory warning: suspending background tabs", source: "TabManager")
+                self?.enforceLifecycle(memoryPressure: true)
+            }
+        }.store(in: &cancellables)
     }
 
     private var sessionFile: JSONFile<WindowSessionSnapshot> {
@@ -82,14 +88,38 @@ import UIKit
         let previous = activeTab
         guard previous?.id != tab.id else { tab.activate(); return }
         previous?.captureThumbnail()
+        previous?.deactivate()
         activeTabID = tab.id
         if !tab.isPrivate { currentGroupID = tab.groupID }
         isPrivateMode = tab.isPrivate
         tab.activate()
         TabRegistry.shared.focus(self)
         profile.extensions.tabActivated(tab, previous: previous)
+        enforceLifecycle(memoryPressure: false)
         scheduleSave()
     }
+
+    // MARK: Lifecycle (live / suspended web views)
+
+    var lifecyclePolicy: TabLifecyclePolicy {
+        TabLifecyclePolicy(maxLiveBackground: max(0, AppServices.shared.prefs.maxLiveBackgroundTabs), maxLiveBackgroundUnderPressure: 0)
+    }
+
+    /// Suspends least-recently-used background web views beyond the policy limit.
+    func enforceLifecycle(memoryPressure: Bool) {
+        let candidates = tabs.map {
+            TabLifecyclePolicy.Candidate(id: $0.id, isActive: $0.id == activeTabID, isLive: $0.isLive, lastActiveAt: $0.lastActiveAt,
+                                         keepAliveHint: $0.pinned || $0.isLoading)
+        }
+        let victims = lifecyclePolicy.tabsToSuspend(candidates, memoryPressure: memoryPressure)
+        guard !victims.isEmpty else { return }
+        for tab in tabs where victims.contains(tab.id) {
+            Task { await tab.suspend() }
+        }
+    }
+
+    var liveTabCount: Int { tabs.filter(\.isLive).count }
+    var suspendedTabCount: Int { tabs.filter { !$0.isLive && ($0.url != nil) }.count }
 
     func close(_ tab: BrowserTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
@@ -154,12 +184,24 @@ import UIKit
         select(copy)
     }
 
+    /// Reorders tabs inside the current group / private space.
     func move(from source: IndexSet, to destination: Int) {
-        var visible = visibleTabs
-        visible.move(fromOffsets: source, toOffset: destination)
-        let others = tabs.filter { tab in !visible.contains { $0.id == tab.id } }
-        tabs = others + visible
-        scheduleSave()
+        if isPrivateMode {
+            var visible = privateTabs
+            visible.rkMove(fromOffsets: source, toOffset: destination)
+            tabs = tabs.filter { !$0.isPrivate } + visible
+            scheduleSave()
+            return
+        }
+        let group = currentGroupID
+        applySessionOp { SessionOps.reorderTabs(&$0, inGroup: group, from: source, to: destination) }
+    }
+
+    /// Drag & drop reorder: place `tab` before `target` (same group / space).
+    func move(_ tab: BrowserTab, before target: BrowserTab) {
+        let space = isPrivateMode ? privateTabs : tabs(inGroup: currentGroupID)
+        guard let from = space.firstIndex(where: { $0.id == tab.id }), let to = space.firstIndex(where: { $0.id == target.id }), from != to else { return }
+        move(from: IndexSet(integer: from), to: to > from ? to + 1 : to)
     }
 
     func togglePin(_ tab: BrowserTab) {
@@ -167,35 +209,65 @@ import UIKit
         scheduleSave()
     }
 
-    // MARK: Groups (Safari-like)
+    // MARK: Groups (Safari-like) — all mutations go through SessionOps (unit-tested model)
+
+    /// Applies a SessionOps mutation to the live tab list, preserving private tabs separately.
+    private func applySessionOp(_ op: (inout WindowSessionSnapshot) -> Void) {
+        var snapshot = WindowSessionSnapshot()
+        let normal = tabs.filter { !$0.isPrivate }
+        snapshot.tabs = normal.map { TabSnapshot(id: $0.id, url: "", title: "", groupID: $0.groupID, lastActiveAt: $0.lastActiveAt) }
+        snapshot.groups = groups
+        snapshot.selectedGroupID = currentGroupID
+        snapshot.selectedTabID = activeTab?.isPrivate == true ? nil : activeTabID
+        op(&snapshot)
+        let remaining = Set(snapshot.tabs.map(\.id))
+        let closed = normal.filter { !remaining.contains($0.id) }
+        groups = snapshot.groups
+        let byID = Dictionary(uniqueKeysWithValues: normal.map { ($0.id, $0) })
+        var ordered: [BrowserTab] = []
+        for entry in snapshot.tabs {
+            guard let tab = byID[entry.id] else { continue }
+            if tab.groupID != entry.groupID { tab.groupID = entry.groupID }
+            ordered.append(tab)
+        }
+        tabs = ordered + tabs.filter(\.isPrivate)
+        for tab in closed { close(tab) }
+        if let group = currentGroupID, !groups.contains(where: { $0.id == group }) { switchToGroup(nil) }
+        objectWillChange.send()
+        scheduleSave()
+    }
 
     @discardableResult
     func createGroup(name: String, moving tab: BrowserTab? = nil) -> TabGroupSnapshot {
-        let group = TabGroupSnapshot(name: name.isEmpty ? "未命名组" : name)
-        groups.append(group)
-        if let tab { move(tab, toGroup: group.id) }
-        scheduleSave()
-        return group
+        var created = TabGroupSnapshot(name: name)
+        applySessionOp { created = SessionOps.createGroup(&$0, name: name) }
+        if let tab { move(tab, toGroup: created.id) }
+        return created
     }
 
     func renameGroup(_ id: UUID, to name: String) {
-        guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
-        groups[index].name = name
-        scheduleSave()
+        applySessionOp { SessionOps.renameGroup(&$0, id, to: name) }
     }
 
-    func deleteGroup(_ id: UUID) {
-        for tab in tabs(inGroup: id) { close(tab) }
-        groups.removeAll { $0.id == id }
-        if currentGroupID == id { switchToGroup(nil) }
-        scheduleSave()
+    func reorderGroups(from source: IndexSet, to destination: Int) {
+        applySessionOp { SessionOps.reorderGroups(&$0, from: source, to: destination) }
+    }
+
+    /// Deletes a group; its tabs are either closed or moved to the default group (never silently lost).
+    func deleteGroup(_ id: UUID, mode: SessionOps.GroupDeletion = .closeTabs) {
+        let wasCurrent = currentGroupID == id
+        applySessionOp { SessionOps.deleteGroup(&$0, id, mode: mode) }
+        if wasCurrent { switchToGroup(nil) }
     }
 
     func move(_ tab: BrowserTab, toGroup id: UUID?) {
-        tab.groupID = id
-        if tab.id == activeTabID { switchToGroup(currentGroupID) }
-        objectWillChange.send()
-        scheduleSave()
+        guard !tab.isPrivate else { return }
+        let wasActive = tab.id == activeTabID
+        applySessionOp { SessionOps.moveTab(&$0, tab.id, toGroup: id) }
+        if wasActive, tab.groupID != currentGroupID {
+            // Keep the moved tab focused and follow it into its new group.
+            currentGroupID = tab.groupID
+        }
     }
 
     func switchToGroup(_ id: UUID?) {
@@ -252,7 +324,9 @@ import UIKit
         return snapshot
     }
 
-    func apply(_ snapshot: WindowSessionSnapshot) {
+    func apply(_ original: WindowSessionSnapshot) {
+        var snapshot = original
+        SessionOps.repair(&snapshot)
         for tab in tabs { tab.teardown() }
         groups = snapshot.groups
         tabs = snapshot.tabs.map { saved in

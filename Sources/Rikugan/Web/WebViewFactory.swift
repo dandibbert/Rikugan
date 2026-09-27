@@ -34,7 +34,7 @@ import UIKit
         }
         registerHandlers(configuration.userContentController, profile: tab.profile)
         applyContentRuleLists(configuration.userContentController, profile: tab.profile)
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = RikuganWebView(frame: .zero, configuration: configuration, purpose: "tab")
         webView.navigationDelegate = tab
         webView.uiDelegate = tab
         webView.allowsBackForwardNavigationGestures = true
@@ -123,7 +123,7 @@ import UIKit
         // 3. Userscripts.
         if isWeb, site.userScriptsEnabled != false {
             for script in profile.userscripts.scripts where script.enabled {
-                let world = script.metadata.runsInPageWorld ? WKContentWorld.page : Worlds.userscript(script.id)
+                let world = script.usesPageWorld ? WKContentWorld.page : Worlds.userscript(script.id)
                 ensureHandler(controller, world: world, profile: profile)
                 for built in profile.userscripts.userScripts(for: script, mainFrameURL: url, isPrivate: tab.isPrivate) {
                     controller.addUserScript(WKUserScript(source: built.source, injectionTime: built.time, forMainFrameOnly: built.mainFrameOnly, in: world))
@@ -162,13 +162,20 @@ import UIKit
         return ["enabled": enabled, "brightness": prefs.darkModeBrightness, "contrast": prefs.darkModeContrast]
     }
 
+    /// Resolved font plan (global rules + per-site override) for the tools world.
     static func fontConfig(host: String, profile: ProfileContext) -> [String: Any]? {
         let prefs = AppServices.shared.prefs
-        guard prefs.webFontEnabled, !prefs.webFontFamily.isEmpty else { return nil }
-        if profile.siteSettings.settings(for: host).webFont == false { return nil }
-        if prefs.webFontExcludedHosts.contains(where: { DomainTools.host(host, isWithin: $0) }) { return nil }
-        var config: [String: Any] = ["family": prefs.webFontFamily, "keepMonospace": prefs.webFontKeepMonospace]
-        if let file = AppServices.shared.fonts.importedFont(family: prefs.webFontFamily) { config["fileID"] = file.id }
+        guard let plan = FontPlan.resolve(prefs: prefs, site: profile.siteSettings.settings(for: host), host: host) else { return nil }
+        var config: [String: Any] = ["iconPattern": FontPlan.iconFontPattern]
+        var files: [[String: String]] = []
+        for (key, family) in [("body", plan.body), ("heading", plan.heading), ("mono", plan.mono)] {
+            guard let family else { continue }
+            config[key] = family
+            if let file = AppServices.shared.fonts.importedFont(family: family), !files.contains(where: { $0["family"] == family }) {
+                files.append(["family": family, "fileID": file.id])
+            }
+        }
+        config["files"] = files
         return config
     }
 

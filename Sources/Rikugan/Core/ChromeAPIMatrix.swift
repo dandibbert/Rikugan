@@ -1,65 +1,70 @@
 import Foundation
 
-/// Explicit capability matrix of the Chrome extension API surface implemented by Rikugan.
-/// The JS runtime exposes every namespace listed here; `unsupported` namespaces are stubs that
-/// throw / reject with `Unsupported API` rather than being `undefined`.
+/// chrome.* compatibility matrix loaded from `chrome-api-matrix.json` — the single source of truth
+/// that is also verified against the JS shim and the native bridge in CI.
 public enum ChromeAPIMatrix {
+    public struct Method: Hashable, Identifiable {
+        public let name: String
+        public let level: SupportLevel
+        public let note: String
+        /// Implemented entirely in the JS runtime (no native bridge call).
+        public let jsOnly: Bool
+        public var id: String { name }
+    }
+
     public struct Entry: Hashable, Identifiable {
         public let namespace: String
         public let level: SupportLevel
-        public let note: String
+        public let reason: String
+        public let differences: [String]
+        public let methods: [Method]
+        public let actions: [Method]
         public var id: String { namespace }
+        public var note: String { reason }
+
+        public var implemented: [Method] { methods.filter { $0.level != .unsupported } }
+        public var missing: [Method] { methods.filter { $0.level == .unsupported } }
     }
 
-    public static let entries: [Entry] = [
-        .init(namespace: "runtime", level: .supported, note: "sendMessage / onMessage / connect / Port / getURL / getManifest / onInstalled / onStartup / openOptionsPage / getPlatformInfo"),
-        .init(namespace: "storage", level: .supported, note: "local / sync / session / managed（只读空）/ onChanged，按扩展隔离的原生存储"),
-        .init(namespace: "scripting", level: .supported, note: "executeScript（func / files，ISOLATED / MAIN，allFrames）/ insertCSS / removeCSS / registerContentScripts"),
-        .init(namespace: "tabs", level: .partial, note: "query / get / create / update / remove / reload / sendMessage / connect / captureVisibleTab / 事件；无 move、discard、zoom"),
-        .init(namespace: "permissions", level: .supported, note: "contains / getAll / request（弹出确认）/ remove / 事件"),
-        .init(namespace: "action", level: .supported, note: "popup / badge / title / icon / onClicked / openPopup"),
-        .init(namespace: "i18n", level: .supported, note: "getMessage / getUILanguage / getAcceptLanguages / detectLanguage"),
-        .init(namespace: "contextMenus", level: .partial, note: "页面与链接长按菜单中的扩展菜单项；无子菜单图标"),
-        .init(namespace: "commands", level: .partial, note: "getAll；iPad 硬件键盘快捷键不可用，onCommand 仅从菜单触发"),
-        .init(namespace: "cookies", level: .partial, note: "get / getAll / set / remove，需主机权限；onChanged 不触发"),
-        .init(namespace: "downloads", level: .partial, note: "download / search / cancel / onChanged，交给下载管理器"),
-        .init(namespace: "notifications", level: .partial, note: "create / clear / onClicked（本地通知 / 应用内横幅）"),
-        .init(namespace: "webNavigation", level: .partial, note: "onBeforeNavigate / onCommitted / onDOMContentLoaded / onCompleted / onHistoryStateUpdated / getAllFrames"),
-        .init(namespace: "declarativeNetRequest", level: .partial, note: "block / allow / allowAllRequests / upgradeScheme 编译为 WKContentRuleList；redirect、modifyHeaders 不支持"),
-        .init(namespace: "alarms", level: .partial, note: "应用运行期间有效，iOS 后台不保证计时"),
-        .init(namespace: "windows", level: .partial, note: "getCurrent / getAll / getLastFocused / create（新标签）"),
-        .init(namespace: "extension", level: .partial, note: "getURL / getViews（空）/ isAllowedIncognitoAccess"),
-        .init(namespace: "tabGroups", level: .unsupported, note: ""),
-        .init(namespace: "webRequest", level: .unsupported, note: "WKWebView 无法观察或拦截请求"),
-        .init(namespace: "history", level: .unsupported, note: ""),
-        .init(namespace: "bookmarks", level: .unsupported, note: ""),
-        .init(namespace: "sidePanel", level: .unsupported, note: ""),
-        .init(namespace: "offscreen", level: .unsupported, note: ""),
-        .init(namespace: "identity", level: .unsupported, note: ""),
-        .init(namespace: "management", level: .unsupported, note: ""),
-        .init(namespace: "debugger", level: .unsupported, note: ""),
-        .init(namespace: "devtools", level: .unsupported, note: ""),
-        .init(namespace: "proxy", level: .unsupported, note: ""),
-        .init(namespace: "privacy", level: .unsupported, note: ""),
-        .init(namespace: "sessions", level: .unsupported, note: ""),
-        .init(namespace: "topSites", level: .unsupported, note: ""),
-        .init(namespace: "search", level: .unsupported, note: ""),
-        .init(namespace: "tts", level: .unsupported, note: ""),
-        .init(namespace: "idle", level: .unsupported, note: ""),
-        .init(namespace: "power", level: .unsupported, note: ""),
-        .init(namespace: "gcm", level: .unsupported, note: ""),
-        .init(namespace: "userScripts", level: .unsupported, note: "请使用 Rikugan 内置用户脚本系统"),
-        .init(namespace: "declarativeContent", level: .unsupported, note: ""),
-        .init(namespace: "fontSettings", level: .unsupported, note: ""),
-        .init(namespace: "contentSettings", level: .unsupported, note: ""),
-        .init(namespace: "browsingData", level: .unsupported, note: ""),
-        .init(namespace: "system", level: .unsupported, note: ""),
-        .init(namespace: "enterprise", level: .unsupported, note: ""),
-        .init(namespace: "readingList", level: .unsupported, note: ""),
-    ]
+    /// Override for tests / tools; the app loads the bundled JSON.
+    public static var jsonOverride: Data?
+    private static var cached: [Entry]?
+
+    public static var entries: [Entry] {
+        if let cached { return cached }
+        let data = jsonOverride ?? Bundle.main.url(forResource: "chrome-api-matrix", withExtension: "json").flatMap { try? Data(contentsOf: $0) }
+        let parsed = data.map(parse) ?? []
+        cached = parsed
+        return parsed
+    }
+
+    public static func reload() { cached = nil }
+
+    public static func parse(_ data: Data) -> [Entry] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let namespaces = root["namespaces"] as? [String: [String: Any]] else { return [] }
+        func methods(_ value: Any?) -> [Method] {
+            guard let dict = value as? [String: [Any]] else { return [] }
+            return dict.map { name, spec in
+                Method(name: name, level: SupportLevel(rawValue: spec.first as? String ?? "") ?? .unsupported,
+                       note: spec.count > 1 ? (spec[1] as? String ?? "") : "", jsOnly: spec.count > 2 ? (spec[2] as? Bool ?? false) : false)
+            }.sorted { ($0.name.hasPrefix("on") ? 1 : 0, $0.name) < ($1.name.hasPrefix("on") ? 1 : 0, $1.name) }
+        }
+        let order = ["runtime", "storage", "scripting", "tabs", "permissions", "action", "contextMenus", "cookies", "downloads",
+                     "webNavigation", "declarativeNetRequest", "webRequest", "i18n", "alarms", "notifications", "windows", "commands", "extension"]
+        return namespaces.map { name, spec in
+            Entry(namespace: name, level: SupportLevel(rawValue: spec["level"] as? String ?? "") ?? .unsupported,
+                  reason: spec["reason"] as? String ?? "", differences: spec["differences"] as? [String] ?? [],
+                  methods: methods(spec["methods"]), actions: methods(spec["actions"]))
+        }.sorted { (order.firstIndex(of: $0.namespace) ?? 999, $0.namespace) < (order.firstIndex(of: $1.namespace) ?? 999, $1.namespace) }
+    }
 
     public static func level(of namespace: String) -> SupportLevel {
         entries.first { $0.namespace == namespace }?.level ?? .unsupported
+    }
+
+    public static func method(_ namespace: String, _ name: String) -> Method? {
+        entries.first { $0.namespace == namespace }?.methods.first { $0.name == name }
     }
 
     public static var unsupportedNamespaces: [String] { entries.filter { $0.level == .unsupported }.map(\.namespace) }

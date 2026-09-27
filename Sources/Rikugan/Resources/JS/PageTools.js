@@ -88,29 +88,105 @@ html::-webkit-scrollbar { background: #222; }`;
     else verify();
   };
 
-  // ---- Web font override --------------------------------------------------------------------------
+  // ---- Web font override (icon-font safe) ---------------------------------------------------------
+  // Instead of `* { font-family: X !important }`, text-bearing elements are classified once
+  // (body / heading / mono) from their *own* computed font before any override applies. Elements
+  // using icon / symbol fonts (Material Icons, Font Awesome, the page's own PUA icon fonts …) are
+  // never tagged, so their glyphs keep rendering.
   const loadedFonts = new Set();
+  let fontPlan = null, fontObserver = null, fontQueue = [], fontScheduled = false, fontTagged = 0;
+  const iconClass = /(^|\s)(fa|fas|far|fab|fal|fad|fa-[\w-]+|material-icons[\w-]*|material-symbols[\w-]*|glyphicon[\w-]*|bi|bi-[\w-]+|octicon[\w-]*|icon|icons|iconfont|dashicons[\w-]*|ti|ti-[\w-]+|ri-[\w-]+|codicon[\w-]*)(\s|$)/i;
+  const monoFamily = /mono|courier|consolas|menlo|monaco|source code|fira code|jetbrains/i;
+  const puaRe = /[-]|[\uDB80-\uDBFF][\uDC00-\uDFFF]/;
+  const skipTagsFont = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'MATH', 'TEMPLATE', 'IFRAME', 'CANVAS', 'VIDEO', 'AUDIO', 'IMG', 'HTML', 'HEAD']);
+  const ownText = (el) => {
+    let t = '';
+    for (const n of el.childNodes) if (n.nodeType === 3) t += n.nodeValue;
+    return t.trim();
+  };
+  const fontRole = (el) => {
+    if (skipTagsFont.has(el.tagName) || el.closest('svg, math')) return null;
+    const isField = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(el.tagName);
+    const text = isField ? 'x' : ownText(el);
+    if (!text) return null;
+    const cls = typeof el.className === 'string' ? el.className : '';
+    if (iconClass.test(cls) || puaRe.test(text) || el.getAttribute('aria-hidden') === 'true' && text.length <= 3) return 'icon';
+    let family = '';
+    try { family = getComputedStyle(el).fontFamily || ''; } catch (_) {}
+    const primary = family.split(',')[0].replace(/["']/g, '').trim();
+    if (fontPlan.iconRe.test(primary)) return 'icon';
+    if (/^(CODE|PRE|KBD|SAMP|TT)$/.test(el.tagName) || el.closest('pre, code, kbd, samp') || monoFamily.test(primary) || /^monospace$/i.test(primary)) return 'mono';
+    if (/^H[1-6]$/.test(el.tagName) || el.closest('h1, h2, h3, h4, h5, h6')) return 'heading';
+    return 'body';
+  };
+  const tagElement = (el) => {
+    if (el.nodeType !== 1 || el.hasAttribute('data-rk-font') || el.hasAttribute('data-rk-font-skip')) return;
+    const role = fontRole(el);
+    if (!role) return;
+    if (role === 'icon' || !fontPlan[role]) { el.setAttribute('data-rk-font-skip', role); return; }
+    el.setAttribute('data-rk-font', role);
+    fontTagged++;
+  };
+  const drainFontQueue = () => {
+    fontScheduled = false;
+    if (!fontPlan) return;
+    const deadline = performance.now() + 12;
+    while (fontQueue.length && performance.now() < deadline) {
+      const root = fontQueue.shift();
+      if (!root || !root.isConnected) continue;
+      if (root.nodeType === 1) tagElement(root);
+      if (root.querySelectorAll) {
+        const all = root.querySelectorAll('*');
+        if (all.length > 400) { for (let i = 0; i < all.length; i += 400) fontQueue.push({ isConnected: true, nodeType: 0, querySelectorAll: () => Array.prototype.slice.call(all, i, i + 400) }); continue; }
+        for (const el of all) tagElement(el);
+      }
+    }
+    if (fontQueue.length) scheduleFontWork();
+  };
+  const scheduleFontWork = () => {
+    if (fontScheduled) return;
+    fontScheduled = true;
+    (window.requestIdleCallback || ((f) => setTimeout(f, 16)))(drainFontQueue, { timeout: 200 });
+  };
+  const fontStack = (family) => '"' + String(family).replace(/"/g, '') + '", "Apple Color Emoji", -apple-system, system-ui, sans-serif';
   const applyFont = async (o) => {
-    if (!o || !o.family) { setSheet('font', ''); return; }
-    if (o.fileID && !loadedFonts.has(o.fileID)) {
-      loadedFonts.add(o.fileID);
+    if (fontObserver) { fontObserver.disconnect(); fontObserver = null; }
+    document.querySelectorAll('[data-rk-font],[data-rk-font-skip]').forEach((el) => { el.removeAttribute('data-rk-font'); el.removeAttribute('data-rk-font-skip'); });
+    fontTagged = 0;
+    if (!o || !(o.body || o.heading || o.mono)) { fontPlan = null; setSheet('font', ''); return; }
+    fontPlan = { body: o.body || null, heading: o.heading || null, mono: o.mono || null, iconRe: new RegExp(o.iconPattern || 'icon', 'i') };
+    for (const file of o.files || []) {
+      if (loadedFonts.has(file.fileID)) continue;
+      loadedFonts.add(file.fileID);
       try {
-        const data = await post('fontData', { id: o.fileID });
+        const data = await post('fontData', { id: file.fileID });
         if (data && data.base64) {
           const bin = atob(data.base64);
           const bytes = new Uint8Array(bin.length);
           for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          const face = new FontFace(o.family, bytes.buffer);
+          const face = new FontFace(file.family, bytes.buffer);
           await face.load();
           document.fonts.add(face);
         }
-      } catch (e) { console.warn('[Rikugan] custom font load failed', e); }
+      } catch (e) { console.warn('[Rikugan] custom font load failed', file.family, e); }
     }
-    const family = '"' + String(o.family).replace(/"/g, '') + '"';
-    const icon = ':not([class*="icon"]):not([class*="Icon"]):not([class^="fa"]):not([class*=" fa"]):not([class*="material"]):not([class*="glyph"]):not([class*="symbol"]):not(i)';
-    const mono = o.keepMonospace ? ':not(code):not(pre):not(kbd):not(samp):not(tt):not(code *):not(pre *)' : '';
-    setSheet('font', `body, body *${icon}${mono} { font-family: ${family}, -apple-system, system-ui, sans-serif !important; }`);
+    const rules = [];
+    if (fontPlan.body) rules.push(`[data-rk-font="body"] { font-family: ${fontStack(fontPlan.body)} !important; }`);
+    if (fontPlan.heading) rules.push(`[data-rk-font="heading"] { font-family: ${fontStack(fontPlan.heading)} !important; }`);
+    if (fontPlan.mono) rules.push(`[data-rk-font="mono"] { font-family: ${fontStack(fontPlan.mono).replace('sans-serif', 'monospace')} !important; }`);
+    setSheet('font', rules.join('\n'));
+    const start = () => {
+      fontQueue.push(document.body || document.documentElement);
+      scheduleFontWork();
+      fontObserver = new MutationObserver((mutations) => {
+        for (const m of mutations) for (const n of m.addedNodes) if (n.nodeType === 1) fontQueue.push(n); else if (n.nodeType === 3 && n.parentElement) fontQueue.push(n.parentElement);
+        if (fontQueue.length) scheduleFontWork();
+      });
+      fontObserver.observe(document.documentElement, { childList: true, subtree: true });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();
   };
+  const fontStatus = () => ({ tagged: fontTagged, pending: fontQueue.length, plan: fontPlan ? { body: fontPlan.body, heading: fontPlan.heading, mono: fontPlan.mono } : null });
 
   // ---- Cosmetic filtering ---------------------------------------------------------------------------
   const applyCosmetic = (selectors, css) => {
@@ -539,7 +615,7 @@ html::-webkit-scrollbar { background: #222; }`;
 
   // ---- Public API (called from Swift through evaluateJavaScript in this world) ------------------------
   window.__rikuganTools = {
-    applyDarkMode, applyFont, applyCosmetic, hideNow, startPicker, stopPicker: () => picker && picker.finish(), selectorFor,
+    applyDarkMode, applyFont, fontStatus, applyCosmetic, hideNow, startPicker, stopPicker: () => picker && picker.finish(), selectorFor,
     extractReader, startTranslation, applyTranslations, showOriginal, stopTranslation, languageSample,
     scanImages, scanMedia, videoAction, autofillInfo, fillLogin, fillForm,
     selection: () => String(window.getSelection ? window.getSelection() : ''),

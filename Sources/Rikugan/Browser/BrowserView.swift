@@ -18,6 +18,10 @@ struct BrowserView: View {
     @State private var showSidebar = false
     @State private var importKind: ImportKind?
     @State private var showQuickActionPicker = false
+    @State private var importPreview: ImportPreview?
+    @State private var queuedImportPreview: ImportPreview?
+
+    struct ImportPreview: Identifiable { let id = UUID(); let archive: RikuganArchive; let source: String }
 
     enum ImportKind: Identifiable { case extensionPackage, extensionFolder, userscript, font, settings
         var id: Int { hashValue }
@@ -69,7 +73,18 @@ struct BrowserView: View {
         .overlay(alignment: .bottom) { ToastView().padding(.bottom, isRegular ? 24 : 110) }
         .overlay { if let busy = extensionInstaller.busy { BusyOverlay(text: busy) } }
         .overlay { if let url = scriptInstaller.loading { BusyOverlay(text: "正在获取脚本 \(url.lastPathComponent)…") } }
-        .sheet(item: $sheet) { item in SheetContent(item: item, importKind: $importKind).environmentObjects(services, manager) }
+        .sheet(item: $sheet, onDismiss: {
+            // A preview requested while another sheet was up is shown once that sheet is gone.
+            if let queued = queuedImportPreview { queuedImportPreview = nil; importPreview = queued }
+        }) { item in SheetContent(item: item, importKind: $importKind).environmentObjects(services, manager) }
+        .sheet(item: $importPreview) { preview in
+            ArchiveImportSheet(archive: preview.archive, source: preview.source).environmentObjects(services, manager)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .rikuganImportPreview)) { note in
+            guard (note.object as? TabManager) === manager, let box = note.userInfo?["archive"] as? ArchiveBox else { return }
+            let preview = ImportPreview(archive: box.archive, source: note.userInfo?["source"] as? String ?? "")
+            if sheet != nil { queuedImportPreview = preview; sheet = nil } else { importPreview = preview }
+        }
         .fullScreenCover(isPresented: $showTabs) { TabSwitcherView().environmentObjects(services, manager) }
         .sheet(item: $scriptInstaller.pending) { _ in UserscriptInstallSheet().environmentObject(scriptInstaller) }
         .sheet(item: $extensionInstaller.pending) { pending in ExtensionInstallSheet(pending: pending).environmentObject(extensionInstaller) }
@@ -97,7 +112,7 @@ struct BrowserView: View {
         case .extensionPackage: return [.zip, UTType(filenameExtension: "crx") ?? .data, .data]
         case .extensionFolder: return [.folder]
         case .userscript: return [UTType(filenameExtension: "js") ?? .plainText, .plainText, .sourceCode, .data]
-        case .font: return [.font, UTType(filenameExtension: "ttf") ?? .data, UTType(filenameExtension: "otf") ?? .data, UTType(filenameExtension: "woff2") ?? .data]
+        case .font: return [.font, UTType(filenameExtension: "ttf") ?? .data, UTType(filenameExtension: "otf") ?? .data, UTType(filenameExtension: "ttc") ?? .data, UTType(filenameExtension: "woff2") ?? .data]
         case .settings: return [.json]
         case nil: return [.data]
         }
@@ -111,7 +126,7 @@ struct BrowserView: View {
         case .extensionPackage, .extensionFolder: extensionInstaller.stage(fileURL: url)
         case .userscript: scriptInstaller.importFile(url)
         case .font:
-            do { let font = try services.fonts.importFont(from: url); toasts.show("已导入字体「\(font.family)」", symbol: "textformat") }
+            do { let list = try services.fonts.importFonts(from: url); toasts.show("已导入字体：" + list.map(\.family).joined(separator: "、"), symbol: "textformat") }
             catch { toasts.show(error.localizedDescription, symbol: "exclamationmark.triangle") }
         case .settings: ImportExport.importBundle(from: url, into: manager)
         case nil: break

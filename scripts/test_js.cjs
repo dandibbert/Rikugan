@@ -251,6 +251,40 @@ test('scripting.executeScript serialises func and args', async () => {
   assert.deepStrictEqual(payload.args, [1, 2]);
 });
 
+// ---- Compatibility matrix is verified against the implementation -------------------------------------
+test('chrome-api-matrix.json matches the JS shim and the native bridge', () => {
+  const matrix = JSON.parse(read('chrome-api-matrix.json')).namespaces;
+  const swift = fs.readFileSync(path.join(__dirname, '..', 'Sources', 'Rikugan', 'Extensions', 'ChromeAPIBridge.swift'), 'utf8');
+  const w = runChrome('background', async () => null);
+  const prefixDispatched = new Set(['action', 'cookies', 'downloads', 'declarativeNetRequest', 'alarms']);
+  const problems = [];
+  for (const [ns, spec] of Object.entries(matrix)) {
+    const nsObj = w.chrome[ns];
+    if (nsObj === undefined) { problems.push(`chrome.${ns} is undefined`); continue; }
+    for (const [method, entry] of Object.entries(spec.methods || {})) {
+      const [level, , jsOnly] = entry;
+      let value = nsObj;
+      for (const part of method.split('.')) value = value == null ? undefined : value[part];
+      const isEvent = /^on[A-Z]/.test(method.split('.').pop());
+      if (level === 'Unsupported') {
+        if (!value || !value.__rikuganUnsupported) problems.push(`${ns}.${method} is marked Unsupported but is implemented / not flagged`);
+        continue;
+      }
+      if (value === undefined) { problems.push(`${ns}.${method} missing`); continue; }
+      if (value.__rikuganUnsupported) { problems.push(`${ns}.${method} is marked ${level} but resolves to an Unsupported stub`); continue; }
+      if (isEvent) { if (typeof value.addListener !== 'function') problems.push(`${ns}.${method} is not an event`); continue; }
+      if (typeof value !== 'function') { problems.push(`${ns}.${method} is not a function`); continue; }
+      if (jsOnly) continue;
+      const bare = method.includes('.') ? method.split('.').pop() : method;
+      const swiftName = ns === 'storage' ? `"storage.${bare}"` : `"${ns}.${method}"`;
+      const found = swift.includes(swiftName) || (prefixDispatched.has(ns) && swift.includes(`"${method}"`)) ||
+        (prefixDispatched.has(ns) && new RegExp(`case [^\n]*"${method}"`).test(swift));
+      if (!found) problems.push(`${ns}.${method} has no native implementation in ChromeAPIBridge.swift`);
+    }
+  }
+  assert.deepStrictEqual(problems, []);
+});
+
 test('page scripts parse', () => {
   for (const f of ['PageTools.js', 'PageHooks.js']) new vm.Script(read(f), { filename: f });
 });

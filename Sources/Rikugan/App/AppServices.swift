@@ -50,6 +50,7 @@ import Combine
         if old.adBlockEnabled != prefs.adBlockEnabled { adBlock.setEnabled(prefs.adBlockEnabled) }
         let affectsPages = old.pageDarkMode != prefs.pageDarkMode || old.webFontEnabled != prefs.webFontEnabled ||
             old.webFontFamily != prefs.webFontFamily || old.webFontKeepMonospace != prefs.webFontKeepMonospace ||
+            old.webFontHeading != prefs.webFontHeading || old.webFontMono != prefs.webFontMono || old.webFontExcludedHosts != prefs.webFontExcludedHosts ||
             old.darkModeBrightness != prefs.darkModeBrightness || old.darkModeContrast != prefs.darkModeContrast
         if affectsPages {
             for tab in TabRegistry.shared.allTabs { tab.applyLiveStyles() }

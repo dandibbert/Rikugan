@@ -95,6 +95,21 @@ import Combine
         ext.alarms.removeAll()
     }
 
+    /// Unsupported chrome.* calls per extension (shown in Diagnostics / compatibility reports).
+    @Published private(set) var unsupportedCalls: [String: [String: Int]] = [:]
+
+    func recordUnsupported(_ ext: LoadedExtension, _ api: String) {
+        unsupportedCalls[ext.id, default: [:]][api, default: 0] += 1
+    }
+
+    func recordRuntimeError(_ ext: LoadedExtension, _ message: String) {
+        updateRecord(ext.id) { record in
+            record.lastErrors.append(message)
+            if record.lastErrors.count > 20 { record.lastErrors.removeFirst(record.lastErrors.count - 20) }
+        }
+        ErrorLog.shared.record(message, source: ext.displayName)
+    }
+
     func updateRecord(_ id: String, _ change: (inout InstalledExtension) -> Void) {
         guard let index = records.firstIndex(where: { $0.id == id }) else { return }
         change(&records[index])
@@ -333,7 +348,7 @@ import Combine
     func dispatch(_ ext: LoadedExtension, _ event: String, _ args: [Any], toContent: Bool = false) {
         let js = "globalThis.__rikuganChrome && globalThis.__rikuganChrome.dispatch(\(event.jsLiteral), \(JSONText.encode(args)))"
         if let bg = ext.background {
-            bg.evaluateWhenReady(js)
+            bg.deliverEvent(event, js: js)
         }
         for (webView, kind) in extensionPages(of: ext) where kind != "background" {
             webView.rkEval(js, world: .page)
@@ -398,9 +413,11 @@ import Combine
         dispatchAll("tabs.onActivated") { _ in [["tabId": tab.numericID, "windowId": tab.manager?.numericID ?? 1]] }
     }
 
-    func tabRemoved(_ tab: BrowserTab) {
-        for ext in loaded.values { ext.contentFrames[tab.numericID] = nil; ext.activeTabGrants.remove(tab.numericID) }
-        guard !tab.isPrivate, !loaded.isEmpty else { return }
+    /// `closing == false` means the tab's web view was suspended (content scripts are gone, the tab remains).
+    func tabRemoved(_ tab: BrowserTab, closing: Bool = true) {
+        for ext in loaded.values { ext.contentFrames[tab.numericID] = nil; if closing { ext.activeTabGrants.remove(tab.numericID) } }
+        bridge.endpointsGone(tabID: tab.numericID)
+        guard closing, !tab.isPrivate, !loaded.isEmpty else { return }
         dispatchAll("tabs.onRemoved") { _ in [tab.numericID, ["windowId": tab.manager?.numericID ?? 1, "isWindowClosing": false]] }
     }
 
@@ -516,126 +533,304 @@ import Combine
 
     // MARK: DNR (spec P1)
 
+    struct DNRStatus {
+        var capabilities = DNRConverter.Capabilities()
+        var probed = false
+        var convertedRules = 0
+        var skipped: [String: [String]] = [:]
+        var lists = 0
+        var compiling = false
+        var lastCompiled: Date?
+    }
+    @Published private(set) var dnrStatus = DNRStatus()
+    private var dnrGeneration = 0
+
+    /// Probes whether this WebKit build accepts `redirect` / `modify-headers` content-rule actions.
+    static func probeDNRCapabilities() async -> DNRConverter.Capabilities {
+        let store = WKContentRuleListStore.default()
+        let redirect = #"[{"trigger":{"url-filter":"^rikugan-probe://"},"action":{"type":"redirect","redirect":{"url":"https://example.com/"}}}]"#
+        let headers = #"[{"trigger":{"url-filter":"^rikugan-probe://"},"action":{"type":"modify-headers","request-headers":[{"header":"X-Rikugan","operation":"set","value":"1"}]}}]"#
+        let r = await store.rkCompile("rikugan-probe-redirect", redirect) != nil
+        let h = await store.rkCompile("rikugan-probe-headers", headers) != nil
+        await store.rkRemove("rikugan-probe-redirect")
+        await store.rkRemove("rikugan-probe-headers")
+        return DNRConverter.Capabilities(redirect: r, modifyHeaders: h)
+    }
+
     func compileDNR() {
-        var rules: [[String: Any]] = []
-        for ext in enabledExtensions where ext.has("declarativeNetRequest") || ext.has("declarativeNetRequestWithHostAccess") {
-            for resource in ext.manifest.ruleResources where ext.enabledRulesetIDs.contains(resource.id) {
-                if let text = ext.text(resource.path), let list = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: Any]] {
-                    rules += list
-                }
-            }
-            rules += ext.dynamicRules + ext.sessionRules
-        }
-        guard !rules.isEmpty else {
-            dnrLists = []
-            WebViewFactory.refreshAllContentRuleLists()
-            return
-        }
-        let output = DNRConverter.convert(rules)
-        for ext in enabledExtensions where !output.skipped.isEmpty {
-            updateRecord(ext.id) { $0.lastErrors = output.skipped.prefix(20).map { "DNR 规则 \($0.id)：\($0.reason)" } }
-            break
-        }
-        let documents = ContentBlockerCompiler.compile(output.rules, allowlistedHosts: [])
+        dnrGeneration += 1
+        let generation = dnrGeneration
+        dnrStatus.compiling = true
         Task {
-            var lists: [WKContentRuleList] = []
-            for (index, json) in documents.enumerated() {
-                let identifier = "dnr-\(profile.id.uuidString)-\(index)"
-                if let list = await WKContentRuleListStore.default().rkCompile(identifier, json) {
-                    lists.append(list)
-                } else if let fallback = await ContentBlockerCompilerRuntime.compileBisecting(json: json, identifier: identifier) {
-                    lists.append(fallback)
+            if !dnrStatus.probed {
+                dnrStatus.capabilities = await Self.probeDNRCapabilities()
+                dnrStatus.probed = true
+            }
+            var converted: [NetworkRule] = []
+            var skipped: [String: [String]] = [:]
+            for ext in enabledExtensions where ext.has("declarativeNetRequest") || ext.has("declarativeNetRequestWithHostAccess") {
+                var rules: [[String: Any]] = []
+                for resource in ext.manifest.ruleResources where ext.enabledRulesetIDs.contains(resource.id) {
+                    if let text = ext.text(resource.path), let list = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: Any]] {
+                        rules += list
+                    }
+                }
+                rules += ext.dynamicRules + ext.sessionRules
+                let output = DNRConverter.convert(rules, capabilities: dnrStatus.capabilities, baseURL: ext.baseURL)
+                converted += output.rules
+                if !output.skipped.isEmpty {
+                    skipped[ext.id] = output.skipped.map { "DNR 规则 \($0.id)：\($0.reason)" }
                 }
             }
-            self.dnrLists = lists
+            var lists: [WKContentRuleList] = []
+            if !converted.isEmpty {
+                for (index, json) in ContentBlockerCompiler.compile(converted, allowlistedHosts: []).enumerated() {
+                    let identifier = "dnr-\(profile.id.uuidString)-\(index)"
+                    if let list = await WKContentRuleListStore.default().rkCompile(identifier, json) {
+                        lists.append(list)
+                    } else if let fallback = await ContentBlockerCompilerRuntime.compileBisecting(json: json, identifier: identifier) {
+                        lists.append(fallback)
+                        ErrorLog.shared.record("DNR list \(index) contained rules WebKit rejected; they were dropped", source: "DNR")
+                    }
+                }
+            }
+            guard generation == dnrGeneration else { return }
+            dnrLists = lists
+            dnrStatus.convertedRules = converted.count
+            dnrStatus.skipped = skipped
+            dnrStatus.lists = lists.count
+            dnrStatus.compiling = false
+            dnrStatus.lastCompiled = Date()
             WebViewFactory.refreshAllContentRuleLists()
         }
     }
 }
 
-/// Hidden, long-lived JS runtime for an extension background / service worker (spec §16).
-/// It does not depend on any page WKWebView being alive.
+/// Background runtime lifecycle.
+enum BackgroundState: String {
+    case notStarted, starting, ready, idle, suspended, waking, failed
+}
+
+/// Hidden JS runtime for an extension background / service worker (spec §16), modelled as an
+/// explicit state machine so no message or event is lost during start-up:
+///
+///     notStarted ─start→ starting ─ready signal→ ready ⇄ idle ─idle timeout→ suspended
+///     suspended ─message/event/port→ waking ─ready signal→ ready
+///     starting/waking ─load failure / 15 s without ready→ failed ─next request→ starting (max 2 restarts)
+///
+/// Callers use `awaitReady()`: requests made while starting / waking are queued and delivered once
+/// ready, or fail with an explicit error — never silently dropped.
 @MainActor final class BackgroundHost: NSObject, WKNavigationDelegate {
     unowned let ext: LoadedExtension
     unowned let runtime: ExtensionRuntime
     private(set) var webView: WKWebView?
-    private(set) var isReady = false
+    private(set) var state: BackgroundState = .notStarted { didSet { transitions.append((Date(), state)); if transitions.count > 50 { transitions.removeFirst() } } }
+    private(set) var transitions: [(Date, BackgroundState)] = []
+    private(set) var failureReason: String?
+    private(set) var startCount = 0
+    private(set) var restartsAfterFailure = 0
     private var queue: [String] = []
-    private var onReady: (() -> Void)?
-    private var restarts = 0
+    private var waiters: [CheckedContinuation<Bool, Never>] = []
+    private var pendingLifecycleEvent: (() -> Void)?
+    private var startupDeadline: Task<Void, Never>?
+    private var idleTimer: Timer?
+    private var lastActivity = Date()
+    /// Events the background registered listeners for (kept across suspension, like Chrome).
+    private(set) var subscribedEvents: Set<String> = []
+    static let startupTimeout: TimeInterval = 15
+
+    var isReady: Bool { state == .ready || state == .idle }
 
     init(ext: LoadedExtension, runtime: ExtensionRuntime) {
         self.ext = ext
         self.runtime = runtime
     }
 
-    func start(onReady: @escaping () -> Void) {
-        self.onReady = onReady
+    // MARK: Transitions
+
+    /// Cold start. `lifecycle` runs once ready (runtime.onInstalled / onStartup).
+    func start(onReady lifecycle: (() -> Void)? = nil) {
+        pendingLifecycleEvent = lifecycle
+        launch(as: .starting)
+    }
+
+    private func launch(as newState: BackgroundState) {
+        guard state != .starting && state != .waking else { return }
+        state = newState
+        failureReason = nil
+        startCount += 1
         let configuration = runtime.extensionPageConfiguration(for: ext, kind: "background")
-        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration)
+        let webView = RikuganWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration, purpose: "background")
         webView.navigationDelegate = self
         webView.isInspectable = true
         self.webView = webView
         runtime.registerPage(webView, extID: ext.id, kind: "background")
         BackgroundHostContainer.shared.attach(webView)
-        if let url = URL(string: ext.baseURL + ExtensionSchemeHandler.backgroundPagePath) { webView.load(URLRequest(url: url)) }
+        guard let url = URL(string: ext.baseURL + ExtensionSchemeHandler.backgroundPagePath) else { fail("invalid background URL"); return }
+        webView.load(URLRequest(url: url))
+        startupDeadline?.cancel()
+        startupDeadline = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.startupTimeout * 1_000_000_000))
+            guard let self, !Task.isCancelled, self.state == .starting || self.state == .waking else { return }
+            self.fail("background did not signal ready within \(Int(Self.startupTimeout)) s (\(self.webView?.isLoading == true ? "page still loading" : "page loaded, chrome runtime not initialised"))")
+        }
+    }
+
+    /// Ready signal: `runtime._ready` from the shim after the background scripts ran, or the
+    /// didFinish check. Idempotent; ignored unless starting / waking.
+    func markReady() {
+        guard state == .starting || state == .waking else { return }
+        startupDeadline?.cancel()
+        state = .ready
+        lastActivity = Date()
+        let pending = queue
+        queue.removeAll()
+        for js in pending { webView?.rkEval(js, world: .page) }
+        let lifecycle = pendingLifecycleEvent
+        pendingLifecycleEvent = nil
+        lifecycle?()
+        let resumed = waiters
+        waiters.removeAll()
+        for waiter in resumed { waiter.resume(returning: true) }
+        scheduleIdleCheck()
+    }
+
+    private func fail(_ reason: String) {
+        startupDeadline?.cancel()
+        state = .failed
+        failureReason = reason
+        runtime.updateRecord(ext.id) { $0.lastErrors.append("后台运行时启动失败：\(reason)") }
+        ErrorLog.shared.record(reason, source: "background \(ext.displayName)")
+        tearDownWebView()
+        let resumed = waiters
+        waiters.removeAll()
+        for waiter in resumed { waiter.resume(returning: false) }
+        queue.removeAll()
+    }
+
+    /// Suspends an idle background (like an MV3 service worker being terminated). Listeners are
+    /// re-registered by the scripts on the next wake.
+    func suspend(reason: String = "idle") {
+        guard isReady else { return }
+        webView?.rkEval("globalThis.__rikuganChrome && globalThis.__rikuganChrome.dispatch('runtime.onSuspend', [])", world: .page)
+        idleTimer?.invalidate()
+        tearDownWebView()
+        state = .suspended
     }
 
     func stop() {
+        startupDeadline?.cancel()
+        idleTimer?.invalidate()
+        tearDownWebView()
+        let resumed = waiters
+        waiters.removeAll()
+        for waiter in resumed { waiter.resume(returning: false) }
+        queue.removeAll()
+        state = .notStarted
+    }
+
+    private func tearDownWebView() {
         if let webView {
             runtime.unregisterPage(webView)
+            runtime.bridge.endpointsGone(webView: webView)
+            webView.navigationDelegate = nil
+            webView.stopLoading()
             webView.configuration.userContentController.removeAllScriptMessageHandlers()
             webView.removeFromSuperview()
         }
         webView = nil
-        isReady = false
     }
 
-    func markReady() {
-        guard !isReady else { return }
-        isReady = true
-        let pending = queue
-        queue.removeAll()
-        for js in pending { webView?.rkEval(js, world: .page) }
-        onReady?()
-        onReady = nil
+    // MARK: Requests
+
+    /// Waits until the runtime can receive messages, waking it if suspended. Returns false when it
+    /// failed to start (the caller reports an explicit error).
+    func awaitReady() async -> Bool {
+        noteActivity()
+        switch state {
+        case .ready, .idle: return true
+        case .suspended, .notStarted: launch(as: .waking)
+        case .failed:
+            guard restartsAfterFailure < 2 else { return false }
+            restartsAfterFailure += 1
+            launch(as: .starting)
+        case .starting, .waking: break
+        }
+        if isReady { return true }
+        if state == .failed { return false }
+        return await withCheckedContinuation { waiters.append($0) }
     }
 
-    func evaluateWhenReady(_ js: String) {
-        if isReady { webView?.rkEval(js, world: .page) } else { queue.append(js) }
+    /// Delivers an event, waking a suspended runtime only if it listens for that event.
+    func deliverEvent(_ name: String, js: String) {
+        switch state {
+        case .ready, .idle:
+            noteActivity()
+            webView?.rkEval(js, world: .page)
+        case .starting, .waking:
+            queue.append(js)
+        case .suspended, .notStarted:
+            guard subscribedEvents.contains(name) else { return }
+            queue.append(js)
+            launch(as: .waking)
+        case .failed:
+            break
+        }
     }
 
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        isReady = false
-        restarts += 1
-        guard restarts < 5 else { return }
-        webView.reload()
+    func noteSubscription(_ event: String) { subscribedEvents.insert(event) }
+
+    func noteActivity() {
+        lastActivity = Date()
+        if state == .idle { state = .ready }
     }
+
+    private func scheduleIdleCheck() {
+        idleTimer?.invalidate()
+        let interval = max(1, Double(AppServices.shared.prefs.backgroundIdleSeconds) / 3)
+        idleTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.idleTick() }
+        }
+    }
+
+    private func idleTick() {
+        guard isReady else { return }
+        let idleFor = Date().timeIntervalSince(lastActivity)
+        let limit = Double(AppServices.shared.prefs.backgroundIdleSeconds)
+        if runtime.bridge.hasOpenPorts(extID: ext.id) { noteActivity(); return }
+        if idleFor >= limit { suspend() } else if idleFor >= limit / 2 { state = .idle }
+    }
+
+    // MARK: Navigation delegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Do not rely only on the JS ready signal: once the page (and its scripts) finished loading
-        // and the chrome shim is present, the background runtime can receive events.
+        // Second ready signal: once the page and its scripts finished loading and the chrome shim exists.
         Task {
-            for _ in 0..<20 {
-                let present = (try? await webView.rkCall("return typeof globalThis.__rikuganChrome === 'object' && document.readyState === 'complete';", world: .page)) as? Bool ?? false
-                if present { markReady(); return }
-                try? await Task.sleep(nanoseconds: 150_000_000)
-            }
-            runtime.updateRecord(ext.id) { $0.lastErrors.append("后台运行时未初始化 chrome API") }
+            let present = (try? await webView.rkCall("return typeof globalThis.__rikuganChrome === 'object' && document.readyState === 'complete';", world: .page)) as? Bool ?? false
+            if present, self.webView === webView { markReady() }
         }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        runtime.updateRecord(ext.id) { $0.lastErrors.append("后台页面加载失败：\(error.localizedDescription)") }
+        if self.webView === webView { fail("background page failed to load: \(error.localizedDescription)") }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        runtime.updateRecord(ext.id) { $0.lastErrors.append("后台页面加载失败：\(error.localizedDescription)") }
+        if self.webView === webView { fail("background page failed to load: \(error.localizedDescription)") }
     }
 
-    /// Diagnostic description used by the self-test.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard self.webView === webView else { return }
+        ErrorLog.shared.record("background WebContent process terminated", source: ext.displayName)
+        tearDownWebView()
+        state = .suspended   // next message / subscribed event wakes it
+    }
+
+    /// Diagnostic description used by the self-test and the Diagnostics page.
     var diagnostics: String {
-        "url=\(webView?.url?.absoluteString ?? "nil") loading=\(webView?.isLoading ?? false) ready=\(isReady) window=\(webView?.window != nil) errors=\(runtime.records.first { $0.id == ext.id }?.lastErrors.joined(separator: "|") ?? "")"
+        let history = transitions.suffix(8).map { $0.1.rawValue }.joined(separator: "→")
+        return "state=\(state.rawValue) starts=\(startCount) url=\(webView?.url?.lastPathComponent ?? "nil") loading=\(webView?.isLoading ?? false) window=\(webView?.window != nil) history=\(history)" +
+            (failureReason.map { " failure=\($0)" } ?? "")
     }
 }
 

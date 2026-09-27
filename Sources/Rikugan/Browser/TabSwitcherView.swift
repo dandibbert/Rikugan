@@ -8,6 +8,7 @@ struct TabSwitcherView: View {
     @State private var newGroupName = ""
     @State private var showNewGroup = false
     @State private var search = ""
+    @State private var showManageGroups = false
 
     private let columns = [GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 14)]
 
@@ -36,6 +37,12 @@ struct TabSwitcherView: View {
                             withAnimation { manager.close(tab) }
                         }
                         .contextMenu { TabContextMenu(tab: tab) }
+                        .draggable(tab.id.uuidString)
+                        .dropDestination(for: String.self) { items, _ in
+                            guard let raw = items.first, let dragged = manager.tabs.first(where: { $0.id.uuidString == raw }) else { return false }
+                            withAnimation { manager.move(dragged, before: tab) }
+                            return true
+                        }
                     }
                 }
                 .padding(14)
@@ -69,6 +76,7 @@ struct TabSwitcherView: View {
                     Button("完成") { dismiss() }.bold()
                 }
             }
+            .sheet(isPresented: $showManageGroups) { GroupOrderSheet().environmentObject(manager) }
             .alert("新建标签页组", isPresented: $showNewGroup) {
                 TextField("名称", text: $newGroupName)
                 Button("取消", role: .cancel) {}
@@ -101,13 +109,15 @@ struct TabSwitcherView: View {
                     Menu {
                         Button { manager.switchToGroup(group.id) } label: { Label("打开", systemImage: "arrow.right.circle") }
                         Button { newGroupName = group.name; renamingGroup = group } label: { Label("重命名", systemImage: "pencil") }
-                        Button(role: .destructive) { manager.deleteGroup(group.id) } label: { Label("删除组及其标签页", systemImage: "trash") }
+                        Button(role: .destructive) { manager.deleteGroup(group.id, mode: .moveTabsToDefault) } label: { Label("删除组（标签页移到“标签页”）", systemImage: "folder.badge.minus") }
+                        Button(role: .destructive) { manager.deleteGroup(group.id, mode: .closeTabs) } label: { Label("删除组并关闭其中标签页", systemImage: "trash") }
                     } label: {
                         Label("\(group.name)（\(manager.tabs(inGroup: group.id).count)）",
                               systemImage: !manager.isPrivateMode && manager.currentGroupID == group.id ? "checkmark" : "square.grid.2x2")
                     }
                 }
                 Button { showNewGroup = true } label: { Label("新建空白标签页组", systemImage: "plus") }
+                if manager.groups.count > 1 { Button { showManageGroups = true } label: { Label("调整组顺序…", systemImage: "arrow.up.arrow.down") } }
             }
         } label: {
             HStack(spacing: 4) {
@@ -158,5 +168,30 @@ struct TabCard: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tabCard")
+    }
+}
+
+/// Reorder / rename / delete tab groups.
+struct GroupOrderSheet: View {
+    @EnvironmentObject private var manager: TabManager
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(manager.groups) { group in
+                    HStack {
+                        Label(group.name, systemImage: "square.grid.2x2")
+                        Spacer()
+                        Text("\(manager.tabs(inGroup: group.id).count)").foregroundStyle(.secondary)
+                    }
+                }
+                .onMove { manager.reorderGroups(from: $0, to: $1) }
+            }
+            .environment(\.editMode, .constant(.active))
+            .navigationTitle("标签页组顺序")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
     }
 }

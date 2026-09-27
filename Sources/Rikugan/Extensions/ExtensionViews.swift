@@ -268,7 +268,7 @@ struct ExtensionPopupSheet: View {
     func load(_ request: ExtensionRuntime.PopupRequest, runtime: ExtensionRuntime) {
         guard webView == nil, let ext = runtime.loaded[request.extID] else { return }
         let configuration = runtime.extensionPageConfiguration(for: ext, kind: "popup")
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = RikuganWebView(frame: .zero, configuration: configuration, purpose: "popup")
         view.uiDelegate = self
         view.navigationDelegate = self
         view.isInspectable = true

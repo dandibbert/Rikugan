@@ -56,7 +56,8 @@ jobs:
           xcodebuild -project Rikugan.xcodeproj -scheme Rikugan -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
-            CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} build 2>&1 | tee build.log | grep -E "error:|BUILD|\*\*" || true
+            CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} RIKUGAN_GIT_COMMIT=${GITHUB_SHA::12} \
+            RIKUGAN_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%MZ) build 2>&1 | tee build.log | grep -E "error:|BUILD|\*\*" || true
           grep -q "\*\* BUILD SUCCEEDED \*\*" build.log
           test -f build/Build/Products/Release-iphoneos/Rikugan.app/Rikugan
       - name: Show compiler errors

@@ -68,6 +68,22 @@ public struct UserScriptMetadata: Codable, Hashable {
         }
     }
 
+    /// World selection including the script body: scripts that *use* `unsafeWindow` (without
+    /// `@inject-into content`) run in the page world so `unsafeWindow` is the real page window —
+    /// the isolated world cannot see page JS globals.
+    public func runsInPageWorld(source: String) -> Bool {
+        switch injectInto {
+        case .page: return true
+        case .content: return false
+        case .auto: return runsInPageWorld || Self.referencesUnsafeWindow(source)
+        }
+    }
+
+    public static func referencesUnsafeWindow(_ source: String) -> Bool {
+        let body = source.range(of: "==/UserScript==").map { String(source[$0.upperBound...]) } ?? source
+        return body.range(of: #"\bunsafeWindow\b"#, options: .regularExpression) != nil
+    }
+
     /// Compiled include rules (matches + includes).
     public func includeRules() -> [URLRule] {
         matches.compactMap { try? URLMatcher.matchPattern($0) } + includes.compactMap { try? URLMatcher.includeRule($0) }

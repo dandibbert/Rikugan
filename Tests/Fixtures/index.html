@@ -1,9 +1,0 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rikugan Runtime Test</title>
-<style>body{font:17px system-ui;background:#f6f7fb;margin:0;color:#182735}main{padding:22px}button{font:inherit;padding:15px;border-radius:12px;border:0;background:#dfe6ff}#state{padding:14px 0}</style></head>
-<body><main><h1>Rikugan 运行测试</h1><p id="state"></p><button onclick="store()">写入身份标记</button><p>此页面仅由 CI 本地服务器提供，无外部数据请求。</p></main>
-<script>
-function show(){document.querySelector('#state').textContent = localStorage.getItem('rikugan-profile') === 'saved' && document.cookie.includes('rikugan=saved') ? '本身份已保存' : '本身份是空的';}
-function store(){localStorage.setItem('rikugan-profile','saved');document.cookie='rikugan=saved;path=/;SameSite=Lax';show();}
-show();
-</script></body></html>
-

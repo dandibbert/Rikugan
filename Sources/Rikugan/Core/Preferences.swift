@@ -55,6 +55,13 @@ public struct Preferences: Codable, Equatable {
     public var webFontFamily = ""
     public var webFontKeepMonospace = true
     public var webFontExcludedHosts: [String] = []
+    /// Optional separate fonts for headings and monospace text (empty = keep the page's font).
+    public var webFontHeading = ""
+    public var webFontMono = ""
+    /// Debug / development settings.
+    public var showDiagnostics = false
+    public var backgroundIdleSeconds = 300
+    public var maxLiveBackgroundTabs = 5
     public var webInspectorEnabled = false
     public var consoleCaptureEnabled = false
     public var restoreTabs = true
@@ -109,6 +116,11 @@ public struct Preferences: Codable, Equatable {
         webFontFamily = v("webFontFamily", webFontFamily)
         webFontKeepMonospace = v("webFontKeepMonospace", webFontKeepMonospace)
         webFontExcludedHosts = v("webFontExcludedHosts", webFontExcludedHosts)
+        webFontHeading = v("webFontHeading", webFontHeading)
+        webFontMono = v("webFontMono", webFontMono)
+        showDiagnostics = v("showDiagnostics", showDiagnostics)
+        backgroundIdleSeconds = v("backgroundIdleSeconds", backgroundIdleSeconds)
+        maxLiveBackgroundTabs = v("maxLiveBackgroundTabs", maxLiveBackgroundTabs)
         webInspectorEnabled = v("webInspectorEnabled", webInspectorEnabled)
         consoleCaptureEnabled = v("consoleCaptureEnabled", consoleCaptureEnabled)
         restoreTabs = v("restoreTabs", restoreTabs)
@@ -143,13 +155,43 @@ public struct SiteSettings: Codable, Equatable, Identifiable {
     public var webFont: Bool?
     public var permissions: [String: PermissionDecision] = [:]
     public var autoRefreshSeconds: Int?
+    /// Per-site font override (nil = use global). `webFont == false` disables fonts on the site.
+    public var fontBody: String?
+    public var fontHeading: String?
+    public var fontMono: String?
     public var id: String { host }
 
     public init(host: String) { self.host = host.lowercased() }
 
+    enum CodingKeys: String, CodingKey {
+        case host, desktopMode, darkMode, javaScript, popups, externalNavigation, contentBlocking, userScriptsEnabled,
+             extensionsEnabled, webFont, permissions, autoRefreshSeconds, fontBody, fontHeading, fontMono
+    }
+
+    // Tolerant decoding: missing / unknown keys never make a whole settings file unreadable.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        host = try c.decode(String.self, forKey: .host).lowercased()
+        desktopMode = try? c.decodeIfPresent(Bool.self, forKey: .desktopMode)
+        darkMode = try? c.decodeIfPresent(TriState.self, forKey: .darkMode)
+        javaScript = try? c.decodeIfPresent(Bool.self, forKey: .javaScript)
+        popups = try? c.decodeIfPresent(PermissionDecision.self, forKey: .popups)
+        externalNavigation = try? c.decodeIfPresent(PermissionDecision.self, forKey: .externalNavigation)
+        contentBlocking = try? c.decodeIfPresent(Bool.self, forKey: .contentBlocking)
+        userScriptsEnabled = try? c.decodeIfPresent(Bool.self, forKey: .userScriptsEnabled)
+        extensionsEnabled = try? c.decodeIfPresent(Bool.self, forKey: .extensionsEnabled)
+        webFont = try? c.decodeIfPresent(Bool.self, forKey: .webFont)
+        permissions = (try? c.decodeIfPresent([String: PermissionDecision].self, forKey: .permissions)) ?? [:]
+        autoRefreshSeconds = try? c.decodeIfPresent(Int.self, forKey: .autoRefreshSeconds)
+        fontBody = try? c.decodeIfPresent(String.self, forKey: .fontBody)
+        fontHeading = try? c.decodeIfPresent(String.self, forKey: .fontHeading)
+        fontMono = try? c.decodeIfPresent(String.self, forKey: .fontMono)
+    }
+
     public var isEmpty: Bool {
         desktopMode == nil && darkMode == nil && javaScript == nil && popups == nil && externalNavigation == nil &&
-            contentBlocking == nil && userScriptsEnabled == nil && extensionsEnabled == nil && webFont == nil && permissions.isEmpty
+            contentBlocking == nil && userScriptsEnabled == nil && extensionsEnabled == nil && webFont == nil && permissions.isEmpty &&
+            fontBody == nil && fontHeading == nil && fontMono == nil && autoRefreshSeconds == nil
     }
 
     public static let webPermissionKinds: [(key: String, title: String)] = [
@@ -167,12 +209,14 @@ public struct TabSnapshot: Codable, Equatable, Identifiable {
     public var desktopMode: Bool
     public var lastActiveAt: Date
     public var pinned: Bool
+    /// Vertical scroll offset captured when the tab was suspended / saved.
+    public var scrollY: Double?
 
     public init(id: UUID = UUID(), url: String, title: String, groupID: UUID? = nil, interactionState: Data? = nil,
-                desktopMode: Bool = false, lastActiveAt: Date = Date(), pinned: Bool = false) {
+                desktopMode: Bool = false, lastActiveAt: Date = Date(), pinned: Bool = false, scrollY: Double? = nil) {
         self.id = id; self.url = url; self.title = title; self.groupID = groupID
         self.interactionState = interactionState; self.desktopMode = desktopMode
-        self.lastActiveAt = lastActiveAt; self.pinned = pinned
+        self.lastActiveAt = lastActiveAt; self.pinned = pinned; self.scrollY = scrollY
     }
 }
 

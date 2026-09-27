@@ -163,11 +163,6 @@ final class ManifestTests: XCTestCase {
         XCTAssertTrue(lines.contains { $0.text == "保存本地数据" })
     }
 
-    func testAPIMatrix() {
-        XCTAssertEqual(ChromeAPIMatrix.level(of: "runtime"), .supported)
-        XCTAssertEqual(ChromeAPIMatrix.level(of: "debugger"), .unsupported)
-        XCTAssertTrue(ChromeAPIMatrix.unsupportedNamespaces.contains("webRequest"))
-    }
 }
 
 final class FilterTests: XCTestCase {

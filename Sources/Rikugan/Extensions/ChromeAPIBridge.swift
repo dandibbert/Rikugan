@@ -18,6 +18,8 @@ import UserNotifications
         let frame: WKFrameInfo?
         let world: WKContentWorld
         let key: String
+        var webViewID: ObjectIdentifier? = nil
+        var tabID: Int? = nil
     }
 
     struct PortState {
@@ -40,7 +42,8 @@ import UserNotifications
             let world = message.world
             let frameKey = message.frameInfo.isMainFrame ? "main" : (message.frameInfo.request.url?.absoluteString ?? "sub")
             return Endpoint(webView: message.webView, frame: message.frameInfo, world: world,
-                            key: "\(message.webView.map { String(describing: ObjectIdentifier($0)) } ?? "nil")|\(world.name ?? "page")|\(frameKey)")
+                            key: "\(message.webView.map { String(describing: ObjectIdentifier($0)) } ?? "nil")|\(world.name ?? "page")|\(frameKey)",
+                            webViewID: message.webView.map(ObjectIdentifier.init), tabID: message.tab?.numericID)
         }
     }
 
@@ -66,7 +69,8 @@ import UserNotifications
         func dict(_ i: Int) -> [String: Any] { arg(i) as? [String: Any] ?? [:] }
 
         let contentAllowed: Set<String> = ["runtime.sendMessage", "runtime.connect", "port.post", "port.disconnect", "runtime._ready",
-                                           "runtime._readResource", "events.subscribe", "i18n.detectLanguage"]
+                                           "runtime._readResource", "events.subscribe", "i18n.detectLanguage",
+                                           "runtime._reportError", "runtime._reportUnsupported"]
         if ctx == "content", !api.hasPrefix("storage."), !contentAllowed.contains(api) {
             throw RikuganError("Unsupported API: \(api) is not available in content scripts")
         }
@@ -81,6 +85,14 @@ import UserNotifications
             }
             return nil
         case "events.subscribe":
+            if ctx == "background", let event = argsDict["event"] as? String { ext.background?.noteSubscription(event) }
+            return nil
+        case "runtime._reportError":
+            let text = String((argsDict["message"] as? String ?? "").prefix(300))
+            runtime.recordRuntimeError(ext, "[\(ctx)] \(text)")
+            return nil
+        case "runtime._reportUnsupported":
+            runtime.recordUnsupported(ext, argsDict["api"] as? String ?? "?")
             return nil
         case "runtime._readResource":
             let path = argsDict["path"] as? String ?? ""
@@ -540,8 +552,23 @@ import UserNotifications
         return sender
     }
 
+    /// Extension-context receivers for runtime.sendMessage / connect. Waits for (and wakes) the
+    /// background runtime first, so a message sent during a cold start is delivered, not dropped.
+    private func extensionTargets(_ ext: LoadedExtension, caller: Caller) async throws -> [(WKWebView, String)] {
+        if let bg = ext.background, caller.ctx != "background" {
+            let ready = await bg.awaitReady()
+            if !ready {
+                let others = runtime.extensionPages(of: ext).filter { $0.0 !== caller.webView && $0.1 != "background" }
+                if others.isEmpty {
+                    throw RikuganError("Could not establish connection. Background runtime is unavailable: \(bg.failureReason ?? bg.state.rawValue)")
+                }
+            }
+        }
+        return runtime.extensionPages(of: ext).filter { $0.0 !== caller.webView }
+    }
+
     private func sendToExtension(_ ext: LoadedExtension, message: Any, caller: Caller) async throws -> Any? {
-        let targets = runtime.extensionPages(of: ext).filter { $0.0 !== caller.webView }
+        let targets = try await extensionTargets(ext, caller: caller)
         guard !targets.isEmpty else { throw RikuganError("Could not establish connection. Receiving end does not exist.") }
         let senderInfo = sender(for: caller)
         var anyListener = false
@@ -592,13 +619,15 @@ import UserNotifications
                 let world = Worlds.extensionWorld(ext.id)
                 if (try? await webView.rkCall(open, arguments: ["id": portID, "n": name, "s": senderInfo], frame: record.frame, world: world)) as? Bool == true {
                     receivers.append(Endpoint(webView: webView, frame: record.frame, world: world,
-                                              key: "\(ObjectIdentifier(webView))|\(world.name ?? "")|\(record.frame.isMainFrame ? "main" : record.url)"))
+                                              key: "\(ObjectIdentifier(webView))|\(world.name ?? "")|\(record.frame.isMainFrame ? "main" : record.url)",
+                                              webViewID: ObjectIdentifier(webView), tabID: tabID))
                 }
             }
         } else {
-            for (webView, _) in runtime.extensionPages(of: ext) where webView !== caller.webView {
+            for (webView, _) in try await extensionTargets(ext, caller: caller) {
                 if (try? await webView.rkCall(open, arguments: ["id": portID, "n": name, "s": senderInfo], world: .page)) as? Bool == true {
-                    receivers.append(Endpoint(webView: webView, frame: nil, world: .page, key: "\(ObjectIdentifier(webView))|page|main"))
+                    receivers.append(Endpoint(webView: webView, frame: nil, world: .page, key: "\(ObjectIdentifier(webView))|page|main",
+                                              webViewID: ObjectIdentifier(webView), tabID: TabRegistry.shared.tab(for: webView)?.numericID))
                 }
             }
         }
@@ -634,6 +663,34 @@ import UserNotifications
         let key = caller.endpoint.key
         let targets = state.opener.key == key ? state.receivers : [state.opener]
         for target in targets { deliverPortEvent(target, portID: portID, type: "disconnect", message: nil) }
+    }
+
+    func hasOpenPorts(extID: String) -> Bool { ports.values.contains { $0.extID == extID && $0.connected } }
+    var openPortCount: Int { ports.count }
+
+    /// A web view went away (tab closed / suspended, background suspended): disconnect its ports.
+    func endpointsGone(webView: WKWebView) { endpointsGone { $0.webViewID == ObjectIdentifier(webView) } }
+    func endpointsGone(tabID: Int) { endpointsGone { $0.tabID == tabID } }
+
+    private func endpointsGone(where gone: (Endpoint) -> Bool) {
+        for (portID, state) in ports {
+            if gone(state.opener) {
+                ports.removeValue(forKey: portID)
+                for r in state.receivers where !gone(r) { deliverPortEvent(r, portID: portID, type: "disconnect", message: nil) }
+                continue
+            }
+            let remaining = state.receivers.filter { !gone($0) }
+            if remaining.count != state.receivers.count {
+                if remaining.isEmpty {
+                    ports.removeValue(forKey: portID)
+                    deliverPortEvent(state.opener, portID: portID, type: "disconnect", message: nil)
+                } else {
+                    var copy = state
+                    copy.receivers = remaining
+                    ports[portID] = copy
+                }
+            }
+        }
     }
 
     private func deliverPortEvent(_ endpoint: Endpoint, portID: String, type: String, message: Any?) {

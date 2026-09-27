@@ -16,8 +16,8 @@ import UserNotifications
             throw RikuganError("Unknown userscript")
         }
         // Authenticate: isolated scripts must come from their own world; page-world scripts need the token.
-        let expectedWorld = script.metadata.runsInPageWorld ? "" : Worlds.userscript(sid).name ?? ""
-        if script.metadata.runsInPageWorld {
+        let expectedWorld = script.usesPageWorld ? "" : Worlds.userscript(sid).name ?? ""
+        if script.usesPageWorld {
             guard body["token"] as? String == store.token(for: sid) else { throw RikuganError("GM bridge authentication failed") }
         } else {
             guard worldName == expectedWorld else { throw RikuganError("GM bridge world mismatch") }
@@ -139,7 +139,7 @@ import UserNotifications
         let fn = "__rikuganGM_" + store.token(for: script.id)
         let payload = JSONText.encode(["type": "valueChanged", "key": key, "value": value.map { $0 as Any } ?? NSNull()])
         let js = "window[\(fn.jsLiteral)] && window[\(fn.jsLiteral)](\(payload))"
-        let world = script.metadata.runsInPageWorld ? WKContentWorld.page : Worlds.userscript(script.id)
+        let world = script.usesPageWorld ? WKContentWorld.page : Worlds.userscript(script.id)
         for tab in TabRegistry.shared.allTabs {
             guard let webView = tab.webView, webView !== origin, tab.injectedScripts.contains(script.id) else { continue }
             webView.rkEval(js, world: world)

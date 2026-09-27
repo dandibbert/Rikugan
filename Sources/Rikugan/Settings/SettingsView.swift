@@ -2,6 +2,13 @@ import SwiftUI
 import PhotosUI
 
 struct SettingsView: View {
+    private var showDiagnostics: Bool {
+        #if DEBUG
+        return true
+        #else
+        return AppServices.shared.prefs.showDiagnostics
+        #endif
+    }
     @EnvironmentObject private var services: AppServices
     @EnvironmentObject private var manager: TabManager
     @EnvironmentObject private var profile: ProfileContext
@@ -40,6 +47,9 @@ struct SettingsView: View {
                 Section("高级") {
                     NavigationLink { DeveloperSettingsView() } label: { Label("开发者与网页检查器", systemImage: "hammer") }
                     NavigationLink { CompatibilityView() } label: { Label("兼容性矩阵", systemImage: "checklist") }
+                    if showDiagnostics {
+                        NavigationLink { DiagnosticsView() } label: { Label("诊断", systemImage: "waveform.path.ecg") }
+                    }
                     NavigationLink { SelfTestView() } label: { Label("自检（扩展 / 脚本 / 拦截）", systemImage: "stethoscope") }
                     NavigationLink { AboutView() } label: { Label("关于 Rikugan", systemImage: "info.circle") }
                 }
@@ -177,47 +187,55 @@ struct HomepageSettingsView: View {
 struct WebFontSettingsView: View {
     @EnvironmentObject private var services: AppServices
     @EnvironmentObject private var fonts: FontManager
+    @EnvironmentObject private var profile: ProfileContext
     @Binding var importKind: BrowserView.ImportKind?
-    @State private var showPicker = false
     @State private var excluded = ""
+    @State private var newSite = ""
 
     var body: some View {
         Form {
             Section {
                 Toggle("使用自定义网页字体", isOn: $services.prefs.webFontEnabled)
-                Button { showPicker = true } label: {
-                    HStack {
-                        Text("系统字体（含描述文件安装的字体）")
-                        Spacer()
-                        Text(services.prefs.webFontFamily.isEmpty ? "未选择" : services.prefs.webFontFamily).foregroundStyle(.secondary)
-                    }
-                }
-                Toggle("代码保持等宽字体", isOn: $services.prefs.webFontKeepMonospace)
+                FontChooser(title: "正文字体", selection: $services.prefs.webFontFamily, allowNone: false)
+                FontChooser(title: "标题字体", selection: $services.prefs.webFontHeading, allowNone: true)
+                FontChooser(title: "等宽字体（代码）", selection: $services.prefs.webFontMono, allowNone: true)
             } footer: {
-                Text("通过配置描述文件安装的第三方字体对 WebKit 全局可用，可直接选择。导入的字体文件通过 FontFace API 注入网页，不受网页 CSP 限制。")
+                Text("“保持网页字体”表示该类文字不替换。图标字体（Material Icons、Font Awesome、网页自带的图标字体等）会被自动识别并保留，不会变成乱码。通过配置描述文件安装的字体对 WebKit 全局可用，可直接选择；导入的字体文件通过 FontFace API 注入网页，不受网页 CSP 限制。")
             }
             if !services.prefs.webFontFamily.isEmpty {
                 Section("预览") {
                     Text("六眼 Rikugan — The quick brown fox jumps over the lazy dog. 永和九年，岁在癸丑。")
                         .font(.custom(services.prefs.webFontFamily, size: 18))
+                    if !services.prefs.webFontHeading.isEmpty { Text("标题 Heading").font(.custom(services.prefs.webFontHeading, size: 22)) }
+                    if !services.prefs.webFontMono.isEmpty { Text("let code = 0x1F // 代码").font(.custom(services.prefs.webFontMono, size: 15)) }
                 }
             }
             Section("已导入的字体文件") {
                 ForEach(fonts.imported) { font in
-                    Button {
-                        services.prefs.webFontFamily = font.family
-                    } label: {
-                        HStack {
-                            Text(font.family).font(.custom(font.postScriptName, size: 17))
-                            Spacer()
-                            if services.prefs.webFontFamily == font.family { Image(systemName: "checkmark") }
-                        }
+                    HStack {
+                        Text(font.family).font(.custom(font.postScriptName, size: 17))
+                        Spacer()
+                        Text(font.fileURL.pathExtension.uppercased()).font(.caption2).foregroundStyle(.secondary)
                     }
-                    .foregroundStyle(.primary)
                 }
                 .onDelete { idx in idx.map { fonts.imported[$0] }.forEach { fonts.delete($0) } }
-                Button { importKind = .font } label: { Label("导入字体文件（TTF / OTF / WOFF2）", systemImage: "square.and.arrow.down") }
+                Button { importKind = .font } label: { Label("导入字体文件（TTF / OTF / TTC / WOFF2）", systemImage: "square.and.arrow.down") }
             }
+            Section {
+                ForEach(profile.siteSettings.sites.values.filter { $0.fontBody != nil || $0.fontHeading != nil || $0.fontMono != nil || $0.webFont != nil }.sorted { $0.host < $1.host }) { site in
+                    NavigationLink { SiteFontEditor(host: site.host) } label: {
+                        VStack(alignment: .leading) {
+                            Text(site.host)
+                            Text(site.webFont == false ? "已停用" : [site.fontBody, site.fontHeading, site.fontMono].compactMap { $0 }.joined(separator: " / "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                HStack {
+                    TextField("github.com", text: $newSite).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    NavigationLink("设置") { SiteFontEditor(host: newSite.lowercased()) }.disabled(newSite.isEmpty)
+                }
+            } header: { Text("按网站覆盖") } footer: { Text("例如：全局使用字体 A，github.com 使用字体 B，example.com 停用。") }
             Section {
                 ForEach(services.prefs.webFontExcludedHosts, id: \.self) { Text($0) }
                     .onDelete { services.prefs.webFontExcludedHosts.remove(atOffsets: $0) }
@@ -228,9 +246,59 @@ struct WebFontSettingsView: View {
             } header: { Text("不替换字体的网站") }
         }
         .navigationTitle("网页字体")
-        .sheet(isPresented: $showPicker) {
-            SystemFontPicker { services.prefs.webFontFamily = $0 }
+    }
+}
+
+/// Picks a font family: keep page font, imported fonts, or any system / profile-installed family.
+struct FontChooser: View {
+    let title: String
+    @Binding var selection: String
+    let allowNone: Bool
+    @EnvironmentObject private var fonts: FontManager
+    @State private var showSystemPicker = false
+
+    var body: some View {
+        Menu {
+            if allowNone { Button("保持网页字体") { selection = "" } }
+            if !fonts.imported.isEmpty {
+                Section("导入的字体") { ForEach(fonts.imported) { font in Button(font.family) { selection = font.family } } }
+            }
+            Button("系统 / 描述文件字体…") { showSystemPicker = true }
+        } label: {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                Text(selection.isEmpty ? (allowNone ? "保持网页字体" : "未选择") : selection).foregroundStyle(.secondary).lineLimit(1)
+            }
         }
+        .sheet(isPresented: $showSystemPicker) { SystemFontPicker { selection = $0 } }
+    }
+}
+
+struct SiteFontEditor: View {
+    let host: String
+    @EnvironmentObject private var profile: ProfileContext
+
+    private func binding(_ keyPath: WritableKeyPath<SiteSettings, String?>) -> Binding<String> {
+        Binding(get: { profile.siteSettings.sites[host]?[keyPath: keyPath] ?? "" },
+                set: { value in profile.siteSettings.update(host) { $0[keyPath: keyPath] = value.isEmpty ? nil : value } })
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("此网站", selection: Binding(get: { profile.siteSettings.sites[host]?.webFont.map { $0 ? 1 : 2 } ?? 0 },
+                                                  set: { v in profile.siteSettings.update(host) { $0.webFont = v == 0 ? nil : v == 1 } })) {
+                    Text("跟随全局").tag(0); Text("启用").tag(1); Text("停用").tag(2)
+                }
+            }
+            Section("覆盖（留空 = 使用全局）") {
+                FontChooser(title: "正文字体", selection: binding(\.fontBody), allowNone: true)
+                FontChooser(title: "标题字体", selection: binding(\.fontHeading), allowNone: true)
+                FontChooser(title: "等宽字体", selection: binding(\.fontMono), allowNone: true)
+            }
+        }
+        .navigationTitle(host)
     }
 }
 
@@ -350,6 +418,14 @@ struct DeveloperSettingsView: View {
                 Toggle("应用内控制台（实验）", isOn: $services.prefs.consoleCaptureEnabled)
                 Toggle("位置权限按网站询问", isOn: $services.prefs.geolocationShim)
             } footer: { Text("应用内检查器可查看 console 输出、执行 JavaScript、查看 DOM 与资源。新设置在下次加载页面时生效。") }
+            Section {
+                Toggle("在设置中显示“诊断”页", isOn: $services.prefs.showDiagnostics)
+                NavigationLink { DiagnosticsView() } label: { Label("打开诊断", systemImage: "waveform.path.ecg") }
+            } footer: { Text("诊断页显示构建信息、标签页生命周期、扩展后台状态、API 兼容性、DNR 能力与最近错误，可导出为不含敏感信息的 JSON。") }
+            Section {
+                Stepper("后台存活标签页上限：\(services.prefs.maxLiveBackgroundTabs)", value: $services.prefs.maxLiveBackgroundTabs, in: 0...20)
+                Stepper("扩展后台空闲挂起：\(services.prefs.backgroundIdleSeconds) 秒", value: $services.prefs.backgroundIdleSeconds, in: 30...1800, step: 30)
+            } footer: { Text("超过上限的后台标签页会被挂起（保存网址、历史、滚动位置与快照，释放 WKWebView），切回时恢复。收到内存警告时会挂起全部后台标签页。有打开端口的扩展后台不会被挂起。") }
         }
         .navigationTitle("开发者")
     }
@@ -358,11 +434,21 @@ struct DeveloperSettingsView: View {
 struct CompatibilityView: View {
     var body: some View {
         List {
+            Section {
+                Text("本表由 chrome-api-matrix.json 生成；CI 会校验每个标为支持的方法都在 JS 运行时和原生桥中真实存在，标为不支持的方法调用时返回明确错误并记录到诊断页。").font(.footnote).foregroundStyle(.secondary)
+            }
             Section("Chrome 扩展 API") {
                 ForEach(ChromeAPIMatrix.entries) { entry in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack { Text(entry.level.symbol); Text("chrome." + entry.namespace).font(.body.monospaced()); Spacer(); Text(entry.level.rawValue).font(.caption).foregroundStyle(.secondary) }
-                        if !entry.note.isEmpty { Text(entry.note).font(.caption).foregroundStyle(.secondary) }
+                    NavigationLink { CompatibilityDetailView(entry: entry) } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text(entry.level.symbol)
+                                Text("chrome." + entry.namespace).font(.body.monospaced())
+                                Spacer()
+                                if !entry.methods.isEmpty { Text("\(entry.implemented.count)/\(entry.methods.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                            }
+                            if !entry.reason.isEmpty { Text(entry.reason).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                        }
                     }
                 }
             }
@@ -376,6 +462,38 @@ struct CompatibilityView: View {
             }
         }
         .navigationTitle("兼容性矩阵")
+    }
+}
+
+struct CompatibilityDetailView: View {
+    let entry: ChromeAPIMatrix.Entry
+    var body: some View {
+        List {
+            Section("级别") {
+                LabeledContent("chrome.\(entry.namespace)", value: "\(entry.level.symbol) \(entry.level.rawValue)")
+                if !entry.reason.isEmpty { Text(entry.reason).font(.footnote) }
+            }
+            if !entry.differences.isEmpty {
+                Section("与 Chrome 的语义差异") { ForEach(entry.differences, id: \.self) { Text($0).font(.footnote) } }
+            }
+            if !entry.implemented.isEmpty {
+                Section("已实现（\(entry.implemented.count)）") { ForEach(entry.implemented) { methodRow($0) } }
+            }
+            if !entry.missing.isEmpty {
+                Section("未实现（\(entry.missing.count)）") { ForEach(entry.missing) { methodRow($0) } }
+            }
+            if !entry.actions.isEmpty {
+                Section("规则动作") { ForEach(entry.actions) { methodRow($0) } }
+            }
+        }
+        .navigationTitle("chrome.\(entry.namespace)")
+    }
+
+    private func methodRow(_ method: ChromeAPIMatrix.Method) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack { Text(method.level.symbol); Text(method.name).font(.callout.monospaced()) }
+            if !method.note.isEmpty { Text(method.note).font(.caption).foregroundStyle(.secondary) }
+        }
     }
 }
 

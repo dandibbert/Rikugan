@@ -32,19 +32,47 @@ import SwiftUI
         imported = list.sorted { $0.family < $1.family }
     }
 
+    /// Imports .ttf / .otf / .ttc (/ .woff / .woff2). Collections are split into one standalone
+    /// font per face because WebKit's FontFace loader expects single-face sfnt data.
+    @discardableResult
     func importFont(from url: URL) throws -> ImportedFont {
+        guard let first = try importFonts(from: url).first else { throw RikuganError("字体导入失败") }
+        return first
+    }
+
+    func importFonts(from url: URL) throws -> [ImportedFont] {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
-        let destination = AppPaths.uniqueFile(in: AppPaths.fonts, name: url.lastPathComponent)
-        try FileManager.default.copyItem(at: url, to: destination)
-        let descriptors = (CTFontManagerCreateFontDescriptorsFromURL(destination as CFURL) as? [CTFontDescriptor]) ?? []
-        guard !descriptors.isEmpty || ["woff", "woff2"].contains(destination.pathExtension.lowercased()) else {
-            try? FileManager.default.removeItem(at: destination)
-            throw RikuganError("无法识别的字体文件")
+        let data = try Data(contentsOf: url)
+        let ext = url.pathExtension.lowercased()
+        guard ["ttf", "otf", "ttc", "woff", "woff2"].contains(ext) || FontCollection.isCollection(data) else {
+            throw RikuganError("不支持的字体格式：.\(ext)（支持 TTF / OTF / TTC / WOFF / WOFF2）")
+        }
+        var written: [URL] = []
+        if FontCollection.isCollection(data) {
+            let faces = try FontCollection.split(data)
+            let base = url.deletingPathExtension().lastPathComponent
+            for (index, face) in faces.enumerated() {
+                let destination = AppPaths.uniqueFile(in: AppPaths.fonts, name: "\(base)-\(index + 1).ttf")
+                try face.write(to: destination)
+                written.append(destination)
+            }
+        } else {
+            let destination = AppPaths.uniqueFile(in: AppPaths.fonts, name: url.lastPathComponent)
+            try data.write(to: destination)
+            written.append(destination)
+        }
+        for file in written where !["woff", "woff2"].contains(file.pathExtension.lowercased()) {
+            let descriptors = (CTFontManagerCreateFontDescriptorsFromURL(file as CFURL) as? [CTFontDescriptor]) ?? []
+            if descriptors.isEmpty {
+                for w in written { try? FileManager.default.removeItem(at: w) }
+                throw RikuganError("无法识别的字体文件：\(url.lastPathComponent)")
+            }
         }
         reload()
-        guard let font = imported.first(where: { $0.fileURL == destination }) else { throw RikuganError("字体导入失败") }
-        return font
+        let fonts = imported.filter { written.contains($0.fileURL) }
+        guard !fonts.isEmpty else { throw RikuganError("字体导入失败") }
+        return fonts
     }
 
     func delete(_ font: ImportedFont) {

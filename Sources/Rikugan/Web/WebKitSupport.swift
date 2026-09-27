@@ -181,3 +181,23 @@ enum MIME {
         }
     }
 }
+
+/// WKWebView subclass that counts live instances so leaks / duplicate web views show up in
+/// Diagnostics and in the tab-lifecycle stress test.
+final class RikuganWebView: WKWebView {
+    nonisolated(unsafe) private(set) static var liveCount = 0
+    private static let lock = NSLock()
+    let purpose: String
+
+    init(frame: CGRect, configuration: WKWebViewConfiguration, purpose: String) {
+        self.purpose = purpose
+        super.init(frame: frame, configuration: configuration)
+        Self.lock.lock(); Self.liveCount += 1; Self.lock.unlock()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not supported") }
+
+    deinit {
+        Self.lock.lock(); Self.liveCount -= 1; Self.lock.unlock()
+    }
+}

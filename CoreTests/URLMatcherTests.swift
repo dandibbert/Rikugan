@@ -175,6 +175,18 @@ final class MetadataParserTests: XCTestCase {
         XCTAssertTrue(MetadataParser.parse(unsafe).metadata.runsInPageWorld)
     }
 
+    func testWorldSelectionUsesSource() {
+        let granted = "// ==UserScript==\n// @name x\n// @match *://*/*\n// @grant GM_setValue\n// ==/UserScript==\n"
+        let m = MetadataParser.parse(granted).metadata
+        XCTAssertFalse(m.runsInPageWorld(source: granted + "GM_setValue('a', 1)"))
+        XCTAssertTrue(m.runsInPageWorld(source: granted + "unsafeWindow.foo = 1"))
+        XCTAssertFalse(m.runsInPageWorld(source: granted + "const notunsafeWindowx = 1"))
+        let content = granted.replacingOccurrences(of: "// ==/UserScript==", with: "// @inject-into content\n// ==/UserScript==")
+        XCTAssertFalse(MetadataParser.parse(content).metadata.runsInPageWorld(source: content + "unsafeWindow.x"))
+        let page = granted.replacingOccurrences(of: "// ==/UserScript==", with: "// @inject-into page\n// ==/UserScript==")
+        XCTAssertTrue(MetadataParser.parse(page).metadata.runsInPageWorld(source: page))
+    }
+
     func testErrorsReported() {
         XCTAssertTrue(MetadataParser.parse("console.log(1)").hasErrors)
         let bad = "// ==UserScript==\n// @name x\n// @match not-a-pattern\n// ==/UserScript==\n"

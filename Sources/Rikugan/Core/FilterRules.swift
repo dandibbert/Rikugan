@@ -100,7 +100,7 @@ public enum FilterResourceType: String, CaseIterable, Codable {
 
 /// A network filtering rule in a portable form, convertible into WebKit JSON.
 public struct NetworkRule: Hashable {
-    public enum Action: Hashable { case block, allow, allowDocument, upgradeScheme }
+    public enum Action: Hashable { case block, allow, allowDocument, upgradeScheme, redirect, modifyHeaders }
     public var action: Action
     public var urlRegex: String
     public var caseSensitive = false
@@ -109,6 +109,9 @@ public struct NetworkRule: Hashable {
     public var ifDomains: [String] = []
     public var unlessDomains: [String] = []
     public var loadContext: [String] = []
+    /// Serialized WebKit action object for redirect / modify-headers rules.
+    public var actionJSON: String?
+    public var priority: Int?
 
     public func webKitJSON() -> [String: Any] {
         var trigger: [String: Any] = ["url-filter": urlRegex]
@@ -123,6 +126,9 @@ public struct NetworkRule: Hashable {
         case .block: actionType = "block"
         case .allow, .allowDocument: actionType = "ignore-previous-rules"
         case .upgradeScheme: actionType = "make-https"
+        case .redirect, .modifyHeaders:
+            let action = actionJSON.flatMap { JSONText.decode($0) as? [String: Any] } ?? ["type": "block"]
+            return ["trigger": trigger, "action": action]
         }
         return ["trigger": trigger, "action": ["type": actionType]]
     }
@@ -380,7 +386,7 @@ public enum ContentBlockerCompiler {
     public static let maxRulesPerList = 45_000
 
     public static func compile(_ rules: [NetworkRule], allowlistedHosts: [String]) -> [String] {
-        let blocking = rules.filter { $0.action == .block || $0.action == .upgradeScheme }
+        let blocking = rules.filter { $0.action == .block || $0.action == .upgradeScheme || $0.action == .redirect || $0.action == .modifyHeaders }
         let exceptions = rules.filter { $0.action == .allow || $0.action == .allowDocument }
         var allow: [[String: Any]] = exceptions.map { $0.webKitJSON() }
         if !allowlistedHosts.isEmpty {

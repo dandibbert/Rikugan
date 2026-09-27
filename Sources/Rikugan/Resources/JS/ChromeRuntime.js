@@ -43,13 +43,15 @@
   const call = (name) => api((...args) => bridge(name, { args }));
 
   const unsupportedError = (name) => new Error('Unsupported API: chrome.' + name + ' is not available in Rikugan');
-  const unsupportedFn = (name) => function (...args) {
+  const reportedUnsupported = new Set();
+  const unsupportedFn = (name) => Object.assign(function (...args) {
     const error = unsupportedError(name);
     console.warn('[Rikugan]', error.message);
+    if (!reportedUnsupported.has(name)) { reportedUnsupported.add(name); bridge('runtime._reportUnsupported', { api: name }).catch(() => {}); }
     const cb = args.length && typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
     if (cb) { withLastError(error, () => cb()); return undefined; }
     return Promise.reject(error);
-  };
+  }, { __rikuganUnsupported: true });
 
   // ---- Events ---------------------------------------------------------------------------------
   class RkEvent {
@@ -78,11 +80,17 @@
   const ev = (name) => { if (!events.has(name)) events.set(name, new RkEvent(name)); return events.get(name); };
 
   // Proxy: supported namespace; unknown members become explicit Unsupported stubs instead of undefined.
+  // Events that Rikugan cannot deliver: listeners are accepted (so extension start-up does not
+  // crash) but the registration is reported as Unsupported and the object is marked.
+  const unsupportedEvent = (name) => {
+    const warn = unsupportedFn(name + '.addListener');
+    return { __rikuganUnsupported: true, addListener() { warn().catch(() => {}); }, removeListener() {}, hasListener: () => false, hasListeners: () => false };
+  };
   const guarded = (ns, target) => new Proxy(target, {
     get(t, prop) {
       if (prop in t || typeof prop === 'symbol' || prop === 'then' || prop === 'toJSON') return t[prop];
       if (ns === '') return unsupportedNamespace(prop);
-      if (/^on[A-Z]/.test(prop)) { const e = ev(ns + '.' + prop); t[prop] = e; return e; }
+      if (/^on[A-Z]/.test(prop)) { const e = unsupportedEvent(ns + '.' + prop); t[prop] = e; return e; }
       if (/^[A-Z_0-9]+$/.test(prop)) return undefined;
       return unsupportedFn(ns + '.' + prop);
     },
@@ -426,14 +434,14 @@
     chrome.commands = guarded('commands', { getAll: call('commands.getAll'), onCommand: ev('commands.onCommand') });
     chrome.cookies = guarded('cookies', {
       get: call('cookies.get'), getAll: call('cookies.getAll'), set: call('cookies.set'), remove: call('cookies.remove'),
-      getAllCookieStores: call('cookies.getAllCookieStores'), onChanged: ev('cookies.onChanged'),
+      getAllCookieStores: call('cookies.getAllCookieStores'), onChanged: unsupportedEvent('cookies.onChanged'),
       SameSiteStatus: { NO_RESTRICTION: 'no_restriction', LAX: 'lax', STRICT: 'strict', UNSPECIFIED: 'unspecified' },
     });
     chrome.downloads = guarded('downloads', {
       download: call('downloads.download'), search: call('downloads.search'), pause: call('downloads.pause'), resume: call('downloads.resume'),
       cancel: call('downloads.cancel'), open: call('downloads.open'), show: call('downloads.show'), erase: call('downloads.erase'),
       showDefaultFolder: api(async () => undefined), setUiOptions: api(async () => undefined),
-      onCreated: ev('downloads.onCreated'), onChanged: ev('downloads.onChanged'), onErased: ev('downloads.onErased'),
+      onCreated: unsupportedEvent('downloads.onCreated'), onChanged: ev('downloads.onChanged'), onErased: unsupportedEvent('downloads.onErased'),
     });
     chrome.notifications = guarded('notifications', {
       create: api(async (...args) => {
@@ -451,7 +459,7 @@
       onBeforeNavigate: ev('webNavigation.onBeforeNavigate'), onCommitted: ev('webNavigation.onCommitted'),
       onDOMContentLoaded: ev('webNavigation.onDOMContentLoaded'), onCompleted: ev('webNavigation.onCompleted'),
       onErrorOccurred: ev('webNavigation.onErrorOccurred'), onCreatedNavigationTarget: ev('webNavigation.onCreatedNavigationTarget'),
-      onReferenceFragmentUpdated: ev('webNavigation.onReferenceFragmentUpdated'), onTabReplaced: ev('webNavigation.onTabReplaced'),
+      onReferenceFragmentUpdated: unsupportedEvent('webNavigation.onReferenceFragmentUpdated'), onTabReplaced: unsupportedEvent('webNavigation.onTabReplaced'),
       onHistoryStateUpdated: ev('webNavigation.onHistoryStateUpdated'),
     });
     chrome.declarativeNetRequest = guarded('declarativeNetRequest', {
@@ -462,13 +470,13 @@
       updateDynamicRules: call('declarativeNetRequest.updateDynamicRules'), getDynamicRules: call('declarativeNetRequest.getDynamicRules'),
       updateSessionRules: call('declarativeNetRequest.updateSessionRules'), getSessionRules: call('declarativeNetRequest.getSessionRules'),
       updateEnabledRulesets: call('declarativeNetRequest.updateEnabledRulesets'), getEnabledRulesets: call('declarativeNetRequest.getEnabledRulesets'),
-      updateStaticRules: call('declarativeNetRequest.updateStaticRules'), getDisabledRuleIds: api(async () => []),
+      updateStaticRules: unsupportedFn('declarativeNetRequest.updateStaticRules'), getDisabledRuleIds: api(async () => []),
       getAvailableStaticRuleCount: api(async () => 30000),
       isRegexSupported: call('declarativeNetRequest.isRegexSupported'),
       setExtensionActionOptions: api(async () => undefined),
-      getMatchedRules: api(async () => ({ rulesMatchedInfo: [] })),
+      getMatchedRules: unsupportedFn('declarativeNetRequest.getMatchedRules'),
       testMatchOutcome: unsupportedFn('declarativeNetRequest.testMatchOutcome'),
-      onRuleMatchedDebug: ev('declarativeNetRequest.onRuleMatchedDebug'),
+      onRuleMatchedDebug: unsupportedEvent('declarativeNetRequest.onRuleMatchedDebug'),
       RuleActionType: { BLOCK: 'block', REDIRECT: 'redirect', ALLOW: 'allow', UPGRADE_SCHEME: 'upgradeScheme', MODIFY_HEADERS: 'modifyHeaders', ALLOW_ALL_REQUESTS: 'allowAllRequests' },
       ResourceType: { MAIN_FRAME: 'main_frame', SUB_FRAME: 'sub_frame', STYLESHEET: 'stylesheet', SCRIPT: 'script', IMAGE: 'image', FONT: 'font', OBJECT: 'object', XMLHTTPREQUEST: 'xmlhttprequest', PING: 'ping', CSP_REPORT: 'csp_report', MEDIA: 'media', WEBSOCKET: 'websocket', WEBTRANSPORT: 'webtransport', WEBBUNDLE: 'webbundle', OTHER: 'other' },
       DomainType: { FIRST_PARTY: 'firstParty', THIRD_PARTY: 'thirdParty' },
@@ -551,6 +559,22 @@
       }
     };
   }
+  // Runtime errors of extension code are reported to the native side (Diagnostics / compatibility reports).
+  let reportedErrors = 0;
+  const reportError = (message) => {
+    if (reportedErrors++ > 20) return;
+    bridge('runtime._reportError', { message: String(message).slice(0, 300) }).catch(() => {});
+  };
+  if (typeof addEventListener === 'function') {
+    // Only errors thrown by this extension's own code (content scripts carry an extension sourceURL);
+    // page errors seen through the shared DOM are ignored.
+    addEventListener('error', (e) => {
+      if (!e.filename || !String(e.filename).startsWith(cfg.baseURL)) return;
+      reportError((e.message || 'Error') + ' @ ' + String(e.filename).slice(cfg.baseURL.length) + ':' + e.lineno);
+    });
+    if (cfg.ctx !== 'content') addEventListener('unhandledrejection', (e) => reportError('Unhandled rejection: ' + (e.reason && e.reason.message || e.reason)));
+  }
+
   if (cfg.ctx !== 'content') {
     const signalReady = () => bridge('runtime._ready', { ctx: cfg.ctx, url: String(location.href) }).catch(() => {});
     if (document.readyState === 'complete') setTimeout(signalReady, 0);

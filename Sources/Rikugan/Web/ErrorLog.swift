@@ -1,0 +1,28 @@
+import Foundation
+
+/// In-memory ring buffer of runtime errors shown on the Diagnostics page and included in the
+/// diagnostics export. Contains no page content, URLs are reduced to their host.
+@MainActor final class ErrorLog: ObservableObject {
+    struct Entry: Identifiable, Codable {
+        var id = UUID()
+        let date: Date
+        let source: String
+        let message: String
+    }
+
+    static let shared = ErrorLog()
+    @Published private(set) var entries: [Entry] = []
+
+    func record(_ message: String, source: String) {
+        entries.append(Entry(date: Date(), source: source, message: Self.scrub(String(message.prefix(500)))))
+        if entries.count > 200 { entries.removeFirst(entries.count - 200) }
+    }
+
+    func clear() { entries.removeAll() }
+
+    /// Reduces http(s) URLs to scheme + host so paths / query strings never reach the log.
+    nonisolated static func scrub(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"(https?://[^/\s"'?#]+)[^\s"']*"#) else { return text }
+        return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1/…")
+    }
+}

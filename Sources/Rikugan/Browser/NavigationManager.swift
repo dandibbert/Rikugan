@@ -114,6 +114,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        restoreFinished()
         guard let url = webView.url else { return }
         if !isPrivate, ["http", "https"].contains(url.scheme ?? "") { profile.history.record(url: url, title: webView.title ?? "") }
         refreshFavicon()
@@ -142,8 +143,8 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        markInjected(for: URL(string: "about:terminated")!)
-        webView.reload()
+        ErrorLog.shared.record("WebContent process terminated", source: "tab \(numericID)")
+        contentProcessTerminated()
     }
 
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,

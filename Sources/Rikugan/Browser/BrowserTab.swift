@@ -69,6 +69,13 @@ enum TranslationState: Equatable {
     @Published var autoRefreshInterval: TimeInterval? { didSet { scheduleAutoRefresh() } }
     @Published var storeInstallCandidate: WebStoreItem?
     @Published var hasSecureContent = true
+    /// Explicit lifecycle (active / liveBackground / suspended / restoring / terminated).
+    @Published private(set) var lifecycle: TabLifecycleState = .suspended
+    /// Scroll offset captured at suspension, re-applied after restore.
+    private(set) var lastScrollY: Double?
+    private var pendingScrollRestore: Double?
+    private(set) var suspendCount = 0
+    private(set) var restoreCount = 0
 
     private(set) var webView: WKWebView?
     private var restoreState: Data?
@@ -96,6 +103,8 @@ enum TranslationState: Equatable {
         desktopMode = snapshot.desktopMode
         lastActiveAt = snapshot.lastActiveAt
         pinned = snapshot.pinned
+        lastScrollY = snapshot.scrollY
+        pendingScrollRestore = snapshot.scrollY
         restoreState = snapshot.interactionState
         restoreURL = URL(string: snapshot.url)
         url = restoreURL
@@ -108,7 +117,7 @@ enum TranslationState: Equatable {
     var snapshot: TabSnapshot {
         TabSnapshot(id: id, url: (webView?.url ?? url)?.absoluteString ?? "", title: title, groupID: groupID,
                     interactionState: (webView?.interactionState as? Data) ?? restoreState,
-                    desktopMode: desktopMode, lastActiveAt: lastActiveAt, pinned: pinned)
+                    desktopMode: desktopMode, lastActiveAt: lastActiveAt, pinned: pinned, scrollY: lastScrollY)
     }
 
     // MARK: WebView lifecycle
@@ -116,6 +125,7 @@ enum TranslationState: Equatable {
     @discardableResult
     func ensureWebView() -> WKWebView {
         if let webView { return webView }
+        if lifecycle == .suspended || lifecycle == .terminated { lifecycle = .restoring; restoreCount += 1 }
         let webView = WebViewFactory.makeWebView(for: self, configuration: pendingExternalConfiguration)
         pendingExternalConfiguration = nil
         self.webView = webView
@@ -136,6 +146,74 @@ enum TranslationState: Equatable {
     func activate() {
         lastActiveAt = Date()
         if url != nil || restoreState != nil { ensureWebView() }
+        if lifecycle != .restoring || webView?.isLoading == false { lifecycle = .active }
+    }
+
+    /// The tab lost focus but keeps its live web view.
+    func deactivate() {
+        guard webView != nil, lifecycle == .active || lifecycle == .restoring else { return }
+        lifecycle = .liveBackground
+    }
+
+    var isLive: Bool { webView != nil }
+
+    /// Releases the WKWebView while keeping identity, URL, title, favicon, snapshot, group,
+    /// history (interactionState) and scroll position. JS state, WebSockets and unsaved form
+    /// content are lost and the page reloads on restore — this is accepted, not hidden.
+    func suspend() async {
+        guard let webView, lifecycle != .active else { return }
+        if let y = (try? await webView.rkCall("return window.scrollY || 0;", world: Worlds.tools)) as? Double { lastScrollY = y }
+        guard self.webView === webView, lifecycle != .active else { return }
+        captureThumbnail()
+        restoreState = (webView.interactionState as? Data) ?? restoreState
+        restoreURL = webView.url ?? url
+        pendingScrollRestore = lastScrollY
+        releaseWebView()
+        lifecycle = .suspended
+        suspendCount += 1
+        manager?.scheduleSave()
+    }
+
+    /// WebContent process died: the page cannot be recovered losslessly.
+    func contentProcessTerminated() {
+        guard let webView else { return }
+        if lifecycle == .active {
+            markInjected(for: URL(string: "about:terminated")!)
+            lifecycle = .restoring
+            webView.reload()
+            return
+        }
+        restoreState = (webView.interactionState as? Data) ?? restoreState
+        restoreURL = webView.url ?? url
+        releaseWebView()
+        lifecycle = .terminated
+    }
+
+    /// Called after a restored page finished loading.
+    func restoreFinished() {
+        if lifecycle == .restoring { lifecycle = manager?.activeTabID == id ? .active : .liveBackground }
+        guard let y = pendingScrollRestore, y > 0, let webView else { pendingScrollRestore = nil; return }
+        pendingScrollRestore = nil
+        webView.rkEval("if ((window.scrollY || 0) < 1) window.scrollTo(0, \(y));", world: Worlds.tools)
+    }
+
+    private func releaseWebView() {
+        guard let webView else { return }
+        observers.removeAll()
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
+        webView.configuration.userContentController.removeAllUserScripts()
+        WebViewFactory.forget(webView.configuration.userContentController)
+        webView.removeFromSuperview()
+        TabRegistry.shared.unregister(webView: webView)
+        profile.extensions.tabRemoved(self, closing: false)
+        self.webView = nil
+        injectedForURL = nil
+        frameRecords.removeAll()
+        isLoading = false
+        progress = 0
     }
 
     private func observe(_ webView: WKWebView) {
@@ -175,18 +253,9 @@ enum TranslationState: Equatable {
 
     func teardown() {
         autoRefreshTimer?.invalidate()
-        observers.removeAll()
-        if let webView {
-            webView.stopLoading()
-            webView.navigationDelegate = nil
-            webView.uiDelegate = nil
-            webView.configuration.userContentController.removeAllScriptMessageHandlers()
-            webView.configuration.userContentController.removeAllUserScripts()
-            WebViewFactory.forget(webView.configuration.userContentController)
-            webView.removeFromSuperview()
-        }
+        releaseWebView()
         TabRegistry.shared.unregister(self)
-        webView = nil
+        lifecycle = .suspended
     }
 
     // MARK: Navigation
@@ -311,7 +380,7 @@ enum TranslationState: Equatable {
 
     func runMenuCommand(_ command: ScriptMenuCommand) {
         guard let webView, let script = profile.userscripts.script(command.scriptID) else { return }
-        let world = script.metadata.runsInPageWorld ? WKContentWorld.page : Worlds.userscript(script.id)
+        let world = script.usesPageWorld ? WKContentWorld.page : Worlds.userscript(script.id)
         let fn = "__rikuganGM_" + profile.userscripts.token(for: script.id)
         webView.rkEval("window[\(fn.jsLiteral)] && window[\(fn.jsLiteral)]({type:'menu', id:\(command.commandID.jsLiteral)})", world: world)
     }
