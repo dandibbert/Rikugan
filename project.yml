@@ -55,5 +55,6 @@ schemes:
       targets:
         Rikugan: all
     test:
+      debugEnabled: false
       targets: [RikuganTests, RikuganUITests]
 
