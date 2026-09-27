@@ -97,7 +97,7 @@ extension BrowserSession {
             try await activateExtension(extensionObject, record: record)
         } catch { extensionErrors[record.id] = error.localizedDescription }
     }
-    private func activateExtension(_ webExtension: WKWebExtension, record: ExtensionRecord) async throws {
+    private func activateExtension(_ webExtension: WKWebExtension, record: ExtensionRecord, retryOriginInitialization: Bool = true) async throws {
         if let previous = contexts.removeValue(forKey: record.id) { try? extensionController.unload(previous) }
         let context = WKWebExtensionContext(for: webExtension)
         context.uniqueIdentifier = record.id.uuidString
@@ -128,6 +128,15 @@ extension BrowserSession {
         } catch {
             try? extensionController.unload(context)
             contexts.removeValue(forKey: record.id)
+            // Older WebKit versions can stall their first origin migration from an
+            // empty previous base URL. load/unload has now persisted the stable base
+            // URL, so one NEW context can skip that migration. Use public APIs only;
+            // never edit WebKit's private state or silently mark a failure successful.
+            if retryOriginInitialization, error is ExtensionBackgroundError, isActive {
+                NSLog("Rikugan retrying extension with initialized origin: %@", record.id.uuidString)
+                try await activateExtension(webExtension, record: record, retryOriginInitialization: false)
+                return
+            }
             throw error
         }
     }
@@ -207,7 +216,9 @@ extension BrowserSession {
                 updated.relativePath = prepared.relativePath
                 updated.backgroundMode = prepared.backgroundMode
                 updated.allowedPermissions = prepared.permissions
-                updated.allowedPatterns = prepared.patterns
+                updated.allowedPatterns = prepared.patterns.filter {
+                    record.allowedPatterns.contains($0) || !record.requestedPatterns.contains($0)
+                }
                 updated.requestedPatterns = prepared.patterns
                 do {
                     try await self.activateExtension(prepared.webExtension, record: updated)

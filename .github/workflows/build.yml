@@ -31,6 +31,10 @@ jobs:
           node scripts/test_web_fonts.cjs
           python3 scripts/validate_project.py
           xcodegen generate
+          SIMULATOR_ID=$(python3 scripts/select_simulator.py)
+          echo "TEST_SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
+          # Boot concurrently with the device compilation instead of blocking later.
+          xcrun simctl boot "$SIMULATOR_ID" || true
       - name: Build unsigned iPhone app
         run: |
           set -o pipefail
@@ -63,8 +67,7 @@ jobs:
           python3 -m http.server 8765 --bind 127.0.0.1 --directory Tests/Fixtures > /tmp/rikugan-fixture.log 2>&1 &
           FIXTURE_PID=$!
           trap 'kill "$FIXTURE_PID" || true' EXIT
-          SIMULATOR_ID=$(python3 scripts/select_simulator.py)
-          echo "TEST_SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
+          SIMULATOR_ID="$TEST_SIMULATOR_ID"
           xcrun simctl boot "$SIMULATOR_ID" || true
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
           xcodebuild test -project Rikugan.xcodeproj -scheme Rikugan -configuration Debug \
@@ -74,6 +77,16 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_IDENTITY=- \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES \
             CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER} | tee test.log
+      - name: Upload immediate build and test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rikugan-build-logs
+          path: |
+            build-device.log
+            test.log
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Collect WebKit runtime diagnostics
         if: always()
         run: |

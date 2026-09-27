@@ -9,7 +9,7 @@ final class BrowserUITests: XCTestCase {
         app.buttons["home.addons"].tap()
         app.buttons["addons.demo"].tap()
         app.alerts.buttons["安装示例"].tap()
-        XCTAssertTrue(app.alerts.buttons["好"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.alerts.buttons["好"].waitForExistence(timeout: 40))
         let installationMessage = app.alerts.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | ")
         print("INSTALL_RESULT: " + installationMessage)
         XCTAssertFalse(installationMessage.contains("未能启动"), installationMessage)
