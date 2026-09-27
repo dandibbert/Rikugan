@@ -125,7 +125,7 @@ enum TranslationState: Equatable {
     @discardableResult
     func ensureWebView() -> WKWebView {
         if let webView { return webView }
-        if lifecycle == .suspended || lifecycle == .terminated { lifecycle = .restoring; restoreCount += 1 }
+        if lifecycle == .suspended || lifecycle == .terminated || lifecycle == .restoring { lifecycle = .restoring; restoreCount += 1 }
         let webView = WebViewFactory.makeWebView(for: self, configuration: pendingExternalConfiguration)
         pendingExternalConfiguration = nil
         self.webView = webView
@@ -145,7 +145,17 @@ enum TranslationState: Equatable {
     /// Called when the tab becomes visible: lazily restores the saved page.
     func activate() {
         lastActiveAt = Date()
-        if url != nil || restoreState != nil { ensureWebView() }
+        if webView == nil, url != nil || restoreState != nil {
+            // Restore on the next main-loop turn, and only if this tab is still the selected one:
+            // rapid switching through many suspended tabs then restores just the final tab
+            // instead of creating (and immediately suspending) a web view for each one.
+            lifecycle = .restoring
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.manager?.activeTabID == self.id, self.webView == nil else { return }
+                self.ensureWebView()
+            }
+            return
+        }
         if lifecycle != .restoring || webView?.isLoading == false { lifecycle = .active }
     }
 
