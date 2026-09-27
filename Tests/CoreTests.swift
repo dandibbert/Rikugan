@@ -102,6 +102,7 @@ final class CoreTests: XCTestCase {
         let manifest = try XCTUnwrap(try JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
         let background = try XCTUnwrap(manifest["background"] as? [String: Any])
         XCTAssertEqual(background["scripts"] as? [String], ["background.js"])
+        XCTAssertEqual(background["type"] as? String, "module")
         XCTAssertEqual(background["persistent"] as? Bool, false)
         XCTAssertEqual(background["preferred_environment"] as? [String], ["document"])
         XCTAssertEqual(background["service_worker"] as? String, "background.js")

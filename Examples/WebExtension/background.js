@@ -97,17 +97,28 @@ function onRuntimeMessage(message, sender, sendResponse) {
   return Promise.resolve(payload);
 }
 function publishRuntimeListener() {
-  const events = api.runtime && api.runtime.onMessage;
-  if (!events || typeof events.addListener !== 'function') return;
+  const events = api && api.runtime && api.runtime.onMessage;
+  if (!events || typeof events.addListener !== 'function') return false;
   if (typeof events.removeListener === 'function') {
     try { events.removeListener(onRuntimeMessage); } catch (error) {}
   }
   events.addListener(onRuntimeMessage);
+  return true;
 }
 publishRuntimeListener();
-// didFinishDocumentLoad can run before the UI process has recorded the first
-// addListener. Publish again once this document is actually alive.
-if (typeof window !== 'undefined') {
-  setTimeout(publishRuntimeListener, 0);
-  if (typeof window.addEventListener === 'function') window.addEventListener('load', publishRuntimeListener);
+// Xcode 16.4 WebExtensionContext::addListener returns without recording the
+// listener when WebFrameProxy::webFrame(frameIdentifier) is null. A classic
+// background script runs during parsing, in the same burst as that commit, so
+// the IPC is dropped and runtime.sendMessage resolves to undefined. The passing
+// API test (WKWebExtensionAPIRuntime.SendMessageFromContentScript) registers
+// from a type=module document background, after the document has been parsed.
+// Keep publishing through the content-script probe window in case the first
+// module registration is still ahead of the frame proxy.
+if (typeof setInterval === 'function') {
+  let attempts = 0;
+  const timer = setInterval(() => {
+    publishRuntimeListener();
+    attempts += 1;
+    if (attempts >= 160 && typeof clearInterval === 'function') clearInterval(timer);
+  }, 250);
 }

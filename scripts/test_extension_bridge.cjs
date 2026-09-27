@@ -882,5 +882,72 @@ function load(extra) {
   assert.equal(documentReply.ok, true);
   assert.equal(documentReply.visits, 1);
 
+  const demoManifest = JSON.parse(fs.readFileSync('Examples/WebExtension/manifest.json', 'utf8'));
+  assert.equal(demoManifest.background.type, 'module');
+  assert.deepEqual(demoManifest.background.preferred_environment, ['document']);
+  assert.equal(demoManifest.background.persistent, false);
+
+  // WebExtensionContext::addListener (Xcode 16.4) returns when the frame proxy
+  // is missing. Evaluation-time addListener is dropped. The later interval
+  // publish is what a content-script probe can observe as {ready:true}.
+  const proxyDropListeners = [];
+  let proxyFrameReady = false;
+  const proxyDropRuntime = {
+    id: 'demo',
+    sendMessage() { return Promise.resolve(undefined); },
+    onMessage: {
+      addListener(fn) {
+        if (!proxyFrameReady) return;
+        if (proxyDropListeners.indexOf(fn) < 0) proxyDropListeners.push(fn);
+      },
+      removeListener(fn) {
+        const index = proxyDropListeners.indexOf(fn);
+        if (index >= 0) proxyDropListeners.splice(index, 1);
+      }
+    },
+    connect() { return {}; }
+  };
+  const proxyDropHost = {
+    runtime: proxyDropRuntime,
+    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+    tabs: { query() { return Promise.resolve([{ id: 4 }]); } },
+    scripting: { insertCSS() { return Promise.resolve(); }, executeScript() { return Promise.resolve([]); } },
+    notifications: { create() { return Promise.resolve('id'); }, getAll() { return Promise.resolve({}); } }
+  };
+  const proxyDropTimers = [];
+  const proxyDropWindow = { addEventListener() {}, removeEventListener() {}, frames: [] };
+  proxyDropWindow.top = proxyDropWindow;
+  const proxyDropSandbox = {
+    browser: proxyDropHost,
+    chrome: proxyDropHost,
+    console,
+    Promise,
+    setTimeout,
+    clearTimeout,
+    setInterval(fn) { proxyDropTimers.push(fn); return proxyDropTimers.length; },
+    clearInterval() {},
+    window: proxyDropWindow,
+    location: { protocol: 'webkit-extension:' }
+  };
+  proxyDropSandbox.globalThis = proxyDropSandbox;
+  vm.runInNewContext(workerSource, proxyDropSandbox, { filename: 'background-late-frame.js' });
+  assert.equal(proxyDropListeners.length, 0);
+  assert.ok(proxyDropTimers.length >= 1);
+  proxyFrameReady = true;
+  proxyDropTimers[0]();
+  assert.equal(proxyDropListeners.length, 1);
+  let proxyDropReply;
+  let proxyDropHandled = false;
+  proxyDropListeners.forEach(listener => {
+    let replied = false;
+    const value = listener({ source: 'rikugan-bg-probe' }, { tab: { id: 4 } }, response => {
+      replied = true;
+      proxyDropReply = response;
+    });
+    if (value === true && replied) proxyDropHandled = true;
+  });
+  assert.equal(proxyDropHandled, true);
+  assert.equal(proxyDropReply.ready, true);
+
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });
