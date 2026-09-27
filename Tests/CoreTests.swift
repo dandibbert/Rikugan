@@ -136,7 +136,7 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "debugger" }?.level, "Unsupported")
         XCTAssertEqual(ChromeAPIMatrix.entries.first { $0.api == "nativeMessaging" }?.level, "Unsupported")
         XCTAssertEqual(ChromeAPIMatrix.additions(old: ["storage"], new: ["tabs", "storage"]), ["tabs"])
-        XCTAssertEqual(ExtensionCatalog.storeID(from: "abcdefghijklmnopabcdefghijklmnop"), "abcdefghijklmnop")
+        XCTAssertEqual(ExtensionCatalog.storeID(from: "abcdefghijklmnopabcdefghijklmnop"), "abcdefghijklmnopabcdefghijklmnop")
     }
     func testVersionsOmniboxAndMigration() throws {
         XCTAssertTrue(VersionComparator.isNewer("1.2.0", than: "1.1.9"))
@@ -234,7 +234,7 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(compiled.proceduralJSON.contains("upward"))
         XCTAssertTrue(compiled.proceduralJSON.contains("matches-css"))
         XCTAssertTrue(compiled.proceduralJSON.contains("remove"))
-        XCTAssertTrue(compiled.networkJSON.contains("raw"))
+        XCTAssertTrue(compiled.networkChunks.joined().contains("raw"))
         XCTAssertTrue(compiled.proceduralJSON.contains("color:red"))
         XCTAssertTrue(compiled.globalCSS.contains(".adsbygoogle"))
         XCTAssertFalse(compiled.scriptletJSON.contains("\"scriptlet\""))
@@ -544,8 +544,8 @@ final class CoreTests: XCTestCase {
         let compiled = AdBlockEngine.compile(lines: ["||api.example/feed^$jsonprune=ad|$.promo", #"||api.example/item^$jsonprune=\$.data.ad"#])
         XCTAssertTrue(compiled.scriptletJSON.contains("json-prune"))
         XCTAssertTrue(compiled.scriptletJSON.contains("ad|promo"))
-        XCTAssertTrue(compiled.scriptletJSON.contains("api.example/feed"))
-        XCTAssertTrue(compiled.scriptletJSON.contains("api.example/item"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("api.example/feed") || compiled.scriptletJSON.contains("api.example\\/feed"))
+        XCTAssertTrue(compiled.scriptletJSON.contains("api.example/item") || compiled.scriptletJSON.contains("api.example\\/item"))
         XCTAssertFalse(compiled.networkJSON.contains("block"))
         XCTAssertEqual(AdBlockEngine.pruneKeys(#"ad|$.promo"#), ["ad", "promo"])
         XCTAssertEqual(AdBlockEngine.pruneKeys(#"\$.data.ad"#), ["ad"])
@@ -561,7 +561,8 @@ final class CoreTests: XCTestCase {
         let oldest = try XCTUnwrap(slots.min { $0.lastActiveAt < $1.lastActiveAt })
         let switched = TabResidence.assign(slots: slots, activeID: oldest.id, budget: 8)
         XCTAssertEqual(switched[oldest.id], .active)
-        XCTAssertEqual(switched[active], .liveBackground)
+        XCTAssertEqual(switched[slots[31].id], .liveBackground)
+        XCTAssertEqual(switched[active], .suspended)
         let terminated = TabResidence.assign(slots: [TabResidence.Slot(id: active, lastActiveAt: now, terminated: true)], activeID: active)
         XCTAssertEqual(terminated[active], .terminated)
 

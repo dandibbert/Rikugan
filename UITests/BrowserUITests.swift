@@ -8,9 +8,8 @@ final class BrowserUITests: XCTestCase {
         let home = XCTAttachment(screenshot: app.screenshot()); home.name = "01-Home"; home.lifetime = .keepAlways; add(home)
         app.buttons["home.addons"].tap()
         app.buttons["addons.demo"].tap()
-        app.alerts.buttons["安装示例"].tap()
-        XCTAssertTrue(app.alerts.buttons["好"].waitForExistence(timeout: 30))
-        app.alerts.buttons["好"].tap()
+        tap(app, "安装示例")
+        tap(app, "好", timeout: 30)
         XCTAssertTrue(app.buttons["extension.run.Rikugan Demo"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["extension.run.Rikugan Demo"].isEnabled)
         app.buttons["addons.done"].tap()
@@ -31,8 +30,10 @@ final class BrowserUITests: XCTestCase {
         app.navigationBars.buttons["完成"].tap()
         app.buttons["browser.profiles"].tap()
         app.buttons["profiles.add"].tap()
-        app.alerts.textFields.firstMatch.tap(); app.alerts.textFields.firstMatch.typeText("工作")
-        app.alerts.buttons["创建"].tap()
+        let nameField = app.textFields.firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 15))
+        nameField.tap(); nameField.typeText("工作")
+        tap(app, "创建")
         XCTAssertTrue(app.buttons["home.addons"].waitForExistence(timeout: 15))
         navigate(app)
         XCTAssertTrue(app.webViews.staticTexts["本身份是空的"].waitForExistence(timeout: 20))
@@ -47,6 +48,11 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["脚本注入成功"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.webViews.staticTexts["通知已创建"].exists)
         XCTAssertTrue(app.webViews.staticTexts["GM 存储计数：2"].waitForExistence(timeout: 20))
+    }
+    @MainActor private func tap(_ app: XCUIApplication, _ label: String, timeout: TimeInterval = 20) {
+        let button = app.buttons[label]
+        XCTAssertTrue(button.waitForExistence(timeout: timeout))
+        button.tap()
     }
     @MainActor private func navigate(_ app: XCUIApplication) {
         let address = app.textFields["browser.address"]
