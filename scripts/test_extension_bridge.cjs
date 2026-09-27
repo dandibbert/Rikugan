@@ -756,7 +756,8 @@ function load(extra) {
   const workerSource = patchWorker(backgroundSource, source);
   assert.equal(patchWorker(workerSource, source), workerSource);
   assert.equal(workerSource.indexOf('/* rikugan-extension-bridge */'), 0);
-  assert.ok(workerSource.includes('api.runtime.onMessage.addListener'));
+  assert.ok(workerSource.includes('function onRuntimeMessage'));
+  assert.ok(workerSource.includes('publishRuntimeListener'));
   function webkit18Send(state, message) {
     if (ExtensionRuntimeDrop(state)) return undefined;
     let reply;
@@ -816,6 +817,70 @@ function load(extra) {
   const wokenReply = webkit18Send(woken, { type: 'rikugan-probe' });
   assert.equal(wokenReply && wokenReply.ok, true);
   assert.equal(wokenReply.visits, 1);
+
+  // A document background has window. WebKit will not deliver runtime.sendMessage
+  // to listeners in that same page, and Xcode 16.4 drops a message sent before
+  // addListener. The prepended bridge must not probe during evaluation.
+  const documentListeners = [];
+  const documentSends = [];
+  const documentRuntime = {
+    id: 'demo',
+    sendMessage(message) {
+      documentSends.push(message);
+      return Promise.resolve(undefined);
+    },
+    onMessage: {
+      addListener(fn) {
+        if (documentListeners.indexOf(fn) < 0) documentListeners.push(fn);
+      },
+      removeListener(fn) {
+        const index = documentListeners.indexOf(fn);
+        if (index >= 0) documentListeners.splice(index, 1);
+      }
+    },
+    connect() { return {}; }
+  };
+  const documentHost = {
+    runtime: documentRuntime,
+    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+    tabs: { query() { return Promise.resolve([{ id: 4 }]); } },
+    scripting: { insertCSS() { return Promise.resolve(); }, executeScript() { return Promise.resolve([]); } },
+    notifications: { create() { return Promise.resolve('id'); }, getAll() { return Promise.resolve({}); } }
+  };
+  const documentWindow = { addEventListener() {}, removeEventListener() {}, frames: [] };
+  documentWindow.top = documentWindow;
+  const documentSandbox = {
+    browser: documentHost,
+    chrome: documentHost,
+    console,
+    Promise,
+    setTimeout,
+    clearTimeout,
+    window: documentWindow,
+    location: { protocol: 'webkit-extension:' }
+  };
+  documentSandbox.globalThis = documentSandbox;
+  vm.runInNewContext(workerSource, documentSandbox, { filename: 'background-document.js' });
+  assert.equal(documentSends.length, 0);
+  assert.equal(documentListeners.length, 1);
+  assert.equal(documentSandbox.__rikuganBackgroundGate.state, 'ready');
+  function documentSend(message) {
+    let reply;
+    let handled = false;
+    documentListeners.forEach(listener => {
+      let replied = false;
+      const value = listener(message, { tab: { id: 4 } }, response => {
+        replied = true;
+        reply = response;
+      });
+      if (value === true && replied) handled = true;
+    });
+    return handled ? reply : undefined;
+  }
+  assert.equal(documentSend({ source: 'rikugan-bg-probe' }).ready, true);
+  const documentReply = documentSend({ type: 'rikugan-probe' });
+  assert.equal(documentReply.ok, true);
+  assert.equal(documentReply.visits, 1);
 
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

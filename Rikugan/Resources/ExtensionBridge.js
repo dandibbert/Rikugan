@@ -667,8 +667,12 @@
       return gate.connect(info || {});
     };
     try { runtime.connect = wrappedConnect; } catch (error) {}
-    if (typeof window === 'undefined') {
-      // The worker script has not registered onMessage yet. Do not send from here.
+    var extensionPage = false;
+    try { extensionPage = String(location.protocol || '').indexOf('extension') !== -1; } catch (error) { extensionPage = false; }
+    if (typeof window === 'undefined' || extensionPage) {
+      // Do not sendMessage while this background script is still evaluating.
+      // A document background has window, but WebKit drops that message until
+      // onMessage exists and will not deliver it to listeners in the same page.
       gate.markReady();
     } else if (typeof originalSend === 'function') {
       gate.start();
@@ -683,8 +687,10 @@
         if (gate.state === 'failed' || gate.state === 'shutdown' || gate.state === 'ready') return;
         if (probeReady(value)) { gate.markReady(); return; }
         attempts += 1;
-        if (attempts >= 40 || typeof setTimeout !== 'function') { gate.markReady(); return; }
-        setTimeout(probeBackground, 50);
+        // The UI test waits 30s for the background reply. Keep probing until the
+        // listener is actually registered instead of forwarding one empty reply.
+        if (attempts >= 120 || typeof setTimeout !== 'function') { gate.markReady(); return; }
+        setTimeout(probeBackground, 100);
       }
       function probeBackground() {
         var probe;

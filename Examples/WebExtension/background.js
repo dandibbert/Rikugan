@@ -34,7 +34,7 @@ try {
   if (pending && typeof pending.then === 'function') pending.then(result => { visits = (result && result.visits) || 0; }, () => {});
 } catch (error) {}
 
-api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+function onRuntimeMessage(message, sender, sendResponse) {
   if (message && message.source === 'rikugan-bg-probe') {
     if (typeof sendResponse === 'function') {
       sendResponse({ ready: true });
@@ -95,4 +95,19 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   return Promise.resolve(payload);
-});
+}
+function publishRuntimeListener() {
+  const events = api.runtime && api.runtime.onMessage;
+  if (!events || typeof events.addListener !== 'function') return;
+  if (typeof events.removeListener === 'function') {
+    try { events.removeListener(onRuntimeMessage); } catch (error) {}
+  }
+  events.addListener(onRuntimeMessage);
+}
+publishRuntimeListener();
+// didFinishDocumentLoad can run before the UI process has recorded the first
+// addListener. Publish again once this document is actually alive.
+if (typeof window !== 'undefined') {
+  setTimeout(publishRuntimeListener, 0);
+  if (typeof window.addEventListener === 'function') window.addEventListener('load', publishRuntimeListener);
+}
