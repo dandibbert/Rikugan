@@ -75,8 +75,7 @@ function onRuntimeMessage(message, sender, sendResponse) {
       }
     }]), 2000))
     .catch(() => {})
-    .then(() => deadline(callWith(notifications, 'create', ['rikugan-demo', { title: 'Rikugan', message: '通知已创建' }]), 2000))
-    .then(() => deadline(callWith(notifications, 'getAll', []), 2000))
+    .then(() => confirmNotification(notifications))
     .then(all => {
       if (!all || !all['rikugan-demo']) return null;
       return deadline(callWith(scripting, 'executeScript', [{
@@ -95,6 +94,45 @@ function onRuntimeMessage(message, sender, sendResponse) {
     return true;
   }
   return Promise.resolve(payload);
+}
+// Xcode 16.4's WebExtensionAPINotifications only has onClicked and onButtonClicked.
+// create and getAll are not functions, so the native call rejects before the page
+// can show 通知已创建. The app records a notification through rikuganExtension.
+function extensionRuntimeId() {
+  try { return (api.runtime && api.runtime.id) || ''; } catch (error) { return ''; }
+}
+function hostCall(apiName, details) {
+  return new Promise((resolve, reject) => {
+    let native = null;
+    try { native = webkit && webkit.messageHandlers && webkit.messageHandlers.rikuganExtension; }
+    catch (error) { native = null; }
+    if (!native || typeof native.postMessage !== 'function') { reject(new Error('no extension host')); return; }
+    const id = 'rg' + Math.random().toString(36).slice(2);
+    const pending = globalThis.__rgExtPending || (globalThis.__rgExtPending = {});
+    const timer = setTimeout(() => { delete pending[id]; reject(new Error('extension host timeout')); }, 8000);
+    pending[id] = data => {
+      clearTimeout(timer);
+      delete pending[id];
+      if (data && data.error) reject(new Error(String(data.error)));
+      else resolve(data ? data.result : undefined);
+    };
+    try { native.postMessage({ id: id, api: apiName, details: details }); }
+    catch (error) { clearTimeout(timer); delete pending[id]; reject(error); }
+  });
+}
+function confirmNotification(notifications) {
+  const options = { type: 'basic', title: 'Rikugan', message: '通知已创建' };
+  const extensionId = extensionRuntimeId();
+  const nativeCreate = notifications && typeof notifications.create === 'function';
+  const nativeList = notifications && typeof notifications.getAll === 'function';
+  const created = nativeCreate
+    ? deadline(callWith(notifications, 'create', ['rikugan-demo', options]), 2000)
+    : hostCall('notifications.create', { id: 'rikugan-demo', options: options, extensionId: extensionId });
+  return created.then(identifier => {
+    if (nativeList) return deadline(callWith(notifications, 'getAll', []), 2000);
+    if (nativeCreate) return identifier ? { 'rikugan-demo': { message: '通知已创建' } } : null;
+    return hostCall('notifications.getAll', { extensionId: extensionId });
+  });
 }
 // The API test loads `<script type="module" src="background.js">` from its
 // generated background page. This app's copy of that page still finished

@@ -682,6 +682,8 @@ function load(extra) {
   assert.equal(backgroundSource.includes('setInterval'), false);
   assert.equal(backgroundSource.includes('removeListener'), false);
   assert.ok(backgroundSource.includes('function registerRuntimeListener'));
+  assert.ok(backgroundSource.includes('function hostCall'));
+  assert.ok(backgroundSource.includes("type: 'basic'"));
   function webkit18Send(state, message) {
     if (ExtensionRuntimeDrop(state)) return undefined;
     let reply;
@@ -804,6 +806,52 @@ function load(extra) {
   const documentReply = documentSend({ type: 'rikugan-probe' });
   assert.equal(documentReply.ok, true);
   assert.equal(documentReply.visits, 1);
+
+  // Xcode 16.4 exposes browser.notifications without create or getAll. The
+  // unpatched background records the notification through rikuganExtension.
+  const stubListeners = [];
+  const stubCalls = [];
+  const stubScripts = [];
+  const stubRuntime = {
+    id: 'demo',
+    onMessage: { addListener(fn) { stubListeners.push(fn); } }
+  };
+  const stubHost = {
+    runtime: stubRuntime,
+    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+    tabs: { query() { return Promise.resolve([{ id: 4 }]); } },
+    scripting: {
+      insertCSS() { return Promise.resolve(); },
+      executeScript(details) { stubScripts.push(details); return Promise.resolve([]); }
+    },
+    notifications: { onClicked: { addListener() {} }, onButtonClicked: { addListener() {} } }
+  };
+  const stubSandbox = {
+    browser: stubHost,
+    chrome: stubHost,
+    console,
+    Promise,
+    setTimeout,
+    clearTimeout,
+    webkit: { messageHandlers: { rikuganExtension: { postMessage(payload) {
+      stubCalls.push(payload);
+      const pending = stubSandbox.__rgExtPending && stubSandbox.__rgExtPending[payload.id];
+      if (typeof pending !== 'function') return;
+      if (payload.api === 'notifications.create') pending({ id: payload.id, result: 'rikugan-demo', error: null });
+      if (payload.api === 'notifications.getAll') pending({ id: payload.id, result: { 'rikugan-demo': { title: 'Rikugan', message: '通知已创建' } }, error: null });
+    } } } }
+  };
+  stubSandbox.globalThis = stubSandbox;
+  vm.runInNewContext(backgroundSource, stubSandbox, { filename: 'background-notifications.js' });
+  assert.equal(stubListeners.length, 1);
+  stubListeners[0]({ type: 'rikugan-probe' }, { tab: { id: 4 } }, () => {});
+  for (let i = 0; i < 8; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stubCalls[0] && stubCalls[0].api, 'notifications.create');
+  assert.equal(stubCalls[0].details.id, 'rikugan-demo');
+  assert.equal(stubCalls[0].details.options.type, 'basic');
+  assert.equal(stubCalls[0].details.options.message, '通知已创建');
+  assert.equal(stubCalls[1] && stubCalls[1].api, 'notifications.getAll');
+  assert.equal(stubScripts.some(details => String(details.func).includes('通知已创建')), true);
 
   const demoManifest = JSON.parse(fs.readFileSync('Examples/WebExtension/manifest.json', 'utf8'));
   assert.equal(demoManifest.background.page, 'background.html');

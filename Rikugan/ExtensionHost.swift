@@ -173,8 +173,20 @@ extension BrowserSession {
     /// Xcode 16.4 does not call `loadBackgroundContent`'s completion when a service worker
     /// fails to register. A non-persistent document background finishes through
     /// `didFinishDocumentLoad`. The demo background is an unpatched classic script in
-    /// `background.html`. The API test's generated `type=module` page still finished
-    /// document load here without a listener the content script could call.
+    /// `background.html`. That page can register `runtime.onMessage`, but this SDK's
+    /// `browser.notifications` has no `create` or `getAll`. The host handler is attached
+    /// to the background web view after load so the page can record a notification
+    /// without injecting ExtensionBridge.js ahead of WebKit's namespace.
+    @available(iOS 18.4, *)
+    private func attachBackgroundExtensionHost(_ context: WKWebExtensionContext) {
+        let selector = NSSelectorFromString("_backgroundWebView")
+        guard context.responds(to: selector),
+              let unmanaged = context.perform(selector),
+              let webView = unmanaged.takeUnretainedValue() as? WKWebView else { return }
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: ExtensionBridge.handlerName)
+        controller.add(extensionPageBridge, name: ExtensionBridge.handlerName)
+    }
     @available(iOS 18.4, *)
     @discardableResult
     func warmExtensionBackground(id: UUID) async -> Bool {
@@ -193,7 +205,10 @@ extension BrowserSession {
             }
             context.loadBackgroundContent { error in
                 let message = error?.localizedDescription
-                Task { @MainActor in finish(error == nil, message) }
+                Task { @MainActor in
+                    if error == nil { self?.attachBackgroundExtensionHost(context) }
+                    finish(error == nil, message)
+                }
             }
             Task { @MainActor in
                 let deadline = Date().addingTimeInterval(12)
