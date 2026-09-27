@@ -442,9 +442,12 @@
       }
       var settled = false;
       var callbackFired = false;
+      var fallbackTried = false;
+      var timer = null;
       function finish(value) {
         if (settled) return;
         settled = true;
+        if (timer && typeof clearTimeout === 'function') clearTimeout(timer);
         var last = runtime && runtime.lastError;
         if (last && last.message) reject(new Error(last.message));
         else resolve(value);
@@ -453,24 +456,47 @@
         callbackFired = true;
         finish(value);
       }
+      function isBody(value) {
+        if (!value || typeof value !== 'object') return false;
+        for (var key in value) return true;
+        return false;
+      }
+      function armFallback(weak) {
+        if (fallbackTried || timer || callbackFired || settled) return;
+        if (typeof setTimeout !== 'function') { finish(weak); return; }
+        timer = setTimeout(function () {
+          timer = null;
+          if (callbackFired || settled) return;
+          fallbackTried = true;
+          var again;
+          try { again = send.call(runtime, payload); }
+          catch (error) { finish(weak); return; }
+          if (again && typeof again.then === 'function') {
+            again.then(function (value) {
+              if (callbackFired || settled) return;
+              finish(isBody(value) ? value : weak);
+            }, function (error) {
+              if (callbackFired || settled) return;
+              reject(error);
+            });
+            return;
+          }
+          if (!callbackFired && !settled) finish(isBody(again) ? again : weak);
+        }, 100);
+      }
       var args = options == null ? [payload, fromCallback] : [payload, options, fromCallback];
       var result;
       try { result = send.apply(runtime, args); }
       catch (error) { reject(error); return; }
-      function isBody(value) { return typeof value === 'object' && value !== null; }
-      function acceptLater(value) {
-        if (typeof setTimeout !== 'function') { finish(value); return; }
-        setTimeout(function () { if (!callbackFired && !settled) finish(value); }, 4000);
-      }
       if (callbackFired) return;
       if (result && typeof result.then === 'function') {
         result.then(function (value) {
           if (callbackFired || settled) return;
           if (isBody(value)) finish(value);
-          else acceptLater(value);
-        }, function (error) { if (!callbackFired && !settled) reject(error); });
+          else armFallback(value);
+        }, function () { if (!callbackFired && !settled) armFallback(undefined); });
       } else if (isBody(result)) finish(result);
-      else acceptLater(result);
+      else armFallback(result);
     });
   }
 

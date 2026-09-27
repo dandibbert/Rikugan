@@ -337,6 +337,36 @@ function load(extra) {
   assert.equal(callbackReply.ok, true);
   assert.equal(callbackReply.visits, 2);
 
+  const lateHost = load({
+    chrome: {
+      runtime: {
+        sendMessage(message, callback) {
+          if (typeof callback === 'function') setTimeout(() => callback({ ok: true, visits: 3 }), 20);
+          return Promise.resolve({});
+        },
+        onMessage: { addListener() {} }
+      }
+    }
+  });
+  const lateReply = await lateHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
+  assert.equal(lateReply.ok, true);
+  assert.equal(lateReply.visits, 3);
+
+  const promiseHost = load({
+    chrome: {
+      runtime: {
+        sendMessage(message, callback) {
+          if (typeof callback === 'function') return {};
+          return Promise.resolve({ ok: true, visits: message.type === 'rikugan-probe' ? 4 : 0 });
+        },
+        onMessage: { addListener() {} }
+      }
+    }
+  });
+  const promiseReply = await promiseHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
+  assert.equal(promiseReply.ok, true);
+  assert.equal(promiseReply.visits, 4);
+
   const stressHeard = [];
   const gate = gateHost.__rikuganCreateBackgroundGate();
   const connected = [];
