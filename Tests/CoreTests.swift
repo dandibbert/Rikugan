@@ -178,7 +178,13 @@ final class CoreTests: XCTestCase {
             "example.com#?#div:has-text(Sponsored)",
             "#%#scriptlet",
             "||ads.test^$redirect",
-            "##.adsbygoogle"
+            "##.adsbygoogle",
+            "||tracker.test^$xmlhttprequest",
+            "example.com#?#:xpath(//div[@class='ad'])",
+            "example.com#?#.banner:upward(2)",
+            "example.com#?#.banner:matches-css(display, none)",
+            "example.com#?#.banner:remove()",
+            "example.com#?#.banner:style(color:red)"
         ], limit: 2)
         XCTAssertTrue(compiled.networkJSON.contains("\"script\""))
         XCTAssertTrue(compiled.networkJSON.contains("third-party"))
@@ -187,6 +193,12 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(compiled.hostCSS["example.com"]?.contains("div:has(.ad)") == true)
         XCTAssertTrue(compiled.proceduralJSON.contains("Sponsored"))
         XCTAssertTrue(compiled.proceduralJSON.contains("has-text"))
+        XCTAssertTrue(compiled.proceduralJSON.contains("xpath"))
+        XCTAssertTrue(compiled.proceduralJSON.contains("upward"))
+        XCTAssertTrue(compiled.proceduralJSON.contains("matches-css"))
+        XCTAssertTrue(compiled.proceduralJSON.contains("remove"))
+        XCTAssertTrue(compiled.networkJSON.contains("raw"))
+        XCTAssertTrue(compiled.proceduralJSON.contains("color:red"))
         XCTAssertTrue(compiled.globalCSS.contains(".adsbygoogle"))
         XCTAssertFalse(compiled.json.contains("scriptlet"))
         XCTAssertFalse(compiled.networkJSON.contains("redirect"))

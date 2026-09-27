@@ -18,7 +18,7 @@ GitHub Actions 在功能分支推送、针对 `main` 的 pull request，以及 `
 
 ## 扩展支持边界
 
-使用 iOS 18.4 起公开的 `WKWebExtension`、`WKWebExtensionContext`、`WKWebExtensionController`，不是自制 `chrome.*` 全量替代品，也不会把扩展改写成用户脚本。支持标准 ZIP、解压目录、CRX2/CRX3（剥掉头后交给同一套校验）、WebKit 支持的 Manifest V3、content scripts、后台、messaging、storage、action/popup、options、网站权限和基础 tabs/window 宿主。工具栏最多放三个扩展按钮，点按走 `performExtension` → `WKWebExtensionContext.performAction`，弹出的是 WebKit 自己的 popup。可以从 Chrome 或 Edge 扩展 ID / 商店链接下载 CRX。商店更新地址如果返回 `<gupdate><updatecheck codebase>` XML，会解析 `codebase` 再下载那个 CRX，不会把 XML 当成扩展包。扩展详情和扩展列表里可以按更新 URL 检查更新。下载失败会显示原因，不会假装安装成功。更新时若权限变多，会先说明新增项再替换文件。
+使用 iOS 18.4 起公开的 `WKWebExtension`、`WKWebExtensionContext`、`WKWebExtensionController`，不是自制 `chrome.*` 全量替代品，也不会把扩展改写成用户脚本。支持标准 ZIP、解压目录、CRX2/CRX3（剥掉头后交给同一套校验）、WebKit 支持的 Manifest V3、content scripts、后台、messaging、storage、action/popup、options、网站权限和基础 tabs/window 宿主。工具栏最多放三个扩展按钮，图标和 badge 来自 `WKWebExtension.Action`，点按走 `performExtension` → `performAction`，弹出的是 WebKit 自己的 popup。可以从 Chrome 或 Edge 扩展 ID / 商店链接下载 CRX。商店更新地址如果返回 `<gupdate><updatecheck codebase>` XML，会解析 `codebase` 再下载那个 CRX，不会把 XML 当成扩展包。扩展详情和扩展列表里可以按更新 URL 检查更新。下载失败会显示原因，不会假装安装成功。更新时若权限变多，会先说明新增项再替换文件。
 
 **不能保证任意 Chrome/Firefox 扩展能直接运行。** 设置里的兼容表只把 WebKit 实际实现的 API 标成 Supported。`notifications`、`debugger`、`nativeMessaging` 是 Unsupported，并写进 `WKWebExtensionContext.unsupportedAPIs`（含 `notifications.*`、`debugger.*`、`runtime.sendNativeMessage`、`connectNative`）。扩展的签名及商店来源不由本 App 验证。不同 iOS 的 WebKit API 支持可能不同。
 
@@ -36,8 +36,8 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 明确的兼容限制：
 
-- 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。两种环境都会安装消息通道，所以 `@grant none` 的 `GM_registerMenuCommand` 能回到宿主。`unsafeWindow` 不是 `@grant`：页面环境下就是 `window`。隔离环境下通过注入页面脚本读写可 JSON 序列化的属性，并可以调用页面函数（参数也必须是 JSON）。`Document` 这类不可序列化宿主对象会抛出标明 Partial 的错误。这不是 Tampermonkey 完整实现。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。规格点名的 grant 可以安装。
-- 同步 `GM_getValue` 读取当前页面缓存；其他标签修改的值使用异步 `GM.getValue` 读取，或刷新页面。跨标签 value-change listener 尚未实现。存储是 JSON，不支持函数/循环引用/特殊对象序列化。无痕标签的 GM 值只留在 `BrowserSession.privateScriptValues`，不写入普通身份的脚本存储；最后一个无痕标签关闭后清空。
+- 带 GM 原生权限的脚本运行在各自 `WKContentWorld` 中；`@grant none` 运行在页面环境。两种环境都会安装消息通道，所以 `@grant none` 的 `GM_registerMenuCommand` 能回到宿主。`unsafeWindow` 不是 `@grant`：页面环境下就是 `window`。隔离环境下往页面注入脚本，用对象句柄读写 `window` 和 DOM，并调用页面函数。不能把隔离世界里的函数送进页面。这不是 Tampermonkey 完整实现。`GM_getResourceText` / `GM_getResourceURL` 读安装时缓存的 `@resource`。未知 grant 会拒绝安装并给出原因。规格点名的 grant 可以安装。
+- `GM_getValue` / `GM_setValue` / `GM_deleteValue` / `GM_listValues` 使用脚本自己的 JSON 存储，不写网页 localStorage。`GM_addValueChangeListener` 在本页立刻回调，并通知同一身份里其他同样私密性的标签。存储不支持函数或循环引用。无痕标签的 GM 值只留在 `BrowserSession.privateScriptValues`，不写入普通身份的脚本存储；最后一个无痕标签关闭后清空。
 - GM 网络使用无 Cookie 的 ephemeral URLSession，不自动附带浏览器登录 Cookie。按 `@connect` 检查首个请求和每次重定向；同源默认允许。系统 ATS 对普通 HTTP 原生请求仍可能限制；建议 HTTPS。
 - `GM_xmlhttpRequest` 有 `onprogress`，`abort()` 会 `task.cancel()`。不支持流式、FormData 和完整同步 readyState。单次响应限制 8 MB。
 - 脚本列表显示 HTTPS `@icon` 和 `updatedAt`。脚本菜单仅支持顶层页面。DOM 注入不是对所有油猴脚本的完整兼容承诺。
@@ -46,20 +46,20 @@ Profiles 使用稳定 UUID 对应的 `WKWebsiteDataStore(forIdentifier:)`，每�
 
 ## 浏览器功能
 
-多标签、标签组（缩略图写入身份目录，网格里可以重命名和删除分组）、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照）、地址栏关键词与可改名/删除的自定义 `{query}` 引擎、Google / Bing / DuckDuckGo 搜索建议（设置里可关）、前进/后退/标签按钮长按快捷动作、自动刷新（恢复会话后继续当前标签的计时）、系统分享、页内查找（`WKWebView.find`，匹配次数用只读文本统计，不往页面插 `<mark>`）、桌面版模式、按 `parentID` 嵌套的书签文件夹（删除文件夹时子项回到上一层）、按天历史、下载暂停/继续。`URLSession` 路径有速度和剩余时间，并带上 `WKWebsiteDataStore` 的 Cookie；网页触发的 `WKDownload` 走 WebKit 会话（因此带页面 Cookie），可以取消并拿 resume data 再 `resumeDownload`，但公开 API 没有字节进度，所以不为它编造速度。下载列表可以把文件交给系统「存储到文件」。站点权限含摄像头、麦克风、位置、剪贴板、通知、弹窗和外部跳转。通知只拦截页面 `Notification.requestPermission`，iOS 不会因此弹出系统通知横幅。iPhone 保持单栏界面；较宽的 iPad 使用侧栏和标签条。「新窗口」打开另一个 `WKWebView`（`AuxiliaryPage`），显示自己的地址，并共用当前身份的数据存储。
+多标签、标签组（缩略图写入身份目录，网格里可以重命名和删除分组）、关闭后恢复、无痕标签（`WKWebsiteDataStore.nonPersistent()`，不进历史和会话快照）、地址栏关键词与可改名/删除的自定义 `{query}` 引擎、Google / Bing / DuckDuckGo 搜索建议（设置里可关）、前进/后退/标签按钮长按快捷动作、自动刷新（恢复会话后继续当前标签的计时）、系统分享、页内查找（`WKWebView.find`，匹配次数用只读文本统计，不往页面插 `<mark>`）、桌面版模式、按 `parentID` 嵌套的书签文件夹（删除文件夹时子项回到上一层）、按天历史、下载暂停/继续。`URLSession` 路径有速度和剩余时间，并带上 `WKWebsiteDataStore` 的 Cookie。网页触发的 `WKDownload` 走 WebKit 会话（因此带页面 Cookie），可以取消并拿 resume data 再 `resumeDownload`。公开的 `WKDownloadDelegate` 没有字节回调，进度、速度和剩余时间来自目标文件在磁盘上的增长。下载列表的「保存到文件」用 `UIDocumentPickerViewController` 导出已完成的文件。站点权限含摄像头、麦克风、位置、剪贴板、通知、弹窗和外部跳转。允许通知后，页面 `Notification` 进入 App 内通知列表和顶部提示；iOS 不会因此弹出系统横幅。iPhone 保持单栏界面；较宽的 iPad 使用侧栏和标签条。「新窗口」打开 `WindowSession`：自己的标签条、地址栏、前进、后退和刷新，每个标签是单独的 `WKWebView`，共用当前身份的数据存储。
 
 另外有：
 
-- 广告规则是 AdGuard 子集，不是完整 EasyList。内置列表只覆盖常见广告域和少量元素隐藏。订阅最多解析 30 万行。网络规则和元素隐藏编译成 `WKContentRuleList`，默认按 5 万条一块（Safari 内容拦截扩展的旧上限；WebKit 没有公开的 `WKContentRuleList` 硬顶，超限时 `compileContentRuleList` 会失败）。失败后退回只有网络规则的列表。`@@`、`$script`、`$image`、`$stylesheet`、`$third-party`、`$domain=`、`##`、`#@#` 会进规则。`#$#` 作为 CSS 注入，不进 content blocker 的 `display:none`。`#?#` 里能写成 CSS 的 `:has()` 当元素隐藏；`:has-text` / `:contains` 用页面脚本按文本隐藏。丢掉的语法包括 `#%#` scriptlet、`##+js`、`$redirect`、`$removeparam`、`$csp`、`$replace`。元素选择器确认后写入自定义规则并立刻隐藏。
+- 广告规则是 AdGuard 子集，不是内置的完整 EasyList。内置列表只覆盖常见广告域和少量元素隐藏。订阅 URL 会整份下载（单次上限 8 MB）并编译，列表里可以重新下载。网络规则和元素隐藏编译成 `WKContentRuleList`，默认按 5 万条一块（Safari 内容拦截扩展的实际上限；WebKit 没有公开硬顶，编译失败的段会退回纯网络规则）。`@@`、`$script`、`$image`、`$stylesheet`、`$xmlhttprequest`、`$third-party`、`$domain=`、`##`、`#@#` 会进规则。`#$#` 作为 CSS 注入。`#?#` 的 `:has()` 当元素隐藏；`:has-text`、`:contains`、`:xpath`、`:matches-css`、`:upward`、`:remove`、`:style` 由页面脚本执行。丢掉的语法包括 `#%#` scriptlet、`##+js`、`$redirect`、`$removeparam`、`$csp`、`$replace`。元素选择器确认后写入自定义规则并立刻隐藏。
 - 暗黑模式是样式表（Off / Auto / On，站点可覆盖），给文字节点上色，`img` / `video` / `picture` / `canvas` / `svg` 保持 `filter:none`，不用整页 `invert`。
 - 阅读模式抽出标题、作者和带标签的块（标题、段落、图片、链接），字号、字体、行高和主题写进 `ReaderSettings` 并作用到阅读页。
-- 翻译只用 Apple `TranslationSession`。按批把正文送完（单页上限约 2500 个文本节点），并在约 20 秒内对新增 DOM 再译。没有第二个需要网络密钥的翻译后端。
-- 媒体嗅探会解析 m3u8 / mpd 变体并下载选中的媒体 URL，请求带上页面 Cookie。不处理 FairPlay / Widevine。
+- 翻译只有 `PageTranslation` 里的 Apple `TranslationSession`。正文会分批译完，翻译页开着时会继续补译新出现的文字。没有第二个网络翻译服务。设备没下载的语言包由系统报错。
+- 媒体嗅探会列出 m3u8 / mpd 变体。有 `Content-Length` 或 `Content-Range` 时显示大小。下载带上页面 Cookie。不处理 FairPlay / Widevine。
 - 视频菜单的全屏和 AirPlay 调用页面上的 `webkitEnterFullscreen` / `webkitShowPlaybackTargetPicker`（以及标准全屏）。
 - 二维码扫描后可以打开、搜索或复制；打开会导航。
 - 钥匙串自动填充仍是点按后填入，字段含邮箱、电话、地址和卡号后四位，不写 UserDefaults。
-- 实验控制台收集页面 `error` 和 `console.error`。完整检查器仍是 Safari 的 Develop（`isInspectable`），本 App 不是 Web Inspector。
-- 字体按身份应用。ttf / otf / ttc 交给 Core Text。woff / woff2 会拒绝并说明原因，不会假装已经注册。站点设置里没有单独的每站字体。
+- 实验控制台收集页面 `console.log` / `info` / `warn` / `error` 和未捕获错误。完整检查器仍是 Safari 的 Develop（`isInspectable`），本 App 不是 Web Inspector。
+- 字体按身份应用到网页，站点设置可以覆盖。ttf / otf / ttc 交给 Core Text。woff / woff2 无法由 Core Text 注册，导入会被拒绝。
 
 没有 iCloud 同步。分享扩展在未签名 IPA 里编进包，但 App Group 要等带该 entitlement 的描述文件重签后才真正共享文件；短链接仍可通过 `rikugan://` 唤起主 App。
 
@@ -88,7 +88,7 @@ cp -R build/Build/Products/Release-iphoneos/Rikugan.app dist/Payload/
 
 ## 主要目录
 
-`Models.swift`：数据结构、脚本元数据、URL 权限与 ZIP 检查。`FeatureModels.swift` / `StateMigration.swift`：标签组、站点设置、搜索建议、播放列表解析、备份和 schema 1 升级。`AppModel.swift`：持久化与身份切换。`BrowserSession.swift` / `SessionFeatures.swift`：标签、查找、下载接入和内容规则。`Windows.swift`：第二个窗口自己的 WKWebView。`DownloadCenter.swift`：URLSession 与 WKDownload。`ExtensionHost.swift` / `ExtensionPackage.swift`：WebExtension 宿主、CRX、更新 XML 和兼容表。`AdBlockEngine.swift`：广告规则子集。`UserScriptEngine.swift` / `UserscriptRuntime.js`：隔离桥接与 GM API。`PageTools.js`：暗黑样式、阅读结构、查找计数、媒体列表、元素选择和填充。`BrowserUI.swift` / `AddonsUI.swift` / `ToolsUI.swift`：界面。`ShareExtension/`：系统分享。`Tests` / `UITests`：测试。
+`Models.swift`：数据结构、脚本元数据、URL 权限与 ZIP 检查。`FeatureModels.swift` / `StateMigration.swift`：标签组、站点设置、搜索建议、播放列表解析、备份和 schema 1 升级。`AppModel.swift`：持久化与身份切换。`BrowserSession.swift` / `SessionFeatures.swift`：标签、查找、下载接入和内容规则。`Windows.swift`：第二个窗口自己的标签会话。`DownloadCenter.swift`：URLSession 与 WKDownload。`ExtensionHost.swift` / `ExtensionPackage.swift`：WebExtension 宿主、CRX、更新 XML 和兼容表。`AdBlockEngine.swift`：广告规则子集。`UserScriptEngine.swift` / `UserscriptRuntime.js`：隔离桥接与 GM API。`PageTools.js`：暗黑样式、阅读结构、查找计数、媒体列表、元素选择和填充。`BrowserUI.swift` / `AddonsUI.swift` / `ToolsUI.swift`：界面。`ShareExtension/`：系统分享。`Tests` / `UITests`：测试。
 
 ## Apple / WebKit 参考
 

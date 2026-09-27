@@ -9,7 +9,7 @@ function classify(raw) {
   if (line.includes('#?#')) {
     const selector = line.split('#?#')[1] || '';
     if (/:(?:has-text|contains|-abp-contains)\(/.test(selector)) return 'procedural';
-    if (/:(?:matches-css|xpath|upward)|:remove\(/.test(selector)) return 'drop';
+    if (/:(?:has-text|contains|-abp-contains|xpath|matches-css|upward|remove|style)\(/.test(selector)) return 'procedural';
     return 'cosmetic';
   }
   if (line.includes('#$#')) return /\{/.test(line) && !/url\(|@import|javascript:/i.test(line) ? 'css' : 'drop';

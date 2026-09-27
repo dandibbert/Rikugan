@@ -57,7 +57,33 @@ const progressID = progress.calls.find(call => call.operation === 'xmlHttpReques
 progress.sandbox.__rikuganXHREvent({ id: progressID, loaded: 3, total: 9 });
 assert.equal(progress.sandbox.loaded, 3);
 assert.equal(progress.sandbox.total, 9);
+const spa = run('https://example.com/a', {}, 'globalThis.runs = (globalThis.runs || 0) + 1;');
+assert.equal(spa.sandbox.runs, 1);
+spa.sandbox.location = new URL('https://example.com/b');
+spa.sandbox.__rikuganOnURLChange();
+assert.equal(spa.sandbox.runs, 2);
+spa.sandbox.__rikuganOnURLChange();
+assert.equal(spa.sandbox.runs, 2);
+const framed = run('https://example.com/a', { noFrames: true }, 'globalThis.didRun = true;', { window: { top: {}, webkit: { messageHandlers: {} } } });
+assert.equal(framed.sandbox.didRun, undefined);
+const listener = run('https://example.com/', { grants: ['GM_setValue', 'GM_addValueChangeListener'] }, "GM_addValueChangeListener('x', function (name, oldValue, newValue, remote) { globalThis.seen = [name, oldValue, newValue, remote]; }); GM_setValue('x', 2);");
+assert.equal(listener.sandbox.seen[0], 'x');
+assert.equal(listener.sandbox.seen[1], undefined);
+assert.equal(listener.sandbox.seen[2], 2);
+assert.equal(listener.sandbox.seen[3], false);
+const domPage = { document: { querySelector(selector) { return { textContent: 'Ad:' + selector }; } } };
+const domElement = {
+  attrs: {},
+  appendChild(el) { vm.runInNewContext(el.textContent, { window: domPage, document: { documentElement: domElement }, JSON }); },
+  setAttribute(name, value) { this.attrs[name] = value; },
+  getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+  removeAttribute(name) { delete this.attrs[name]; }
+};
+const dom = run('https://example.com/', { isolated: true }, "globalThis.got = unsafeWindow.document.querySelector('div.ad').textContent;", {
+  document: { createElement() { return { textContent: '', remove() {} }; }, documentElement: domElement }
+});
+assert.equal(dom.sandbox.got, 'Ad:div.ad');
 const body = run('https://example.com/a', { runAt: 'document-body' });
 assert.equal(body.sandbox.didRun, true);
-console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow bridge, menu and xhr abort');
+console.log('PASS: userscript runtime URL guards, grants, resources, unsafeWindow DOM bridge, menu, xhr and listeners');
 
