@@ -434,6 +434,40 @@
     });
   }
 
+  function promiseSend(send, runtime, payload, options) {
+    return new Promise(function (resolve, reject) {
+      if (typeof send !== 'function') {
+        reject(new Error('background failed'));
+        return;
+      }
+      var settled = false;
+      var callbackFired = false;
+      function finish(value) {
+        if (settled) return;
+        settled = true;
+        var last = runtime && runtime.lastError;
+        if (last && last.message) reject(new Error(last.message));
+        else resolve(value);
+      }
+      function fromCallback(value) {
+        callbackFired = true;
+        finish(value);
+      }
+      var args = options == null ? [payload, fromCallback] : [payload, options, fromCallback];
+      var result;
+      try { result = send.apply(runtime, args); }
+      catch (error) { reject(error); return; }
+      if (callbackFired) return;
+      if (result && typeof result.then === 'function') {
+        result.then(function (value) {
+          if (callbackFired || settled) return;
+          if (value !== undefined || typeof setTimeout !== 'function') finish(value);
+          else setTimeout(function () { if (!callbackFired) finish(value); }, 0);
+        }, function (error) { if (!callbackFired && !settled) reject(error); });
+      } else if (result !== undefined) finish(result);
+    });
+  }
+
   function createBackgroundGate() {
     var state = 'notStarted';
     var queue = [];
@@ -472,17 +506,7 @@
       queued.forEach(function (message) { deliverPortMessage(port, message); });
     }
     function deliver(item) {
-      if (typeof originalSend !== 'function') {
-        item.reject(new Error('background failed'));
-        return;
-      }
-      try {
-        var result = originalSend(item.payload);
-        if (result && typeof result.then === 'function') result.then(item.resolve, item.reject);
-        else item.resolve(result);
-      } catch (error) {
-        item.reject(error);
-      }
+      promiseSend(originalSend, null, item.payload).then(item.resolve, item.reject);
     }
     return {
       get state() { return state; },
@@ -583,7 +607,7 @@
       var responseCallback = typeof options === 'function' ? options : callback;
       var task;
       if (gate.state === 'failed' || gate.state === 'shutdown') task = gate.enqueueMessage(message);
-      else if ((gate.state === 'ready' || gate.state === 'idle') && typeof originalSend === 'function') task = Promise.resolve(originalSend.apply(runtime, arguments));
+      else if ((gate.state === 'ready' || gate.state === 'idle') && typeof originalSend === 'function') task = promiseSend(originalSend, runtime, message, typeof options === 'function' ? undefined : options);
       else task = gate.enqueueMessage(message);
       if (typeof responseCallback === 'function') {
         task.then(function (value) { responseCallback(value); }, function (error) {

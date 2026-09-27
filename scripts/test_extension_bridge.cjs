@@ -322,6 +322,21 @@ function load(extra) {
   await assert.rejects(failedHost.chrome.runtime.sendMessage({ n: 10 }), /background failed/);
   assert.throws(() => failedHost.chrome.runtime.connect({ name: 'later' }), /background failed/);
 
+  const callbackHost = load({
+    chrome: {
+      runtime: {
+        sendMessage(message, callback) {
+          if (typeof callback === 'function') setTimeout(() => callback({ ok: true, visits: message.type === 'rikugan-probe' ? 2 : 0 }), 0);
+          return undefined;
+        },
+        onMessage: { addListener() {} }
+      }
+    }
+  });
+  const callbackReply = await callbackHost.chrome.runtime.sendMessage({ type: 'rikugan-probe' });
+  assert.equal(callbackReply.ok, true);
+  assert.equal(callbackReply.visits, 2);
+
   const stressHeard = [];
   const gate = gateHost.__rikuganCreateBackgroundGate();
   const connected = [];
