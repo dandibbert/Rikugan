@@ -134,6 +134,7 @@ struct ExtensionInstaller: View {
     @Environment(\.dismiss) private var dismiss
     let prepared: PreparedExtension
     @State private var installed = false
+    @State private var installing = false
     @State private var error: String?
     var body: some View {
         NavigationStack {
@@ -151,11 +152,20 @@ struct ExtensionInstaller: View {
                 Section { Text("只安装你信任的扩展。扩展能读取获授权页面上的内容，包括你登录后看到的信息。安装仅影响当前身份。此版本不验证扩展商店签名，也不自动更新扩展。").font(.footnote).foregroundStyle(.secondary) }
             }.navigationTitle("安装扩展").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) { Button("允许并安装") {
-                        do { try model.session?.installExtension(prepared); installed = true; dismiss() } catch { self.error = error.localizedDescription }
-                    }.bold() }
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(installing) }
+                    ToolbarItem(placement: .confirmationAction) { Button(installing ? "加载中…" : "允许并安装") {
+                        installing = true
+                        Task {
+                            do {
+                                guard let session = model.session else { throw RikuganError.message("没有可用的身份空间。") }
+                                try await session.installExtension(prepared)
+                                installed = true; dismiss()
+                            } catch { self.error = error.localizedDescription }
+                            installing = false
+                        }
+                    }.bold().disabled(installing) }
                 }
+                .interactiveDismissDisabled(installing)
                 .alert("安装失败", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("好") { error = nil } } message: { Text(error ?? "") }
                 .onDisappear { if !installed { model.session?.discardExtension(prepared) } }
         }

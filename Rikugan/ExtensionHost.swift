@@ -46,12 +46,12 @@ extension BrowserSession {
         guard let model else { return }
         try? FileManager.default.removeItem(at: model.directory(prepared.profileID).appendingPathComponent(prepared.relativePath))
     }
-    func installExtension(_ prepared: PreparedExtension) throws {
+    func installExtension(_ prepared: PreparedExtension) async throws {
         guard prepared.profileID == profileID, isActive else { throw RikuganError.message("身份已切换，请重新导入扩展。") }
         let record = ExtensionRecord(id: prepared.id, name: prepared.name, version: prepared.webExtension.version ?? "1.0",
                                      detail: prepared.webExtension.displayDescription ?? "", relativePath: prepared.relativePath,
                                      allowedPermissions: prepared.permissions, allowedPatterns: prepared.patterns, requestedPatterns: prepared.patterns)
-        try activateExtension(prepared.webExtension, record: record)
+        try await activateExtension(prepared.webExtension, record: record)
         model?.updateProfile(profileID) { $0.extensions.append(record) }
     }
     func loadExtension(_ record: ExtensionRecord) async {
@@ -59,10 +59,10 @@ extension BrowserSession {
         do {
             let extensionObject = try await WKWebExtension(resourceBaseURL: model.directory(profileID).appendingPathComponent(record.relativePath))
             guard isActive else { return }
-            try activateExtension(extensionObject, record: record)
+            try await activateExtension(extensionObject, record: record)
         } catch { extensionErrors[record.id] = error.localizedDescription }
     }
-    private func activateExtension(_ webExtension: WKWebExtension, record: ExtensionRecord) throws {
+    private func activateExtension(_ webExtension: WKWebExtension, record: ExtensionRecord) async throws {
         if let previous = contexts.removeValue(forKey: record.id) { try? extensionController.unload(previous) }
         let context = WKWebExtensionContext(for: webExtension)
         context.uniqueIdentifier = record.id.uuidString
@@ -79,6 +79,21 @@ extension BrowserSession {
         }
         try extensionController.load(context)
         contexts[record.id] = context; extensionErrors.removeValue(forKey: record.id)
+        do {
+            if webExtension.hasBackgroundContent {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    context.loadBackgroundContent { error in
+                        if let error { continuation.resume(throwing: error) }
+                        else { continuation.resume() }
+                    }
+                }
+            }
+            guard isActive else { throw RikuganError.message("扩展加载期间身份已关闭。") }
+        } catch {
+            try? extensionController.unload(context)
+            contexts.removeValue(forKey: record.id)
+            throw error
+        }
         if ready {
             context.didOpenWindow(self)
             for tab in tabs { context.didOpenTab(tab) }

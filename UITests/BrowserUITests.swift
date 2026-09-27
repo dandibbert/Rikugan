@@ -16,7 +16,7 @@ final class BrowserUITests: XCTestCase {
         app.buttons["addons.done"].tap()
         navigate(app)
         XCTAssertTrue(app.webViews.staticTexts["用户脚本运行成功"].waitForExistence(timeout: 30))
-        XCTAssertTrue(app.webViews.staticTexts["扩展运行成功"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.webViews.staticTexts["扩展运行成功"].waitForExistence(timeout: 30), app.webViews.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
         XCTAssertTrue(app.webViews.staticTexts["GM 存储计数：1"].exists)
         app.webViews.buttons["写入身份标记"].tap()
         XCTAssertTrue(app.webViews.staticTexts["本身份已保存"].exists)

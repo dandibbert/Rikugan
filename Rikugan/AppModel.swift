@@ -137,7 +137,7 @@ struct ScriptDraft: Identifiable { var id = UUID(); var source: String; var exis
             if !profile.extensions.contains(where: { $0.name == "Rikugan Demo" }),
                let file = Bundle.main.url(forResource: "DemoExtension", withExtension: "zip") {
                 let prepared = try await session.prepareExtension(file)
-                try session.installExtension(prepared)
+                try await session.installExtension(prepared)
             }
             message = "自检组件已安装。打开 example.com 测试页，可看到扩展和用户脚本的运行结果。"
         } catch { message = error.localizedDescription }
