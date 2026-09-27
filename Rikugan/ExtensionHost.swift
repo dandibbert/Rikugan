@@ -147,7 +147,9 @@ extension BrowserSession {
             "webRequest.onResponseStarted", "webRequest.onCompleted", "webRequest.onErrorOccurred",
             "scripting.registerContentScripts", "scripting.unregisterContentScripts", "scripting.getRegisteredContentScripts"
         ]
-        ExtensionBridge.attach(to: context.webViewConfiguration.userContentController, handler: extensionPageBridge)
+        if let controller = context.webViewConfiguration?.userContentController {
+            ExtensionBridge.attach(to: controller, handler: extensionPageBridge)
+        }
         for permission in record.allowedPermissions { context.setPermissionStatus(.grantedExplicitly, for: WKWebExtension.Permission(rawValue: permission)) }
         for pattern in record.allowedPatterns {
             if let match = try? WKWebExtension.MatchPattern(string: pattern) { context.setPermissionStatus(.grantedExplicitly, for: match) }
@@ -201,8 +203,8 @@ extension BrowserSession {
         guard #available(iOS 18.4, *) else { return (nil, "") }
         guard let context = extensionContext(id: id) else { return (nil, "") }
         let action = context.action(for: activeTab)
-        let icon = action.icon(for: CGSize(width: 22, height: 22)) ?? context.webExtension.actionIcon(for: CGSize(width: 22, height: 22))
-        return (icon, action.badgeText)
+        let icon = action?.icon(for: CGSize(width: 22, height: 22)) ?? context.webExtension.actionIcon(for: CGSize(width: 22, height: 22))
+        return (icon, action?.badgeText ?? "")
     }
     func performExtension(_ id: UUID) {
         guard #available(iOS 18.4, *) else { model?.message = Self.extensionOSMessage; return }
@@ -386,7 +388,7 @@ extension BrowserTab: WKWebExtensionTab {
     func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !isLoading }
     func isSelected(for context: WKWebExtensionContext) -> Bool { session?.selectedID == id }
     func size(for context: WKWebExtensionContext) -> CGSize { webViewIfLive()?.bounds.size ?? .zero }
-    func zoomFactor(for context: WKWebExtensionContext) -> Double { webViewIfLive()?.pageZoom ?? 1 }
+    func zoomFactor(for context: WKWebExtensionContext) -> Double { Double(webViewIfLive()?.pageZoom ?? 1) }
     func setZoomFactor(_ zoomFactor: Double, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
         let factor = min(5, max(0.25, zoomFactor))
         prepareExtensionNavigation(.zoom)?.pageZoom = factor

@@ -22,7 +22,7 @@ extension BrowserSession {
         let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
         let idJS = PageTools.jsString(noticeID) ?? "\"\""
         let source = "globalThis.__rikuganNotify && globalThis.__rikuganNotify(\(idJS))"
-        for tab in tabs { tab.webViewIfLive()?.evaluateJavaScript(source, in: nil, in: world) { _, _ in } }
+        for tab in tabs { tab.webViewIfLive()?.evaluateJavaScript(source, in: nil, in: world) { _ in } }
     }
     func noteURLChange(_ tab: BrowserTab) {
         let js = "globalThis.__rikuganOnURLChange && globalThis.__rikuganOnURLChange()"
@@ -31,7 +31,7 @@ extension BrowserSession {
             worlds.append(.world(name: "rikugan.script." + script.id.uuidString))
         }
         for world in worlds {
-            tab.webView.evaluateJavaScript(js, in: nil, in: world) { _, _ in }
+            tab.webView.evaluateJavaScript(js, in: nil, in: world) { _ in }
         }
     }
     func closeOthers(keeping tab: BrowserTab) {
@@ -270,7 +270,7 @@ extension BrowserTab: WKScriptMessageHandler {
     func publishIsolatedResult(id: Int, json: String) {
         let literal = PageTools.jsString(json) ?? "\"\""
         let source = "window.__rgResults=window.__rgResults||{};try{window.__rgResults[\(id)]=JSON.parse(\(literal));}catch(e){window.__rgResults[\(id)]={t:'err',e:'bad result'};}var node=document.documentElement;if(node&&node.setAttribute)node.setAttribute('data-rg-iso-result',\(literal));"
-        webView.evaluateJavaScript(source, in: nil, in: .page) { _, _ in }
+        webView.evaluateJavaScript(source, in: nil, in: .page) { _ in }
     }
     func printPage() {
         let controller = UIPrintInteractionController.shared
@@ -310,7 +310,7 @@ extension BrowserTab: WKScriptMessageHandler {
             let finish: (String) -> Void = { [weak self] decision in
                 let literal = PageTools.jsString(decision) ?? "\"block\""
                 let idJS = PageTools.jsString(id) ?? "\"\""
-                self?.webView.evaluateJavaScript("window.__rgClipboardDone && window.__rgClipboardDone(\(idJS), \(literal))", in: nil, in: .page) { _, _ in }
+                self?.webView.evaluateJavaScript("window.__rgClipboardDone && window.__rgClipboardDone(\(idJS), \(literal))", in: nil, in: .page) { _ in }
             }
             if saved == "allow" { finish("allow"); return }
             if saved == "block" { finish("block"); return }
@@ -334,7 +334,7 @@ extension BrowserTab: WKScriptMessageHandler {
                 guard let self else { return }
                 let outcome = await self.session?.handleExtensionHost(api: api, details: details, tab: self) ?? ExtensionHostOutcome(error: "扩展没有载入。")
                 let script = ExtensionBridge.pageReply(id: id, result: outcome.result, error: outcome.error)
-                self.webView.evaluateJavaScript(script, in: nil, in: .page) { _, _ in }
+                self.webView.evaluateJavaScript(script, in: nil, in: .page) { _ in }
             }
             return
         }

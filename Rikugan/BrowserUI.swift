@@ -558,26 +558,31 @@ struct TabsView: View {
                     groupBlock(title: "未分组", tabs: scoped(session.tabs.filter { $0.groupID == nil && !$0.isPrivate }), group: nil)
                 }.padding(16)
             }.navigationTitle("标签页")
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) { Button("新建", systemImage: "plus") { session.addTab(windowID: windowID); dismiss() } }
-                    ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
-                    ToolbarItem(placement: .bottomBar) {
-                        Menu("整理") {
-                            Button("无痕标签") { session.addTab(isPrivate: true, windowID: windowID); dismiss() }
-                            Button("新建标签组") { naming = true }
-                            Button("关闭全部") { session.closeAllTabs(in: windowID) }
-                            if let current = scoped(session.tabs).first(where: { $0.id == (windowID == nil ? session.selectedID : model.windows.selection[windowID]) }) ?? scoped(session.tabs).first {
-                                Button("关闭其他") { session.closeOthers(keeping: current) }
-                            }
-                        }
-                    }
-                }
+                .toolbar { tabToolbar }
                 .alert("新建标签组", isPresented: $naming) {
                     TextField("名称", text: $groupName)
                     Button("创建") { session.addGroup(named: groupName); groupName = "" }
                     Button("取消", role: .cancel) {}
                 }
         }
+    }
+    @ToolbarContentBuilder private var tabToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) { Button("新建", systemImage: "plus") { session.addTab(windowID: windowID); dismiss() } }
+        ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
+        ToolbarItem(placement: .bottomBar) {
+            Menu("整理") {
+                Button("无痕标签") { session.addTab(isPrivate: true, windowID: windowID); dismiss() }
+                Button("新建标签组") { naming = true }
+                Button("关闭全部") { session.closeAllTabs(in: windowID) }
+                if let current = currentTab { Button("关闭其他") { session.closeOthers(keeping: current) } }
+            }
+        }
+    }
+    private var currentTab: BrowserTab? {
+        let selected: UUID?
+        if let windowID { selected = model.windows.selection[windowID] }
+        else { selected = session.selectedID }
+        return scoped(session.tabs).first { $0.id == selected } ?? scoped(session.tabs).first
     }
     private func groupBlock(title: String, tabs: [BrowserTab], group: TabGroup?) -> some View {
         VStack(alignment: .leading, spacing: 8) {

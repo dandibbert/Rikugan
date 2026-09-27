@@ -2,6 +2,10 @@ import Foundation
 import UIKit
 import WebKit
 
+struct ExtensionSourceError: Error, Equatable {
+    var message: String
+}
+
 struct ExtensionNoticeRecord: Equatable {
     var id: String
     var title: String
@@ -221,14 +225,14 @@ enum ExtensionBridge {
         }
     }
 
-    static func loadSources(_ names: [String], packages: [(url: URL, directory: Bool)], strict: Bool) -> Result<[String], String> {
+    static func loadSources(_ names: [String], packages: [(url: URL, directory: Bool)], strict: Bool) -> Result<[String], ExtensionSourceError> {
         guard !names.isEmpty else { return .success([]) }
         for name in names {
-            if safeRelative(name) == nil { return .failure("invalid file \(name)") }
+            if safeRelative(name) == nil { return .failure(ExtensionSourceError(message: "invalid file \(name)")) }
         }
         let candidates = strict ? Array(packages.prefix(1)) : packages
-        guard !candidates.isEmpty else { return .failure("missing file \(names[0])") }
-        var missing = names[0]
+        guard !candidates.isEmpty else { return .failure(ExtensionSourceError(message: "missing file \(names[0])")) }
+        var missing = ExtensionSourceError(message: "missing file \(names[0])")
         for package in candidates {
             var texts: [String] = []
             var failed = false
@@ -440,15 +444,15 @@ enum ExtensionBridge {
         }
     }
 
-    private static func readSource(_ name: String, package: URL, directory: Bool) -> Result<String, String> {
-        guard let relative = safeRelative(name) else { return .failure("invalid file \(name)") }
+    private static func readSource(_ name: String, package: URL, directory: Bool) -> Result<String, ExtensionSourceError> {
+        guard let relative = safeRelative(name) else { return .failure(ExtensionSourceError(message: "invalid file \(name)")) }
         if directory {
             let file = package.appendingPathComponent(relative)
-            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return .failure("missing file \(relative)") }
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return .failure(ExtensionSourceError(message: "missing file \(relative)")) }
             return .success(text)
         }
         guard let data = try? Data(contentsOf: package), let bytes = ZipArchive.extract(data: data, path: relative), let text = String(data: bytes, encoding: .utf8) else {
-            return .failure("missing file \(relative)")
+            return .failure(ExtensionSourceError(message: "missing file \(relative)"))
         }
         return .success(text)
     }

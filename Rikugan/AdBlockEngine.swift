@@ -117,19 +117,19 @@ enum AdBlockEngine {
                 }
             case .block(let filter, let options):
                 if !options.removeParams.isEmpty {
-                    strips.append(contentsOf: options.removeParams.map { QueryStrip(domains: hosts(of: filter), key: $0.key, regex: $0.regex) })
+                    strips.append(contentsOf: options.removeParams.map { QueryStrip(domains: Self.hosts(of: filter), key: $0.key, regex: $0.regex) })
                 }
                 if let policy = options.csp {
-                    policies.append(["domains": hosts(of: filter), "policy": policy])
+                    policies.append(["domains": Self.hosts(of: filter), "policy": policy])
                 }
                 if !options.replaces.isEmpty {
-                    let needle = hosts(of: filter).first ?? ""
+                    let needle = Self.hosts(of: filter).first ?? ""
                     for item in options.replaces {
                         replacements.append(["needle": needle, "regex": item.regex, "replacement": item.replacement, "flags": item.flags])
                     }
                 }
                 if options.prunesJSON, !options.jsonPrunes.isEmpty {
-                    scriptlets.append(["domains": hosts(of: filter), "name": "json-prune", "args": [options.jsonPrunes.joined(separator: "|"), needle(of: filter)]])
+                    scriptlets.append(["domains": Self.hosts(of: filter), "name": "json-prune", "args": [options.jsonPrunes.joined(separator: "|"), needle(of: filter)]])
                 }
                 if let resource = options.redirectResource {
                     scriptlets.append(contentsOf: redirectStubs(resource: resource, filter: filter))
@@ -352,7 +352,7 @@ enum AdBlockEngine {
         var current = ""
         var quote: Character?
         for character in text {
-            if let quote, character == quote { quote = nil; continue }
+            if let active = quote, character == active { quote = nil; continue }
             if quote == nil, character == "'" || character == "\"" { quote = character; continue }
             if quote == nil, character == "," { args.append(current.trimmingCharacters(in: .whitespaces)); current = ""; continue }
             current.append(character)

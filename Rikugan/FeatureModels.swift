@@ -332,7 +332,7 @@ enum PlaylistText {
         for index in lines.indices {
             let line = lines[index].trimmingCharacters(in: .whitespaces)
             guard line.hasPrefix("#EXT-X-STREAM-INF:") else { continue }
-            let bandwidth = capture(#"BANDWIDTH=(\d+)"#, line).flatMap(Int.init) ?? 0
+            let bandwidth = Int(capture(#"BANDWIDTH=(\d+)"#, line)?.0 ?? "") ?? 0
             let size = capture(#"RESOLUTION=(\d+)x(\d+)"#, line)
             let width = Int(size?.0 ?? "") ?? 0
             let height = Int(size?.1 ?? "") ?? 0

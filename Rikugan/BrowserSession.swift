@@ -106,7 +106,7 @@ import WebKit
         extensionPhase = .suspended
     }
     @discardableResult func addTab(url: URL? = nil, activate: Bool = true, configuration: WKWebViewConfiguration? = nil, isPrivate: Bool = false, groupID: UUID? = nil, windowID: UUID? = nil) -> BrowserTab {
-        var saved = SavedTab(isPrivate: isPrivate, groupID: groupID)
+        var saved = SavedTab(groupID: groupID, isPrivate: isPrivate)
         if let groupID { saved.groupID = groupID }
         let tab = BrowserTab(saved: saved, session: self, configuration: configuration)
         tab.windowID = windowID
@@ -181,13 +181,13 @@ import WebKit
             privateScriptValues.removeAll()
         }
         let main = tabs.filter { $0.windowID == nil }
-        if windowID == nil {
-            if main.isEmpty { addTab() }
-            else if wasActive { select(main[min(index, main.count - 1)]) }
-        } else {
+        if let windowID {
             let siblings = tabs.filter { $0.windowID == windowID }
             if model?.windows.selection[windowID] == tab.id { model?.windows.replace(siblings.last?.id, in: windowID) }
             if wasActive, let fallback = main.last { select(fallback) }
+        } else {
+            if main.isEmpty { addTab() }
+            else if wasActive { select(main[min(index, main.count - 1)]) }
         }
         rebalanceResidence()
         persistTabs()
@@ -313,8 +313,8 @@ import WebKit
             if tab == nil { model?.message = "没有可以执行脚本的当前标签页。" }
             return
         }
-        target.webView.evaluateJavaScript(source, in: nil, in: .page) { [weak self] _, error in
-            if let error, tab == nil { self?.model?.message = error.localizedDescription }
+        target.webView.evaluateJavaScript(source, in: nil, in: .page) { [weak self] result in
+            if case .failure(let error) = result, tab == nil { self?.model?.message = error.localizedDescription }
         }
     }
     func injectExtensionCSS(_ css: String, tab: BrowserTab) async -> Bool {
@@ -326,9 +326,11 @@ import WebKit
     func evaluateExtensionScript(_ source: String, tab: BrowserTab) async -> Result<Any?, Error> {
         guard !source.isEmpty else { return .failure(RikuganError.message("没有可以执行脚本的当前标签页。")) }
         return await withCheckedContinuation { continuation in
-            tab.webView.evaluateJavaScript(source, in: nil, in: .page) { value, error in
-                if let error { continuation.resume(returning: .failure(error)) }
-                else { continuation.resume(returning: .success(value)) }
+            tab.webView.evaluateJavaScript(source, in: nil, in: .page) { result in
+                switch result {
+                case .failure(let error): continuation.resume(returning: .failure(error))
+                case .success(let value): continuation.resume(returning: .success(value))
+                }
             }
         }
     }
@@ -367,7 +369,7 @@ import WebKit
             let located = extensionPackages(preferring: runtimeID)
             switch ExtensionBridge.loadSources(call.files, packages: located.packages, strict: located.strict) {
             case .success(let sources): texts = sources
-            case .failure(let message): return ExtensionHostOutcome(error: message)
+            case .failure(let error): return ExtensionHostOutcome(error: error.message)
             }
         }
         if call.isolated {
@@ -887,7 +889,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         if popup == "block" { return nil }
         if popup == "ask" {
             BrowserPresentation.confirm(title: host.isEmpty ? "弹窗" : host, message: "这个网页想打开新标签页。") { allowed in
-                if allowed, let url = navigationAction.request.url { session.addTab(url: url, activate: true, configuration: configuration, windowID: windowID) }
+                if allowed, let url = navigationAction.request.url { session.addTab(url: url, activate: true, configuration: configuration, windowID: self.windowID) }
             }
             return nil
         }

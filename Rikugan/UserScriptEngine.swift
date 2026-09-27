@@ -55,8 +55,8 @@ struct ScriptCommand: Identifiable {
               let json = String(data: data, encoding: .utf8) else { completion?("{\"t\":\"err\",\"e\":\"missing script\"}"); return }
         let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
         let scriptSource = "JSON.stringify((globalThis.__rikuganInvokeIsolated&&globalThis.__rikuganInvokeIsolated(\(id),\(json)))||{t:'val',u:1})"
-        webView.evaluateJavaScript(scriptSource, in: nil, in: world) { value, _ in
-            completion?(value as? String ?? "{\"t\":\"val\",\"u\":1}")
+        webView.evaluateJavaScript(scriptSource, in: nil, in: world) { result in
+            completion?((try? result.get()) as? String ?? "{\"t\":\"val\",\"u\":1}")
         }
     }
 
@@ -265,7 +265,7 @@ struct ScriptCommand: Identifiable {
         let world: WKContentWorld = script.isolated ? .world(name: "rikugan.script." + script.id.uuidString) : .page
         let source = "globalThis.__rikuganValueChanged && globalThis.__rikuganValueChanged(\(keyJS), \(text), true)"
         for other in session.tabs where other.id != tab.id && other.isPrivate == tab.isPrivate {
-            other.webViewIfLive()?.evaluateJavaScript(source, in: nil, in: world) { _, _ in }
+            other.webViewIfLive()?.evaluateJavaScript(source, in: nil, in: world) { _ in }
         }
     }
     private func reportTransfer(id: String, event: [String: Any], world: WKContentWorld) {
@@ -275,7 +275,7 @@ struct ScriptCommand: Identifiable {
         guard JSONSerialization.isValidJSONObject(payload),
               let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return }
-        tab.webView.evaluateJavaScript("globalThis.__rikuganXHREvent && globalThis.__rikuganXHREvent(\(json))", in: nil, in: world) { _, _ in }
+        tab.webView.evaluateJavaScript("globalThis.__rikuganXHREvent && globalThis.__rikuganXHREvent(\(json))", in: nil, in: world) { _ in }
     }
     static func tabRecord(_ tab: BrowserTab) -> [String: Any] {
         var item: [String: Any] = ["id": tab.id.uuidString, "url": tab.address, "title": tab.pageTitle]
