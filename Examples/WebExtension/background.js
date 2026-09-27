@@ -1,13 +1,13 @@
-browser.runtime.onMessage.addListener((message, sender, reply) => {
-  if (message.type !== 'rikugan-probe') return false;
+browser.runtime.onMessage.addListener((message, sender) => {
+  if (!message || message.type !== 'rikugan-probe') return;
   const tabId = sender.tab && sender.tab.id;
   const target = {};
   if (tabId != null) target.tabId = tabId;
-  const scripting = (browser.scripting || chrome.scripting);
-  const notifications = (browser.notifications || chrome.notifications);
-  browser.storage.local.get('visits').then(result => {
-    const visits = (result.visits || 0) + 1;
-    return browser.storage.local.set({visits}).then(() => visits);
+  const scripting = browser.scripting || chrome.scripting;
+  const notifications = browser.notifications || chrome.notifications;
+  return browser.storage.local.get('visits').then(result => {
+    const visits = ((result && result.visits) || 0) + 1;
+    return browser.storage.local.set({ visits }).then(() => visits);
   }).then(async visits => {
     let scriptingOk = false;
     let notificationOk = false;
@@ -29,7 +29,6 @@ browser.runtime.onMessage.addListener((message, sender, reply) => {
       const all = await notifications.getAll();
       notificationOk = !!(all && all['rikugan-demo']);
     } catch (error) { notificationOk = false; }
-    reply({ ok: true, visits, scripting: scriptingOk, notification: notificationOk });
-  }).catch(error => reply({ ok: false, error: String(error) }));
-  return true;
+    return { ok: true, visits, scripting: scriptingOk, notification: notificationOk };
+  }).catch(error => ({ ok: false, error: String(error) }));
 });

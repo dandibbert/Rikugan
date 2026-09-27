@@ -457,14 +457,20 @@
       var result;
       try { result = send.apply(runtime, args); }
       catch (error) { reject(error); return; }
+      function isBody(value) { return typeof value === 'object' && value !== null; }
+      function acceptLater(value) {
+        if (typeof setTimeout !== 'function') { finish(value); return; }
+        setTimeout(function () { if (!callbackFired && !settled) finish(value); }, 4000);
+      }
       if (callbackFired) return;
       if (result && typeof result.then === 'function') {
         result.then(function (value) {
           if (callbackFired || settled) return;
-          if (value !== undefined || typeof setTimeout !== 'function') finish(value);
-          else setTimeout(function () { if (!callbackFired) finish(value); }, 0);
+          if (isBody(value)) finish(value);
+          else acceptLater(value);
         }, function (error) { if (!callbackFired && !settled) reject(error); });
-      } else if (result !== undefined) finish(result);
+      } else if (isBody(result)) finish(result);
+      else acceptLater(result);
     });
   }
 
