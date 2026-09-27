@@ -389,5 +389,36 @@ function load(extra) {
   }
   assert.equal(stressHeard.length, 24 * 4);
 
+  const unsupportedHost = load({ chrome: { runtime: {} } });
+  await assert.rejects(
+    unsupportedHost.chrome.scripting.registerContentScripts([{ id: 'a', js: ['a.js'], matches: ['<all_urls>'] }]),
+    /Unsupported: scripting.registerContentScripts/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.scripting.unregisterContentScripts(['a']),
+    /Unsupported: scripting.unregisterContentScripts/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.scripting.getRegisteredContentScripts(),
+    /Unsupported: scripting.getRegisteredContentScripts/
+  );
+  await assert.rejects(
+    unsupportedHost.chrome.webRequest.onBeforeRequest.addListener(function () {}),
+    /Unsupported: webRequest.onBeforeRequest/
+  );
+  assert.equal(unsupportedHost.chrome.runtime.lastError.message, 'Unsupported: webRequest.onBeforeRequest');
+  assert.equal(unsupportedHost.chrome.webRequest.onBeforeRequest.hasListener(), false);
+  let keptWebKit = false;
+  const webkitScripting = load({
+    chrome: {
+      runtime: {},
+      scripting: {
+        registerContentScripts() { keptWebKit = true; return Promise.resolve('webkit'); }
+      }
+    }
+  });
+  assert.equal(await webkitScripting.chrome.scripting.registerContentScripts([]), 'webkit');
+  assert.equal(keptWebKit, true);
+
   console.log('PASS: extension bridge scripting and notifications payloads');
 })().catch(error => { console.error(error); process.exit(1); });

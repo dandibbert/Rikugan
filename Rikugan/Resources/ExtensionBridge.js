@@ -360,6 +360,24 @@
     });
   }
 
+  function unsupportedAPI(name) {
+    return function () {
+      var error = new Error('Unsupported: ' + name);
+      var runtime = (root.browser && root.browser.runtime) || (root.chrome && root.chrome.runtime);
+      if (runtime) runtime.lastError = { message: error.message };
+      return Promise.reject(error);
+    };
+  }
+
+  function fillUnsupportedEvent(list, eventName, apiName) {
+    var fail = unsupportedAPI(apiName);
+    list.forEach(function (api) {
+      if (!api[eventName] || typeof api[eventName].addListener !== 'function') {
+        api[eventName] = { addListener: fail, removeListener: fail, hasListener: function () { return false; } };
+      }
+    });
+  }
+
   function relay() {
     if (!inContentScript()) return;
     var runtime = (root.browser && root.browser.runtime) || (root.chrome && root.chrome.runtime);
@@ -578,6 +596,11 @@
     var list = namespaces();
     fill(bucket(list, 'scripting'), 'insertCSS', insertCSS);
     fill(bucket(list, 'scripting'), 'executeScript', executeScript);
+    fill(bucket(list, 'scripting'), 'registerContentScripts', unsupportedAPI('scripting.registerContentScripts'));
+    fill(bucket(list, 'scripting'), 'unregisterContentScripts', unsupportedAPI('scripting.unregisterContentScripts'));
+    fill(bucket(list, 'scripting'), 'getRegisteredContentScripts', unsupportedAPI('scripting.getRegisteredContentScripts'));
+    var webRequestEvents = ['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived', 'onAuthRequired', 'onResponseStarted', 'onCompleted', 'onErrorOccurred'];
+    webRequestEvents.forEach(function (name) { fillUnsupportedEvent(bucket(list, 'webRequest'), name, 'webRequest.' + name); });
     var notes = bucket(list, 'notifications');
     fill(notes, 'create', createNotification);
     fill(notes, 'clear', clearNotification);

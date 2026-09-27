@@ -133,6 +133,46 @@ enum TabSnapshotGate {
     static func shouldCapture(isHome: Bool, isPrivate: Bool) -> Bool { !isHome && !isPrivate }
 }
 
+/// Extension tab actions must not mount an empty WKWebView. A suspended reload loads the
+/// saved URL. A snapshot of a tab with no live web view is skipped.
+enum ExtensionTabPolicy {
+    enum Request: Equatable { case reload, back, forward, zoom, snapshot, duplicate }
+    enum Effect: Equatable {
+        case navigateSavedURL
+        case restoreInteractionThenPerform
+        case performOnLiveView
+        case skipSnapshot
+        case duplicateSavedURL
+    }
+
+    static func effect(request: Request, phase: TabPhase, hasLiveWebView: Bool, hasInteraction: Bool) -> Effect {
+        switch request {
+        case .snapshot:
+            return hasLiveWebView ? .performOnLiveView : .skipSnapshot
+        case .duplicate:
+            return .duplicateSavedURL
+        case .reload, .back, .forward, .zoom:
+            let needsRestore = phase == .suspended || phase == .terminated || !hasLiveWebView
+            guard needsRestore else { return .performOnLiveView }
+            if request == .reload && (phase == .terminated || !hasInteraction) { return .navigateSavedURL }
+            if hasInteraction && phase != .terminated { return .restoreInteractionThenPerform }
+            return .navigateSavedURL
+        }
+    }
+
+    static func savedURL(_ address: String) -> URL? {
+        guard !address.isEmpty, let url = URL(string: address) else { return nil }
+        return url
+    }
+
+    static func shouldRebalance(_ effect: Effect) -> Bool {
+        switch effect {
+        case .navigateSavedURL, .restoreInteractionThenPerform: return true
+        case .performOnLiveView, .skipSnapshot, .duplicateSavedURL: return false
+        }
+    }
+}
+
 enum DiagnosticsExport {
     static let omitted = ["history", "cookies", "passwords", "page text"]
     static let forbidden = ["history", "cookies", "passwords", "pageText", "cookie", "urls"]

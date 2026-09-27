@@ -737,6 +737,53 @@ final class CoreTests: XCTestCase {
         let disabled = SiteFontChoice.resolve(siteFont: "", globalBody: "Font A", globalHeading: "Heading", globalMono: "Mono")
         XCTAssertEqual(disabled, SiteFontChoice.Fonts(body: "", heading: "", mono: ""))
     }
+
+    func testExtensionTabActionPolicy() {
+        let saved = ExtensionTabPolicy.savedURL("https://example.com/a")
+        XCTAssertEqual(saved?.absoluteString, "https://example.com/a")
+        XCTAssertNil(ExtensionTabPolicy.savedURL(""))
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .reload, phase: .suspended, hasLiveWebView: false, hasInteraction: false),
+            .navigateSavedURL
+        )
+        XCTAssertTrue(ExtensionTabPolicy.shouldRebalance(.navigateSavedURL))
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .reload, phase: .suspended, hasLiveWebView: false, hasInteraction: true),
+            .restoreInteractionThenPerform
+        )
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .reload, phase: .terminated, hasLiveWebView: false, hasInteraction: true),
+            .navigateSavedURL
+        )
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .snapshot, phase: .suspended, hasLiveWebView: false, hasInteraction: true),
+            .skipSnapshot
+        )
+        XCTAssertFalse(ExtensionTabPolicy.shouldRebalance(.skipSnapshot))
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .snapshot, phase: .active, hasLiveWebView: true, hasInteraction: false),
+            .performOnLiveView
+        )
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .duplicate, phase: .suspended, hasLiveWebView: false, hasInteraction: false),
+            .duplicateSavedURL
+        )
+        XCTAssertFalse(ExtensionTabPolicy.shouldRebalance(.duplicateSavedURL))
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .zoom, phase: .suspended, hasLiveWebView: false, hasInteraction: false),
+            .navigateSavedURL
+        )
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .back, phase: .suspended, hasLiveWebView: false, hasInteraction: true),
+            .restoreInteractionThenPerform
+        )
+        XCTAssertEqual(
+            ExtensionTabPolicy.effect(request: .forward, phase: .liveBackground, hasLiveWebView: true, hasInteraction: false),
+            .performOnLiveView
+        )
+        XCTAssertFalse(ExtensionTabPolicy.shouldRebalance(.performOnLiveView))
+        XCTAssertEqual(TabResidence.liveBudget, 8)
+    }
 }
 
 final class OpaqueInteractionState: NSObject, NSSecureCoding {

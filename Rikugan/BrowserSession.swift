@@ -653,6 +653,50 @@ extension BrowserSession {
         if extensionLoading { properties.insert(.loading) }
         session?.extensionController.didChangeTabProperties(properties, for: self)
     }
+    func extensionEffect(_ request: ExtensionTabPolicy.Request) -> ExtensionTabPolicy.Effect {
+        ExtensionTabPolicy.effect(
+            request: request,
+            phase: phase,
+            hasLiveWebView: webViewIfLive() != nil,
+            hasInteraction: !(interactionState ?? Data()).isEmpty
+        )
+    }
+
+    /// Restores a suspended tab before an extension action. Never uses the mounting `webView` getter.
+    /// Snapshot and duplicate do not mount. A restore updates `lastActiveAt` and rebalances the live budget.
+    func prepareExtensionNavigation(_ request: ExtensionTabPolicy.Request) -> WKWebView? {
+        switch extensionEffect(request) {
+        case .skipSnapshot, .duplicateSavedURL:
+            return nil
+        case .performOnLiveView:
+            return webViewIfLive()
+        case .navigateSavedURL:
+            guard let url = ExtensionTabPolicy.savedURL(address) else { return webViewIfLive() }
+            let fresh = webViewIfLive() == nil
+            lastActiveAt = Date()
+            navigate(url)
+            if fresh { session?.installPageTools(on: self) }
+            session?.rebalanceResidence()
+            return webViewIfLive()
+        case .restoreInteractionThenPerform:
+            lastActiveAt = Date()
+            let fresh = webViewIfLive() == nil
+            if fresh {
+                phase = .restoring
+                mountWebView()
+                session?.installPageTools(on: self)
+            }
+            restored = false
+            if phase == .terminated {
+                if let url = ExtensionTabPolicy.savedURL(address) { navigate(url) }
+            } else {
+                restoreIfNeeded()
+            }
+            session?.rebalanceResidence()
+            return webViewIfLive()
+        }
+    }
+
     func restoreIfNeeded() {
         guard !restored else { return }
         let url = address.isEmpty ? nil : URL(string: address)

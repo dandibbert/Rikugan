@@ -134,7 +134,11 @@ extension BrowserSession {
         context.hasAccessToPrivateData = false
         context.unsupportedAPIs = [
             "runtime.sendNativeMessage", "runtime.connectNative",
-            "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand"
+            "debugger", "debugger.attach", "debugger.detach", "debugger.sendCommand",
+            "webRequest", "webRequest.onBeforeRequest", "webRequest.onBeforeSendHeaders",
+            "webRequest.onHeadersReceived", "webRequest.onAuthRequired", "webRequest.onResponseStarted",
+            "webRequest.onCompleted", "webRequest.onErrorOccurred",
+            "scripting.registerContentScripts", "scripting.unregisterContentScripts", "scripting.getRegisteredContentScripts"
         ]
         ExtensionBridge.attach(to: context.webViewConfiguration.userContentController, handler: extensionPageBridge)
         for permission in record.allowedPermissions { context.setPermissionStatus(.grantedExplicitly, for: WKWebExtension.Permission(rawValue: permission)) }
@@ -376,20 +380,49 @@ extension BrowserTab: WKWebExtensionTab {
     func isSelected(for context: WKWebExtensionContext) -> Bool { session?.selectedID == id }
     func size(for context: WKWebExtensionContext) -> CGSize { webViewIfLive()?.bounds.size ?? .zero }
     func zoomFactor(for context: WKWebExtensionContext) -> Double { webViewIfLive()?.pageZoom ?? 1 }
-    func setZoomFactor(_ zoomFactor: Double, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { webView.pageZoom = min(5, max(0.25, zoomFactor)); completionHandler(nil) }
+    func setZoomFactor(_ zoomFactor: Double, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
+        let factor = min(5, max(0.25, zoomFactor))
+        prepareExtensionNavigation(.zoom)?.pageZoom = factor
+        completionHandler(nil)
+    }
     func activate(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { session?.select(self); completionHandler(nil) }
     func setSelected(_ selected: Bool, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { if selected { session?.select(self) }; completionHandler(nil) }
     func loadURL(_ url: URL, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { navigate(url); completionHandler(nil) }
-    func reload(fromOrigin: Bool, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { if fromOrigin { webView.reloadFromOrigin() } else { webView.reload() }; completionHandler(nil) }
-    func goBack(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { webView.goBack(); completionHandler(nil) }
-    func goForward(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { webView.goForward(); completionHandler(nil) }
+    func reload(fromOrigin: Bool, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
+        switch extensionEffect(.reload) {
+        case .navigateSavedURL:
+            _ = prepareExtensionNavigation(.reload)
+        case .restoreInteractionThenPerform, .performOnLiveView:
+            if let view = prepareExtensionNavigation(.reload) {
+                if fromOrigin { view.reloadFromOrigin() } else { view.reload() }
+            }
+        case .skipSnapshot, .duplicateSavedURL:
+            break
+        }
+        completionHandler(nil)
+    }
+    func goBack(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
+        prepareExtensionNavigation(.back)?.goBack()
+        completionHandler(nil)
+    }
+    func goForward(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
+        prepareExtensionNavigation(.forward)?.goForward()
+        completionHandler(nil)
+    }
     func close(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) { session?.close(self); completionHandler(nil) }
     func duplicate(using configuration: WKWebExtension.TabConfiguration, for context: WKWebExtensionContext,
                    completionHandler: @escaping ((any WKWebExtensionTab)?, Error?) -> Void) {
-        completionHandler(session?.addTab(url: webView.url, activate: configuration.shouldBeActive), nil)
+        let url = webViewIfLive()?.url ?? ExtensionTabPolicy.savedURL(address)
+        completionHandler(session?.addTab(url: url, activate: configuration.shouldBeActive), nil)
     }
     func takeSnapshot(using configuration: WKSnapshotConfiguration, for context: WKWebExtensionContext,
-                      completionHandler: @escaping (UIImage?, Error?) -> Void) { webView.takeSnapshot(with: configuration, completionHandler: completionHandler) }
+                      completionHandler: @escaping (UIImage?, Error?) -> Void) {
+        guard extensionEffect(.snapshot) == .performOnLiveView, let view = webViewIfLive() else {
+            completionHandler(nil, nil)
+            return
+        }
+        view.takeSnapshot(with: configuration, completionHandler: completionHandler)
+    }
     func shouldGrantPermissionsOnUserGesture(for context: WKWebExtensionContext) -> Bool { true }
     func shouldBypassPermissions(for context: WKWebExtensionContext) -> Bool { false }
 }

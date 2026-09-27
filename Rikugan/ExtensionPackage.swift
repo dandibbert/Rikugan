@@ -19,7 +19,7 @@ enum ChromeAPIMatrix {
         .init(api: "notifications", level: "Partial", note: "扩展脚本调用 chrome.notifications.create、update、clear、getAll、getPermissionLevel。create 与 update 写入通知记录、App 内列表，并提交 UNUserNotificationCenter。getPermissionLevel 在系统通知已授权时返回 granted，未授权或被拒绝时返回 denied。按钮保存在记录上。点按列表行触发 onClicked，点按按钮触发 onButtonClicked，滑掉一行或 clear 触发 onClosed，点「通知设置」触发 onShowSettings。后台轮询取回这些事件。iconUrl 和 imageUrl 从扩展包相对路径、扩展 URL 或 https 图片读取，显示在列表行上，并在系统允许时作为 UNNotificationAttachment。progress 保存 0 到 100 并显示在列表行上，update 会改它；系统通知本身没有进度条。列表行出现时，以及系统通知提交成功时，都会通过轮询触发 onShown。系统通知本身不能深链按钮。"),
         .init(api: "webNavigation", level: "Partial", note: "只覆盖 WebKit 实际发出的导航事件。"),
         .init(api: "declarativeNetRequest", level: "Partial", note: "扩展自带静态规则由 WebKit 执行，block 可以生效。Rikugan 不实现 redirect、modifyHeaders，也不调用私有 WebKit API。广告拦截是另一套引擎。"),
-        .init(api: "webRequest", level: "Unsupported", note: "没有 chrome.webRequest。不能在请求发出前同步改头或观察完整请求体。"),
+        .init(api: "webRequest", level: "Unsupported", note: "chrome.webRequest 的 blocking 事件会拒绝为 Unsupported，并列入 unsupportedAPIs。不能在请求发出前同步改头或观察完整请求体。"),
         .init(api: "debugger", level: "Unsupported", note: "已列入 unsupportedAPIs。不暴露 chrome.debugger，也不使用私有 WebKit 检查器 API。"),
         .init(api: "nativeMessaging", level: "Unsupported", note: "runtime.sendNativeMessage 与 connectNative 已列入 unsupportedAPIs。")
     ]
@@ -34,14 +34,14 @@ enum ChromeAPIMatrix {
         .init(api: "storage", name: "session", level: "Partial", note: "走 WebKit 的 session 区域。"),
         .init(api: "scripting", name: "executeScript", level: "Partial", note: "css/func/code/files、world、tabId、allFrames、frameIds。不是完整 chrome.scripting。"),
         .init(api: "scripting", name: "insertCSS", level: "Partial", note: "写入页面 CSSOM，接受 world。"),
-        .init(api: "scripting", name: "registerContentScripts", level: "Unsupported", note: "没有动态注册 content script 的实现。"),
+        .init(api: "scripting", name: "registerContentScripts", level: "Unsupported", note: "调用 registerContentScripts、unregisterContentScripts、getRegisteredContentScripts 会拒绝为 Unsupported: scripting.registerContentScripts（以及对应方法名），并列入 unsupportedAPIs。不会动态注册 content script。"),
         .init(api: "tabs", name: "query", level: "Supported", note: "返回当前窗口里 WebKit 能看到的标签。"),
         .init(api: "tabs", name: "get", level: "Supported", note: "按标签取 URL、标题和加载状态。暂停的标签没有 live WKWebView，URL 来自保存的地址。"),
         .init(api: "tabs", name: "create", level: "Supported", note: "openNewTabUsing。"),
         .init(api: "tabs", name: "update", level: "Partial", note: "可以激活和加载 URL。不保证改写全部 Chrome update 字段。"),
         .init(api: "tabs", name: "remove", level: "Supported", note: "关闭对应标签，不退出 App。"),
-        .init(api: "tabs", name: "reload", level: "Supported", note: "重新请求当前 URL。进程被系统杀掉后不会恢复 JS 堆。"),
-        .init(api: "tabs", name: "captureVisibleTab", level: "Partial", note: "只对仍有 WKWebView 的标签截图。"),
+        .init(api: "tabs", name: "reload", level: "Supported", note: "暂停且没有 interactionState 时加载保存的 URL。有 interactionState 时先恢复再 reload。进程被系统杀掉后重新加载保存的 URL，不恢复 JS 堆。不会对空白 WKWebView 调用 reload。"),
+        .init(api: "tabs", name: "captureVisibleTab", level: "Partial", note: "只对仍有 WKWebView 的标签截图。没有 live web view 时返回空图，不挂载空白视图，也不把标签标成 liveBackground。"),
         .init(api: "permissions", name: "contains", level: "Partial", note: "安装和可选权限会再问用户。不伪造已授权。"),
         .init(api: "permissions", name: "request", level: "Partial", note: "WebKit 的权限提示回调到确认框。"),
         .init(api: "action", name: "onClicked", level: "Partial", note: "工具栏按钮走 performAction。没有浏览器 action 时由 WebKit 打开 popup。"),
@@ -52,7 +52,7 @@ enum ChromeAPIMatrix {
         .init(api: "declarativeNetRequest", name: "静态 block", level: "Partial", note: "扩展包里的 block 规则由 WebKit 执行。已有 block 测试不能被改坏。"),
         .init(api: "declarativeNetRequest", name: "redirect", level: "Unsupported", note: "公共 API 不能把网络规则变成真实 HTTP 2xx 重定向。"),
         .init(api: "declarativeNetRequest", name: "modifyHeaders", level: "Unsupported", note: "不能在 WKWebView 公共 API 上改请求头或响应头。"),
-        .init(api: "webRequest", name: "onBeforeRequest", level: "Unsupported", note: "没有 blocking webRequest。"),
+        .init(api: "webRequest", name: "onBeforeRequest", level: "Unsupported", note: "调用会拒绝为 Unsupported: webRequest.onBeforeRequest，并列入 unsupportedAPIs。没有 blocking webRequest。"),
         .init(api: "debugger", name: "attach", level: "Unsupported", note: "不暴露 debugger，也不使用私有检查器 API。")
     ]
     static func additions(old: [String], new: [String]) -> [String] {
