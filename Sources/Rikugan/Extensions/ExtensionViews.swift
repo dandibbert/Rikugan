@@ -23,12 +23,14 @@ struct ExtensionManagerView: View {
                         .accessibilityIdentifier("extension-\(record.name)")
                 }
             }
-            Section("安装") {
+            Section {
                 Button { importKind = .extensionPackage } label: { Label("导入 ZIP / CRX", systemImage: "doc.zipper") }
                 Button { importKind = .extensionFolder } label: { Label("导入解压后的文件夹", systemImage: "folder") }
                 Button { openStore("https://chromewebstore.google.com/") } label: { Label("打开 Chrome 应用商店", systemImage: "bag") }
                 Button { openStore("https://microsoftedge.microsoft.com/addons/") } label: { Label("打开 Edge 加载项", systemImage: "bag") }
                 Button { storeLink = ""; askStoreLink = true } label: { Label("通过商店链接或扩展 ID 安装", systemImage: "link") }
+            } header: {
+                Text("安装")
             } footer: {
                 Text("商店会在新标签页打开。商店自己的“添加 / 获取”按钮在 iPhone 上不可用（Chrome 提示仅限桌面，Edge 按钮为灰色）：打开扩展详情页后，使用页面顶部 Rikugan 的“安装到 Rikugan”栏。")
             }
