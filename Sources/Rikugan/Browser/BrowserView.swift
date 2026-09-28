@@ -251,11 +251,11 @@ struct StoreInstallBanner: View {
     @EnvironmentObject private var runtime: ExtensionRuntime
     var body: some View {
         let installed = runtime.records.contains { $0.id == item.extensionID }
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: "puzzlepiece.extension.fill").foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 1) {
                 Text(installed ? "已安装到 Rikugan" : "安装到 Rikugan").font(.subheadline.weight(.semibold))
-                Text("商店页面上的“添加 / 获取”按钮在 iPhone 上不可用，请用这里安装").font(.caption2).foregroundStyle(.secondary)
+                Text("商店页面上的“添加 / 获取”按钮在 iPhone 上不可用，请用这里安装").font(.footnote).foregroundStyle(.secondary)
             }
             Spacer()
             if installer.busy != nil {
@@ -266,8 +266,18 @@ struct StoreInstallBanner: View {
                     .accessibilityIdentifier("store-install")
             }
         }
-        .padding(10)
-        .background(.regularMaterial)
+        .pageBanner()
+    }
+}
+
+extension View {
+    /// Shared look for the strips shown between the toolbar and the page.
+    func pageBanner() -> some View {
+        self.font(.subheadline)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(.regularMaterial)
+            .overlay(alignment: .bottom) { Divider() }
     }
 }
 
@@ -277,30 +287,32 @@ struct TranslationBanner: View {
         switch tab.translation {
         case .idle: EmptyView()
         case .translating(let progress):
-            HStack {
+            HStack(spacing: 12) {
                 ProgressView(value: progress).frame(width: 80)
-                Text("正在翻译…").font(.footnote)
+                Text("正在翻译…")
                 Spacer()
-                Button("停止") { TranslationCoordinator.stop(tab) }.font(.footnote)
+                Button("停止") { TranslationCoordinator.stop(tab) }
             }
-            .padding(8).background(.regularMaterial)
+            .pageBanner()
         case .translated(let showingOriginal):
-            HStack {
-                Image(systemName: "character.bubble")
-                Text(showingOriginal ? "正在显示原文" : "已翻译为\(TranslationLanguage.name(for: AppServices.shared.prefs.translationTargetLanguage))").font(.footnote)
+            HStack(spacing: 12) {
+                Image(systemName: "character.bubble").foregroundStyle(.tint)
+                Text(showingOriginal ? "正在显示原文" : "已翻译为\(TranslationLanguage.name(for: AppServices.shared.prefs.translationTargetLanguage))")
                 Spacer()
-                Button(showingOriginal ? "显示译文" : "显示原文") { TranslationCoordinator.toggleOriginal(tab) }.font(.footnote)
-                Button { TranslationCoordinator.stop(tab) } label: { Image(systemName: "xmark") }.font(.footnote)
+                Button(showingOriginal ? "显示译文" : "显示原文") { TranslationCoordinator.toggleOriginal(tab) }
+                Button { TranslationCoordinator.stop(tab) } label: { Image(systemName: "xmark") }
+                    .foregroundStyle(.secondary).accessibilityLabel("关闭")
             }
-            .padding(8).background(.regularMaterial)
+            .pageBanner()
         case .failed(let message):
-            HStack {
-                Image(systemName: "exclamationmark.triangle")
-                Text(message).font(.footnote).lineLimit(2)
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text(message).lineLimit(2)
                 Spacer()
-                Button { tab.translation = .idle } label: { Image(systemName: "xmark") }.font(.footnote)
+                Button { tab.translation = .idle } label: { Image(systemName: "xmark") }
+                    .foregroundStyle(.secondary).accessibilityLabel("关闭")
             }
-            .padding(8).background(.regularMaterial)
+            .pageBanner()
         }
     }
 }
