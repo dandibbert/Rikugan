@@ -17,7 +17,7 @@ public enum ToolbarAction: String, Codable, CaseIterable, Identifiable {
          share, bookmarks, privateTab, images, extensions, elementPicker
     // Navigation / app actions usable as bottom-toolbar buttons, long-press actions and gestures.
     case back, forward, tabSwitcher, pageMenu, home, downloads, history, settings, addBookmark, scrollToTop,
-         reopenClosedTab, nextTab, previousTab, webTools, none
+         reopenClosedTab, nextTab, previousTab, none
     public var id: String { rawValue }
 
     /// Actions that make sense as a quick-action / long-press / gesture target.
