@@ -96,6 +96,8 @@
     },
   });
   const unsupportedNamespace = (ns) => guarded(ns, {});
+  // chrome.tts.speak({onEvent}) callbacks, keyed by utterance id (events arrive as 'tts._event').
+  const ttsCallbacks = new Map();
 
   // ---- Messaging --------------------------------------------------------------------------------
   const portsById = new Map();
@@ -323,6 +325,7 @@
       goForward: call('tabs.goForward'),
       captureVisibleTab: call('tabs.captureVisibleTab'),
       detectLanguage: call('tabs.detectLanguage'),
+      move: call('tabs.move'), discard: call('tabs.discard'), highlight: call('tabs.highlight'),
       getZoom: api(async () => 1),
       getZoomSettings: api(async () => ({ mode: 'automatic', scope: 'per-origin', defaultZoomFactor: 1 })),
       sendMessage: api(async (tabId, message, options) => {
@@ -447,14 +450,15 @@
     });
     chrome.cookies = guarded('cookies', {
       get: call('cookies.get'), getAll: call('cookies.getAll'), set: call('cookies.set'), remove: call('cookies.remove'),
-      getAllCookieStores: call('cookies.getAllCookieStores'), onChanged: unsupportedEvent('cookies.onChanged'),
+      getAllCookieStores: call('cookies.getAllCookieStores'), onChanged: ev('cookies.onChanged'),
       SameSiteStatus: { NO_RESTRICTION: 'no_restriction', LAX: 'lax', STRICT: 'strict', UNSPECIFIED: 'unspecified' },
     });
     chrome.downloads = guarded('downloads', {
       download: call('downloads.download'), search: call('downloads.search'), pause: call('downloads.pause'), resume: call('downloads.resume'),
       cancel: call('downloads.cancel'), open: call('downloads.open'), show: call('downloads.show'), erase: call('downloads.erase'),
       showDefaultFolder: api(async () => undefined), setUiOptions: api(async () => undefined),
-      onCreated: unsupportedEvent('downloads.onCreated'), onChanged: ev('downloads.onChanged'), onErased: unsupportedEvent('downloads.onErased'),
+      removeFile: call('downloads.removeFile'), getFileIcon: call('downloads.getFileIcon'),
+      onCreated: ev('downloads.onCreated'), onChanged: ev('downloads.onChanged'), onErased: ev('downloads.onErased'),
     });
     chrome.notifications = guarded('notifications', {
       create: api(async (...args) => {
@@ -494,6 +498,99 @@
       ResourceType: { MAIN_FRAME: 'main_frame', SUB_FRAME: 'sub_frame', STYLESHEET: 'stylesheet', SCRIPT: 'script', IMAGE: 'image', FONT: 'font', OBJECT: 'object', XMLHTTPREQUEST: 'xmlhttprequest', PING: 'ping', CSP_REPORT: 'csp_report', MEDIA: 'media', WEBSOCKET: 'websocket', WEBTRANSPORT: 'webtransport', WEBBUNDLE: 'webbundle', OTHER: 'other' },
       DomainType: { FIRST_PARTY: 'firstParty', THIRD_PARTY: 'thirdParty' },
     });
+    // ---- identity ------------------------------------------------------------------------------
+    // Web auth flows (OAuth / OpenID) work; Chrome-account tokens do not exist on iOS.
+    chrome.identity = guarded('identity', {
+      getRedirectURL: (path) => 'https://' + cfg.extId + '.chromiumapp.org/' + String(path || '').replace(/^\//, ''),
+      launchWebAuthFlow: call('identity.launchWebAuthFlow'),
+      getProfileUserInfo: api(async () => ({ email: '', id: '' })),
+      removeCachedAuthToken: api(async () => undefined),
+      clearAllCachedAuthTokens: api(async () => undefined),
+      getAuthToken: unsupportedFn('identity.getAuthToken'),
+      getAccounts: unsupportedFn('identity.getAccounts'),
+      onSignInChanged: ev('identity.onSignInChanged'),
+      AccountStatus: { SYNC: 'SYNC', ANY: 'ANY' },
+    });
+
+    // ---- history / bookmarks / topSites / sessions / search -------------------------------------
+    chrome.history = guarded('history', {
+      search: call('history.search'), getVisits: call('history.getVisits'), addUrl: call('history.addUrl'),
+      deleteUrl: call('history.deleteUrl'), deleteRange: call('history.deleteRange'), deleteAll: call('history.deleteAll'),
+      onVisited: ev('history.onVisited'), onVisitRemoved: ev('history.onVisitRemoved'),
+      TransitionType: { LINK: 'link', TYPED: 'typed', AUTO_BOOKMARK: 'auto_bookmark', AUTO_SUBFRAME: 'auto_subframe', MANUAL_SUBFRAME: 'manual_subframe', GENERATED: 'generated', AUTO_TOPLEVEL: 'auto_toplevel', FORM_SUBMIT: 'form_submit', RELOAD: 'reload', KEYWORD: 'keyword', KEYWORD_GENERATED: 'keyword_generated' },
+    });
+    chrome.bookmarks = guarded('bookmarks', {
+      MAX_WRITE_OPERATIONS_PER_HOUR: 1000000, MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE: 1000000,
+      get: call('bookmarks.get'), getChildren: call('bookmarks.getChildren'), getRecent: call('bookmarks.getRecent'),
+      getTree: call('bookmarks.getTree'), getSubTree: call('bookmarks.getSubTree'), search: call('bookmarks.search'),
+      create: call('bookmarks.create'), move: call('bookmarks.move'), update: call('bookmarks.update'),
+      remove: call('bookmarks.remove'), removeTree: call('bookmarks.removeTree'),
+      onCreated: ev('bookmarks.onCreated'), onRemoved: ev('bookmarks.onRemoved'), onChanged: ev('bookmarks.onChanged'),
+      onMoved: ev('bookmarks.onMoved'), onChildrenReordered: ev('bookmarks.onChildrenReordered'),
+      onImportBegan: ev('bookmarks.onImportBegan'), onImportEnded: ev('bookmarks.onImportEnded'),
+      FolderType: { BOOKMARKS_BAR: 'bookmarks-bar', OTHER: 'other', MOBILE: 'mobile', MANAGED: 'managed' },
+    });
+    chrome.topSites = guarded('topSites', { get: call('topSites.get') });
+    chrome.sessions = guarded('sessions', {
+      MAX_SESSION_RESULTS: 25,
+      getRecentlyClosed: call('sessions.getRecentlyClosed'), restore: call('sessions.restore'),
+      getDevices: api(async () => []), onChanged: ev('sessions.onChanged'),
+    });
+    chrome.search = guarded('search', {
+      query: call('search.query'),
+      Disposition: { CURRENT_TAB: 'CURRENT_TAB', NEW_TAB: 'NEW_TAB', NEW_WINDOW: 'NEW_WINDOW' },
+    });
+
+    // ---- tts ------------------------------------------------------------------------------------
+    chrome.tts = guarded('tts', {
+      speak: api(async (utterance, options) => {
+        const opts = Object.assign({}, options || {});
+        let id = null;
+        if (typeof opts.onEvent === 'function') { id = uuid(); ttsCallbacks.set(id, opts.onEvent); }
+        delete opts.onEvent;
+        await bridge('tts.speak', { args: [String(utterance), jsonable(opts), id] });
+      }),
+      stop: () => { bridge('tts.stop', { args: [] }).catch(() => {}); },
+      pause: () => { bridge('tts.pause', { args: [] }).catch(() => {}); },
+      resume: () => { bridge('tts.resume', { args: [] }).catch(() => {}); },
+      isSpeaking: call('tts.isSpeaking'), getVoices: call('tts.getVoices'),
+      onVoicesChanged: ev('tts.onVoicesChanged'),
+      EventType: { START: 'start', END: 'end', WORD: 'word', SENTENCE: 'sentence', MARKER: 'marker', INTERRUPTED: 'interrupted', CANCELLED: 'cancelled', ERROR: 'error', PAUSE: 'pause', RESUME: 'resume' },
+    });
+
+    // ---- management -----------------------------------------------------------------------------
+    chrome.management = guarded('management', {
+      getSelf: call('management.getSelf'), get: call('management.get'), getAll: call('management.getAll'),
+      getPermissionWarningsById: call('management.getPermissionWarningsById'),
+      getPermissionWarningsByManifest: call('management.getPermissionWarningsByManifest'),
+      setEnabled: call('management.setEnabled'), uninstall: call('management.uninstall'), uninstallSelf: call('management.uninstallSelf'),
+      launchApp: unsupportedFn('management.launchApp'), createAppShortcut: unsupportedFn('management.createAppShortcut'),
+      setLaunchType: unsupportedFn('management.setLaunchType'), generateAppForLink: unsupportedFn('management.generateAppForLink'),
+      onInstalled: ev('management.onInstalled'), onUninstalled: ev('management.onUninstalled'),
+      onEnabled: ev('management.onEnabled'), onDisabled: ev('management.onDisabled'),
+      ExtensionType: { EXTENSION: 'extension', HOSTED_APP: 'hosted_app', PACKAGED_APP: 'packaged_app', LEGACY_PACKAGED_APP: 'legacy_packaged_app', THEME: 'theme', LOGIN_SCREEN_EXTENSION: 'login_screen_extension' },
+      ExtensionInstallType: { ADMIN: 'admin', DEVELOPMENT: 'development', NORMAL: 'normal', SIDELOAD: 'sideload', OTHER: 'other' },
+    });
+
+    // ---- browsingData ---------------------------------------------------------------------------
+    const removeOne = (key) => api(async (options) => bridge('browsingData.remove', { args: [options || {}, { [key]: true }] }));
+    chrome.browsingData = guarded('browsingData', {
+      remove: call('browsingData.remove'), settings: call('browsingData.settings'),
+      removeAppcache: removeOne('appcache'), removeCache: removeOne('cache'), removeCacheStorage: removeOne('cacheStorage'),
+      removeCookies: removeOne('cookies'), removeDownloads: removeOne('downloads'), removeFileSystems: removeOne('fileSystems'),
+      removeHistory: removeOne('history'), removeIndexedDB: removeOne('indexedDB'), removeLocalStorage: removeOne('localStorage'),
+      removeServiceWorkers: removeOne('serviceWorkers'), removeWebSQL: removeOne('webSQL'),
+      removeFormData: unsupportedFn('browsingData.removeFormData'), removePasswords: unsupportedFn('browsingData.removePasswords'),
+      removePluginData: unsupportedFn('browsingData.removePluginData'),
+    });
+
+    // ---- idle -----------------------------------------------------------------------------------
+    chrome.idle = guarded('idle', {
+      queryState: call('idle.queryState'), setDetectionInterval: (seconds) => { bridge('idle.setDetectionInterval', { args: [seconds] }).catch(() => {}); },
+      getAutoLockDelay: unsupportedFn('idle.getAutoLockDelay'), onStateChanged: ev('idle.onStateChanged'),
+      IdleState: { ACTIVE: 'active', IDLE: 'idle', LOCKED: 'locked' },
+    });
+
     chrome.alarms = guarded('alarms', {
       create: api(async (...args) => { const name = typeof args[0] === 'string' ? args.shift() : ''; return bridge('alarms.create', { args: [name, args[0] || {}] }); }),
       get: call('alarms.get'), getAll: call('alarms.getAll'), clear: call('alarms.clear'), clearAll: call('alarms.clearAll'),
@@ -511,6 +608,14 @@
   const internal = {
     extId: cfg.extId,
     dispatch(name, args) {
+      if (name === 'tts._event') {
+        const [id, event] = args || [];
+        const cb = ttsCallbacks.get(id);
+        if (!cb) return false;
+        if (['end', 'interrupted', 'cancelled', 'error'].includes(event && event.type)) ttsCallbacks.delete(id);
+        try { cb(event); } catch (e) { console.error('[tts.onEvent]', e); }
+        return true;
+      }
       const e = events.get(name);
       if (name.startsWith('storage.') && name.endsWith('.onChanged') && Array.isArray(args)) {
         const changes = {};

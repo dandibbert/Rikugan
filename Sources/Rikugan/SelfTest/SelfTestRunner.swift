@@ -144,7 +144,7 @@ import WebKit
         ctx.record("测试页面加载", tab.webView?.url?.path == "/index.html")
         // Wait for every asynchronous result to be reported by the page (no fixed delay).
         let expected = ["data-cs-start", "data-cs-end", "data-messaging", "data-port", "data-storage", "data-scripting", "data-scripting-result",
-                        "data-permissions", "data-bg-storage", "data-to-content", "data-unsupported", "data-us", "data-gm-storage", "data-gmxhr", "data-unsafe-window"]
+                        "data-permissions", "data-bg-storage", "data-to-content", "data-extras", "data-unsupported", "data-us", "data-gm-storage", "data-gmxhr", "data-unsafe-window"]
         _ = await ctx.waitUntil(15) { let a = await ctx.attrs(tab); return expected.allSatisfy { a[$0] != nil } }
         var snapshot = await ctx.attrs(tab)
         let styles = await ctx.eval(tab, """
@@ -172,6 +172,8 @@ import WebKit
         ctx.record("Test 8 DNR 屏蔽测试资源", !ctx.server.requested("/blocked.js") && snapshot["pageScript"] == "true",
                    "blocked.js requested=\(ctx.server.requested("/blocked.js"))")
         check("data-unsupported", "未实现 API 返回 Unsupported API")
+        check("data-extras", "chrome.identity / bookmarks / history / topSites / management",
+              expected: "redirect,token,bookmarks,history,topsites,management")
         check("data-us", "用户脚本 @match 注入", expected: "ran")
         check("data-gm-storage", "GM storage")
         check("data-gmxhr", "GM_xmlhttpRequest")

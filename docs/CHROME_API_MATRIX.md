@@ -11,12 +11,12 @@
 | `chrome.runtime` | ✅ Supported | 18/22 | Messaging, ports, lifecycle events and manifest/URL helpers work in content scripts, popup, options and the background runtime. |
 | `chrome.storage` | ✅ Supported | 17/17 | Per-extension native storage (not page localStorage). |
 | `chrome.scripting` | ✅ Supported | 7/7 | Runs in the extension's isolated WKContentWorld or the page world (MAIN). |
-| `chrome.tabs` | 🟡 Partial | 28/35 | Core tab control works; tab moving, discarding, zoom and groups are not available. |
+| `chrome.tabs` | 🟡 Partial | 31/35 | Core tab control works; tab moving, discarding, zoom and groups are not available. |
 | `chrome.permissions` | ✅ Supported | 6/7 | Optional permissions and host permissions with a user prompt. |
 | `chrome.action` | ✅ Supported | 17/17 | Toolbar button with popup, badge, title and icon (per tab or global). |
 | `chrome.contextMenus` | 🟡 Partial | 5/5 | Items appear in the link long-press menu and the page menu. |
-| `chrome.cookies` | 🟡 Partial | 5/6 | Reads and writes the profile's WKHTTPCookieStore; requires host permissions. |
-| `chrome.downloads` | 🟡 Partial | 11/15 | Uses Rikugan's download manager. |
+| `chrome.cookies` | 🟡 Partial | 6/6 | Reads and writes the profile's WKHTTPCookieStore; requires host permissions. |
+| `chrome.downloads` | 🟡 Partial | 15/15 | Uses Rikugan's download manager. |
 | `chrome.webNavigation` | 🟡 Partial | 9/11 | Main-frame navigation events from WKNavigationDelegate; sub-frame navigations are not observable. |
 | `chrome.declarativeNetRequest` | 🟡 Partial | 10/14 | Rules are compiled to WKContentRuleList. WebKit evaluates rules by list order, not DNR priority. |
 | `chrome.webRequest` | ⛔ Unsupported | 0/10 | WKWebView's public API cannot observe or intercept arbitrary network requests. Rikugan does not use private WebKit API. |
@@ -26,8 +26,8 @@
 | `chrome.windows` | 🟡 Partial | 9/10 | Each browser window (scene) is a chrome window. |
 | `chrome.commands` | 🟡 Partial | 2/2 | No global keyboard shortcuts on iOS. |
 | `chrome.extension` | 🟡 Partial | 5/5 | Legacy helpers. |
-| `chrome.bookmarks` | ⛔ Unsupported | — |  |
-| `chrome.browsingData` | ⛔ Unsupported | — |  |
+| `chrome.bookmarks` | ✅ Supported | 16/16 | Backed by Rikugan's bookmarks; the root (id "0") contains the top-level bookmarks and the Favorites folder (folderType bookmarks-bar). |
+| `chrome.browsingData` | 🟡 Partial | 13/16 | Clears this profile's website data, history and download list. |
 | `chrome.contentSettings` | ⛔ Unsupported | — |  |
 | `chrome.debugger` | ⛔ Unsupported | — | No DevTools protocol in WKWebView |
 | `chrome.declarativeContent` | ⛔ Unsupported | — |  |
@@ -35,25 +35,25 @@
 | `chrome.enterprise` | ⛔ Unsupported | — |  |
 | `chrome.fontSettings` | 🟡 Partial | 1/17 | getFontList returns the system, profile-installed and imported font families; per-page font settings are Rikugan's web-font feature. |
 | `chrome.gcm` | ⛔ Unsupported | — |  |
-| `chrome.history` | ⛔ Unsupported | — |  |
-| `chrome.identity` | ⛔ Unsupported | — |  |
-| `chrome.idle` | ⛔ Unsupported | — |  |
-| `chrome.management` | ⛔ Unsupported | — |  |
+| `chrome.history` | 🟡 Partial | 8/8 | Backed by Rikugan's browsing history (private tabs are never recorded). |
+| `chrome.identity` | 🟡 Partial | 6/8 | launchWebAuthFlow works for OAuth / OpenID providers; there is no Chrome (Google) account sign-in on iOS. |
+| `chrome.idle` | 🟡 Partial | 3/4 | Only input inside Rikugan is observed. |
+| `chrome.management` | 🟡 Partial | 12/16 | Extensions installed in Rikugan; no apps or themes. |
 | `chrome.offscreen` | ⛔ Unsupported | — |  |
 | `chrome.power` | ⛔ Unsupported | — |  |
 | `chrome.privacy` | ⛔ Unsupported | — |  |
 | `chrome.proxy` | ⛔ Unsupported | — |  |
 | `chrome.readingList` | ⛔ Unsupported | — |  |
-| `chrome.search` | ⛔ Unsupported | — |  |
-| `chrome.sessions` | ⛔ Unsupported | — |  |
+| `chrome.search` | ✅ Supported | 1/1 | Uses the search engine chosen in Settings. |
+| `chrome.sessions` | 🟡 Partial | 4/4 | Recently closed tabs of this device. |
 | `chrome.sidePanel` | ⛔ Unsupported | — | No side panel UI |
 | `chrome.system` | ⛔ Unsupported | — |  |
 | `chrome.tabGroups` | ⛔ Unsupported | — | Rikugan tab groups are not exposed to extensions yet. |
-| `chrome.topSites` | ⛔ Unsupported | — |  |
-| `chrome.tts` | ⛔ Unsupported | — |  |
+| `chrome.topSites` | ✅ Supported | 1/1 | Most visited sites from Rikugan's history (the same list as the start page). |
+| `chrome.tts` | 🟡 Partial | 7/7 | System speech synthesis (AVSpeechSynthesizer). |
 | `chrome.userScripts` | ⛔ Unsupported | — | Use Rikugan's built-in userscript manager |
 
-方法合计：✅ 109 · 🟡 59 · ⛔ 50
+方法合计：✅ 170 · 🟡 77 · ⛔ 52
 
 ## chrome.runtime — ✅ Supported
 
@@ -148,7 +148,7 @@ Core tab control works; tab moving, discarding, zoom and groups are not availabl
 | `connect` | ✅ Supported | JS shim | Implemented through the runtime port router |
 | `create` | ✅ Supported | 原生桥 |  |
 | `detectLanguage` | ✅ Supported | 原生桥 |  |
-| `discard` | ⛔ Unsupported | — |  |
+| `discard` | ✅ Supported | 原生桥 | Suspends the tab's web view; the active tab cannot be discarded |
 | `duplicate` | ✅ Supported | 原生桥 |  |
 | `executeScript` | 🟡 Partial | JS shim | MV2 compatibility wrapper around scripting.executeScript |
 | `get` | ✅ Supported | 原生桥 |  |
@@ -158,9 +158,9 @@ Core tab control works; tab moving, discarding, zoom and groups are not availabl
 | `goBack` | ✅ Supported | 原生桥 |  |
 | `goForward` | ✅ Supported | 原生桥 |  |
 | `group` | ⛔ Unsupported | — |  |
-| `highlight` | ⛔ Unsupported | — |  |
+| `highlight` | 🟡 Partial | 原生桥 | Single selection: the first index becomes the active tab |
 | `insertCSS` | 🟡 Partial | JS shim | MV2 compatibility wrapper around scripting.insertCSS |
-| `move` | ⛔ Unsupported | — |  |
+| `move` | 🟡 Partial | 原生桥 | Within the tab's own window only |
 | `query` | ✅ Supported | 原生桥 | active, currentWindow, lastFocusedWindow, windowId, url, title, status, pinned, index |
 | `reload` | ✅ Supported | 原生桥 |  |
 | `remove` | ✅ Supported | 原生桥 |  |
@@ -174,7 +174,7 @@ Core tab control works; tab moving, discarding, zoom and groups are not availabl
 | `onCreated` | ✅ Supported | JS shim |  |
 | `onDetached` | 🟡 Partial | JS shim | Never fires |
 | `onHighlighted` | 🟡 Partial | JS shim | Never fires |
-| `onMoved` | 🟡 Partial | JS shim | Never fires |
+| `onMoved` | 🟡 Partial | JS shim | Fired for chrome.tabs.move only |
 | `onRemoved` | ✅ Supported | JS shim |  |
 | `onReplaced` | 🟡 Partial | JS shim | Never fires |
 | `onUpdated` | 🟡 Partial | JS shim | status / url / title changes only |
@@ -252,7 +252,7 @@ Reads and writes the profile's WKHTTPCookieStore; requires host permissions.
 | `getAllCookieStores` | 🟡 Partial | 原生桥 | Single store '0' |
 | `remove` | ✅ Supported | 原生桥 |  |
 | `set` | ✅ Supported | 原生桥 |  |
-| `onChanged` | ⛔ Unsupported | — | WKHTTPCookieStore observer changes are not forwarded |
+| `onChanged` | 🟡 Partial | JS shim | Computed by diffing the cookie store on each WebKit change notification; cause is explicit / overwrite / expired |
 
 ## chrome.downloads — 🟡 Partial
 
@@ -267,18 +267,18 @@ Uses Rikugan's download manager.
 | `cancel` | ✅ Supported | 原生桥 |  |
 | `download` | 🟡 Partial | 原生桥 | url, filename, headers |
 | `erase` | ✅ Supported | 原生桥 |  |
-| `getFileIcon` | ⛔ Unsupported | — |  |
+| `getFileIcon` | 🟡 Partial | 原生桥 | Generic file-type symbol, not the system file icon |
 | `open` | ✅ Supported | 原生桥 |  |
 | `pause` | ✅ Supported | 原生桥 |  |
-| `removeFile` | ⛔ Unsupported | — |  |
+| `removeFile` | ✅ Supported | 原生桥 |  |
 | `resume` | ✅ Supported | 原生桥 |  |
 | `search` | 🟡 Partial | 原生桥 | id and state filters only |
 | `setUiOptions` | 🟡 Partial | JS shim | No-op |
 | `show` | 🟡 Partial | 原生桥 | Opens the file preview |
 | `showDefaultFolder` | 🟡 Partial | JS shim | No-op |
 | `onChanged` | 🟡 Partial | JS shim | Fired on completion only |
-| `onCreated` | ⛔ Unsupported | — | Not fired |
-| `onErased` | ⛔ Unsupported | — | Not fired |
+| `onCreated` | ✅ Supported | JS shim |  |
+| `onErased` | ✅ Supported | JS shim |  |
 
 ## chrome.webNavigation — 🟡 Partial
 
@@ -443,6 +443,61 @@ Legacy helpers.
 | `isAllowedFileSchemeAccess` | ✅ Supported | JS shim | Always false |
 | `isAllowedIncognitoAccess` | ✅ Supported | JS shim | Always false (extensions do not run in private tabs) |
 
+## chrome.bookmarks — ✅ Supported
+
+Backed by Rikugan's bookmarks; the root (id "0") contains the top-level bookmarks and the Favorites folder (folderType bookmarks-bar).
+
+与 Chrome 的语义差异：
+- IDs are UUID strings
+- Folders are listed before bookmarks inside a folder
+- onChildrenReordered / onImportBegan / onImportEnded never fire
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `create` | 🟡 Partial | 原生桥 | index is ignored; new items are appended |
+| `get` | ✅ Supported | 原生桥 |  |
+| `getChildren` | ✅ Supported | 原生桥 |  |
+| `getRecent` | ✅ Supported | 原生桥 |  |
+| `getSubTree` | ✅ Supported | 原生桥 |  |
+| `getTree` | ✅ Supported | 原生桥 |  |
+| `move` | ✅ Supported | 原生桥 |  |
+| `remove` | ✅ Supported | 原生桥 |  |
+| `removeTree` | ✅ Supported | 原生桥 |  |
+| `search` | ✅ Supported | 原生桥 |  |
+| `update` | ✅ Supported | 原生桥 |  |
+| `onChanged` | ✅ Supported | JS shim |  |
+| `onChildrenReordered` | 🟡 Partial | JS shim | Never fires |
+| `onCreated` | ✅ Supported | JS shim |  |
+| `onMoved` | ✅ Supported | JS shim |  |
+| `onRemoved` | ✅ Supported | JS shim |  |
+
+## chrome.browsingData — 🟡 Partial
+
+Clears this profile's website data, history and download list.
+
+与 Chrome 的语义差异：
+- With origins / excludeOrigins, WebKit removes whole registrable domains and ignores since
+- Passwords and form data cannot be removed by extensions
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `remove` | 🟡 Partial | 原生桥 | See differences |
+| `removeAppcache` | ✅ Supported | JS shim |  |
+| `removeCache` | ✅ Supported | JS shim |  |
+| `removeCacheStorage` | ✅ Supported | JS shim |  |
+| `removeCookies` | ✅ Supported | JS shim |  |
+| `removeDownloads` | 🟡 Partial | JS shim | Removes finished entries from the download list; files are kept |
+| `removeFileSystems` | ✅ Supported | JS shim |  |
+| `removeFormData` | ⛔ Unsupported | — | Not available to extensions |
+| `removeHistory` | ✅ Supported | JS shim |  |
+| `removeIndexedDB` | ✅ Supported | JS shim |  |
+| `removeLocalStorage` | ✅ Supported | JS shim |  |
+| `removePasswords` | ⛔ Unsupported | — | Not available to extensions |
+| `removePluginData` | ⛔ Unsupported | — | No plugins |
+| `removeServiceWorkers` | ✅ Supported | JS shim |  |
+| `removeWebSQL` | ✅ Supported | JS shim |  |
+| `settings` | ✅ Supported | 原生桥 |  |
+
 ## chrome.fontSettings — 🟡 Partial
 
 getFontList returns the system, profile-installed and imported font families; per-page font settings are Rikugan's web-font feature.
@@ -469,4 +524,134 @@ getFontList returns the system, profile-installed and imported font families; pe
 | `onDefaultFontSizeChanged` | ⛔ Unsupported | — |  |
 | `onFontChanged` | ⛔ Unsupported | — |  |
 | `onMinimumFontSizeChanged` | ⛔ Unsupported | — |  |
+
+## chrome.history — 🟡 Partial
+
+Backed by Rikugan's browsing history (private tabs are never recorded).
+
+与 Chrome 的语义差异：
+- Visits to the same URL on the same day are stored as one visit
+- transition is always "link"; typedCount is 0
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `addUrl` | ✅ Supported | 原生桥 | http / https only |
+| `deleteAll` | ✅ Supported | 原生桥 |  |
+| `deleteRange` | ✅ Supported | 原生桥 |  |
+| `deleteUrl` | ✅ Supported | 原生桥 |  |
+| `getVisits` | 🟡 Partial | 原生桥 | One visit per URL per day |
+| `search` | ✅ Supported | 原生桥 | text / startTime / endTime / maxResults |
+| `onVisitRemoved` | ✅ Supported | JS shim |  |
+| `onVisited` | ✅ Supported | JS shim |  |
+
+## chrome.identity — 🟡 Partial
+
+launchWebAuthFlow works for OAuth / OpenID providers; there is no Chrome (Google) account sign-in on iOS.
+
+与 Chrome 的语义差异：
+- The interactive flow is shown in an in-app sheet with the current site in the title bar
+- getProfileUserInfo always reports a signed-out user
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `clearAllCachedAuthTokens` | 🟡 Partial | JS shim | No token cache (getAuthToken is unavailable) |
+| `getAccounts` | ⛔ Unsupported | — | Needs a Chrome sign-in |
+| `getAuthToken` | ⛔ Unsupported | — | Needs a Chrome sign-in to Google, which does not exist on iOS |
+| `getProfileUserInfo` | 🟡 Partial | JS shim | Always { email: '', id: '' } (not signed in) |
+| `getRedirectURL` | ✅ Supported | JS shim | https://<extension id>.chromiumapp.org/ |
+| `launchWebAuthFlow` | ✅ Supported | 原生桥 | interactive and silent flows |
+| `removeCachedAuthToken` | 🟡 Partial | JS shim | No token cache (getAuthToken is unavailable) |
+| `onSignInChanged` | 🟡 Partial | JS shim | Never fires |
+
+## chrome.idle — 🟡 Partial
+
+Only input inside Rikugan is observed.
+
+与 Chrome 的语义差异：
+- "idle" means no touch in Rikugan for the interval
+- "locked" while the device is locked
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `getAutoLockDelay` | ⛔ Unsupported | — | iOS does not expose the auto-lock delay |
+| `queryState` | 🟡 Partial | 原生桥 | Input inside Rikugan only |
+| `setDetectionInterval` | ✅ Supported | 原生桥 |  |
+| `onStateChanged` | 🟡 Partial | JS shim | Checked every 5 seconds |
+
+## chrome.management — 🟡 Partial
+
+Extensions installed in Rikugan; no apps or themes.
+
+与 Chrome 的语义差异：
+- Enabling another extension and uninstalling another extension always ask the user
+- App methods are unsupported
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `createAppShortcut` | ⛔ Unsupported | — | No apps |
+| `generateAppForLink` | ⛔ Unsupported | — | No apps |
+| `get` | ✅ Supported | 原生桥 |  |
+| `getAll` | ✅ Supported | 原生桥 |  |
+| `getPermissionWarningsById` | ✅ Supported | 原生桥 | Rikugan's (Chinese) permission descriptions |
+| `getPermissionWarningsByManifest` | ✅ Supported | 原生桥 | Rikugan's (Chinese) permission descriptions |
+| `getSelf` | ✅ Supported | 原生桥 |  |
+| `launchApp` | ⛔ Unsupported | — | No apps |
+| `setEnabled` | ✅ Supported | 原生桥 | Not for the calling extension; enabling asks the user |
+| `setLaunchType` | ⛔ Unsupported | — | No apps |
+| `uninstall` | ✅ Supported | 原生桥 | Always asks the user |
+| `uninstallSelf` | ✅ Supported | 原生桥 |  |
+| `onDisabled` | ✅ Supported | JS shim |  |
+| `onEnabled` | ✅ Supported | JS shim |  |
+| `onInstalled` | ✅ Supported | JS shim |  |
+| `onUninstalled` | ✅ Supported | JS shim |  |
+
+## chrome.search — ✅ Supported
+
+Uses the search engine chosen in Settings.
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `query` | ✅ Supported | 原生桥 | CURRENT_TAB / NEW_TAB / NEW_WINDOW (opens a tab in the focused window) / tabId |
+
+## chrome.sessions — 🟡 Partial
+
+Recently closed tabs of this device.
+
+与 Chrome 的语义差异：
+- Closed windows are not tracked
+- No synced devices
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `getDevices` | 🟡 Partial | JS shim | Always [] |
+| `getRecentlyClosed` | 🟡 Partial | 原生桥 | Tabs only |
+| `restore` | ✅ Supported | 原生桥 |  |
+| `onChanged` | ✅ Supported | JS shim |  |
+
+## chrome.topSites — ✅ Supported
+
+Most visited sites from Rikugan's history (the same list as the start page).
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `get` | ✅ Supported | 原生桥 | Up to 20 sites |
+
+## chrome.tts — 🟡 Partial
+
+System speech synthesis (AVSpeechSynthesizer).
+
+与 Chrome 的语义差异：
+- rate / pitch are mapped approximately
+- No sentence / marker events
+- onVoicesChanged never fires
+
+| 方法 / 事件 | 级别 | 实现位置 | 说明 |
+|---|---|---|---|
+| `getVoices` | ✅ Supported | 原生桥 |  |
+| `isSpeaking` | ✅ Supported | 原生桥 |  |
+| `pause` | ✅ Supported | 原生桥 |  |
+| `resume` | ✅ Supported | 原生桥 |  |
+| `speak` | ✅ Supported | 原生桥 | lang, voiceName, rate, pitch, volume, enqueue, onEvent |
+| `stop` | ✅ Supported | 原生桥 |  |
+| `onVoicesChanged` | 🟡 Partial | JS shim | Never fires |
 

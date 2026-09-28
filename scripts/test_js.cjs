@@ -238,7 +238,7 @@ test('chrome callbacks set runtime.lastError; unsupported APIs never undefined',
   assert.strictEqual(err, 'No tab with id: 99');
   assert.strictEqual(w.chrome.runtime.lastError, undefined);
   await assert.rejects(() => w.chrome.debugger.attach({ tabId: 1 }, '1.3'), /Unsupported API: chrome.debugger.attach/);
-  await assert.rejects(() => w.chrome.tabs.move(1, {}), /Unsupported API/);
+  await assert.rejects(() => w.chrome.tabs.group({ tabIds: [1] }), /Unsupported API/);
   assert.strictEqual(typeof w.chrome.sidePanelDoesNotExist.open, 'function');
   assert.strictEqual(typeof w.chrome.webRequest.onBeforeRequest.addListener, 'function');
   const content = runChrome('content', async () => null);
@@ -283,10 +283,55 @@ test('scripting.executeScript serialises func and args', async () => {
   assert.deepStrictEqual(payload.args, [1, 2]);
 });
 
+test('chrome.identity: redirect URL, auth flow bridge, no Google token', async () => {
+  const calls = [];
+  const w = runChrome('background', async (msg) => {
+    calls.push(msg);
+    if (msg.api === 'identity.launchWebAuthFlow') return 'https://abcdefghijklmnopabcdefghijklmnop.chromiumapp.org/cb?code=1';
+    return null;
+  });
+  assert.strictEqual(w.chrome.identity.getRedirectURL(), 'https://abcdefghijklmnopabcdefghijklmnop.chromiumapp.org/');
+  assert.strictEqual(w.chrome.identity.getRedirectURL('/cb'), 'https://abcdefghijklmnopabcdefghijklmnop.chromiumapp.org/cb');
+  const url = await w.chrome.identity.launchWebAuthFlow({ url: 'https://auth.example/authorize', interactive: true });
+  assert.match(url, /code=1$/);
+  assert.deepStrictEqual(calls.find((m) => m.api === 'identity.launchWebAuthFlow').args.args[0].interactive, true);
+  await assert.rejects(w.chrome.identity.getAuthToken({ interactive: true }), /Unsupported API: chrome\.identity\.getAuthToken/);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(await w.chrome.identity.getProfileUserInfo())), { email: '', id: '' });
+  // Content scripts do not get chrome.identity (as in Chrome).
+  const c = runChrome('content', async () => null);
+  assert.strictEqual(c.chrome.identity, undefined);
+});
+
+test('chrome.tts routes onEvent callbacks by utterance id', async () => {
+  let speak;
+  const w = runChrome('background', async (msg) => { if (msg.api === 'tts.speak') speak = msg.args.args; return null; });
+  const events = [];
+  await w.chrome.tts.speak('hello', { rate: 1.5, onEvent: (e) => events.push(e.type) });
+  assert.strictEqual(speak[0], 'hello');
+  assert.strictEqual(speak[1].rate, 1.5);
+  assert.strictEqual(speak[1].onEvent, undefined);
+  const id = speak[2];
+  assert.ok(id);
+  w.__rikuganChrome.dispatch('tts._event', [id, { type: 'start', charIndex: 0 }]);
+  w.__rikuganChrome.dispatch('tts._event', [id, { type: 'end', charIndex: 5 }]);
+  w.__rikuganChrome.dispatch('tts._event', [id, { type: 'end', charIndex: 5 }]);
+  assert.deepStrictEqual(events, ['start', 'end']);
+});
+
+test('browsingData convenience methods map to remove()', async () => {
+  const calls = [];
+  const w = runChrome('background', async (msg) => { calls.push(msg); return null; });
+  await w.chrome.browsingData.removeCookies({ since: 5 });
+  const remove = calls.find((m) => m.api === 'browsingData.remove');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(remove.args.args)), [{ since: 5 }, { cookies: true }]);
+  await assert.rejects(w.chrome.browsingData.removePasswords({}), /Unsupported API/);
+});
+
 // ---- Compatibility matrix is verified against the implementation -------------------------------------
 test('chrome-api-matrix.json matches the JS shim and the native bridge', () => {
   const matrix = JSON.parse(read('chrome-api-matrix.json')).namespaces;
-  const swift = fs.readFileSync(path.join(__dirname, '..', 'Sources', 'Rikugan', 'Extensions', 'ChromeAPIBridge.swift'), 'utf8');
+  const swift = ['ChromeAPIBridge.swift', 'ChromeAPIExtras.swift']
+    .map((f) => fs.readFileSync(path.join(__dirname, '..', 'Sources', 'Rikugan', 'Extensions', f), 'utf8')).join('\n');
   const w = runChrome('background', async () => null);
   const prefixDispatched = new Set(['action', 'cookies', 'downloads', 'declarativeNetRequest', 'alarms']);
   const problems = [];

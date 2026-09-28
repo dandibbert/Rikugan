@@ -126,6 +126,7 @@ import UIKit
         if !tab.isPrivate, !(tab.url == nil && tab.webView == nil) {
             recentlyClosed.insert(tab.snapshot, at: 0)
             recentlyClosed = Array(recentlyClosed.prefix(30))
+            profile.extensions.sessionsChanged()
         }
         let wasActive = tab.id == activeTabID
         let space = tabs.filter { $0.isPrivate == tab.isPrivate && (tab.isPrivate || $0.groupID == tab.groupID) }
@@ -174,6 +175,7 @@ import UIKit
         tabs.append(tab)
         select(tab)
         scheduleSave()
+        profile.extensions.sessionsChanged()
     }
 
     func duplicate(_ tab: BrowserTab) {
@@ -196,6 +198,22 @@ import UIKit
         }
         let group = currentGroupID
         applySessionOp { SessionOps.reorderTabs(&$0, inGroup: group, from: source, to: destination) }
+    }
+
+    /// chrome.tabs.move: places a (non-private) tab at `index` among the window's non-private tabs
+    /// (-1 = end). Returns the final index.
+    @discardableResult
+    func moveTab(_ tab: BrowserTab, toIndex index: Int) -> Int {
+        guard !tab.isPrivate, let from = tabs.firstIndex(where: { $0.id == tab.id }) else { return 0 }
+        var list = tabs
+        list.remove(at: from)
+        let normal = list.filter { !$0.isPrivate }
+        let target = index < 0 || index >= normal.count ? normal.count : index
+        let insertAt = target < normal.count ? (list.firstIndex { $0.id == normal[target].id } ?? list.count) : list.count
+        list.insert(tab, at: insertAt)
+        tabs = list
+        scheduleSave()
+        return tabs.filter { !$0.isPrivate }.firstIndex { $0.id == tab.id } ?? target
     }
 
     /// Drag & drop reorder: place `tab` before `target` (same group / space).

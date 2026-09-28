@@ -100,6 +100,8 @@ import UserNotifications
             throw RikuganError("Unsupported API: \(api) is not available in content scripts")
         }
 
+        if let handled = try await extraAPI(api, ext: ext, list: list, caller: caller) { return handled.value }
+
         switch api {
         // ---- runtime ----------------------------------------------------------------------------------
         case "runtime._ready":
@@ -111,6 +113,9 @@ import UserNotifications
             return nil
         case "events.subscribe":
             if ctx == "background", let event = argsDict["event"] as? String { ext.background?.noteSubscription(event) }
+            // Sources that only run while someone listens.
+            if argsDict["event"] as? String == "cookies.onChanged", ext.has("cookies") { runtime.observeCookiesIfNeeded() }
+            if argsDict["event"] as? String == "idle.onStateChanged", ext.has("idle") { IdleMonitor.shared.start(runtime: runtime) }
             return nil
         case "runtime._reportError":
             let text = String((argsDict["message"] as? String ?? "").prefix(300))
@@ -468,7 +473,7 @@ import UserNotifications
 
     // MARK: Helpers
 
-    private func requirePermission(_ ext: LoadedExtension, _ permission: String) throws {
+    func requirePermission(_ ext: LoadedExtension, _ permission: String) throws {
         guard ext.has(permission) else { throw RikuganError("Permission '\(permission)' is required. Declare it in manifest.json.") }
     }
 
@@ -478,13 +483,13 @@ import UserNotifications
         }
     }
 
-    private func resolve(_ raw: String?, ext: LoadedExtension) -> URL? {
+    func resolve(_ raw: String?, ext: LoadedExtension) -> URL? {
         guard let raw, !raw.isEmpty else { return nil }
         if let url = URL(string: raw), url.scheme != nil { return url }
         return URL(string: raw, relativeTo: URL(string: ext.baseURL))?.absoluteURL
     }
 
-    private func tabFor(_ id: Int?, caller: Caller) throws -> BrowserTab {
+    func tabFor(_ id: Int?, caller: Caller) throws -> BrowserTab {
         if let id {
             guard let tab = TabRegistry.shared.tab(id), !tab.isPrivate else { throw RikuganError("No tab with id: \(id)") }
             return tab
@@ -983,7 +988,7 @@ import UserNotifications
         }
     }
 
-    private func cookieJSON(_ c: HTTPCookie) -> [String: Any] {
+    func cookieJSON(_ c: HTTPCookie) -> [String: Any] {
         var json: [String: Any] = ["name": c.name, "value": c.value, "domain": c.domain, "hostOnly": !c.domain.hasPrefix("."), "path": c.path,
                                    "secure": c.isSecure, "httpOnly": c.isHTTPOnly, "session": c.isSessionOnly, "storeId": "0",
                                    "sameSite": c.sameSitePolicy == .sameSiteStrict ? "strict" : (c.sameSitePolicy == .sameSiteLax ? "lax" : "unspecified")]

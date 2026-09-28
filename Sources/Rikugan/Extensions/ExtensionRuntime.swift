@@ -11,6 +11,8 @@ import Combine
     @Published private(set) var loaded: [String: LoadedExtension] = [:]
     @Published var popup: PopupRequest?
     @Published var permissionRequest: PermissionPrompt?
+    /// Forwards cookie-store changes for cookies.onChanged (created on first listener).
+    var cookieObserver: CookieChangeObserver?
     private(set) var dnrLists: [WKContentRuleList] = []
     private(set) lazy var bridge = ChromeAPIBridge(runtime: self)
     let scheme: String
@@ -173,6 +175,7 @@ import Combine
         if record.enabled { load(record, reason: previous == nil ? "install" : "update", previousVersion: previous?.version) }
         compileDNR()
         WebViewFactory.invalidateAllTabs()
+        managementEvent("onInstalled", record, id: record.id)
     }
 
     private func loadedDescription(_ pending: PendingExtensionInstall) -> String {
@@ -186,6 +189,7 @@ import Combine
         else if let ext = loaded.removeValue(forKey: id) { unload(ext) }
         compileDNR()
         WebViewFactory.invalidateAllTabs()
+        managementEvent(enabled ? "onEnabled" : "onDisabled", records.first { $0.id == id }, id: id)
     }
 
     func remove(_ id: String) {
@@ -196,6 +200,7 @@ import Combine
         for area in ["local", "sync"] { try? FileManager.default.removeItem(at: storageURL(id, area)) }
         compileDNR()
         WebViewFactory.invalidateAllTabs()
+        managementEvent("onUninstalled", nil, id: id)
     }
 
     func reload(_ id: String) {

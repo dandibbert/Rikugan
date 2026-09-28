@@ -74,11 +74,12 @@
         "insertCSS": ["Partial", "MV2 compatibility wrapper around scripting.insertCSS", true],
         "getZoom": ["Partial", "Always 1", true], "getZoomSettings": ["Partial", "Static defaults", true],
         "setZoom": ["Unsupported", "Page zoom is not exposed to extensions"],
-        "move": ["Unsupported", ""], "discard": ["Unsupported", ""], "group": ["Unsupported", ""], "ungroup": ["Unsupported", ""],
-        "highlight": ["Unsupported", ""], "setZoomSettings": ["Unsupported", ""],
+        "move": ["Partial", "Within the tab's own window only"], "discard": ["Supported", "Suspends the tab's web view; the active tab cannot be discarded"],
+        "group": ["Unsupported", ""], "ungroup": ["Unsupported", ""],
+        "highlight": ["Partial", "Single selection: the first index becomes the active tab"], "setZoomSettings": ["Unsupported", ""],
         "onCreated": ["Supported", "", true], "onUpdated": ["Partial", "status / url / title changes only", true],
         "onActivated": ["Supported", "", true], "onRemoved": ["Supported", "", true],
-        "onReplaced": ["Partial", "Never fires", true], "onMoved": ["Partial", "Never fires", true],
+        "onReplaced": ["Partial", "Never fires", true], "onMoved": ["Partial", "Fired for chrome.tabs.move only", true],
         "onHighlighted": ["Partial", "Never fires", true], "onAttached": ["Partial", "Never fires", true],
         "onDetached": ["Partial", "Never fires", true], "onZoomChange": ["Partial", "Never fires", true]
       }
@@ -124,7 +125,7 @@
       "methods": {
         "get": ["Supported", ""], "getAll": ["Supported", ""], "set": ["Supported", ""], "remove": ["Supported", ""],
         "getAllCookieStores": ["Partial", "Single store '0'"],
-        "onChanged": ["Unsupported", "WKHTTPCookieStore observer changes are not forwarded"]
+        "onChanged": ["Partial", "Computed by diffing the cookie store on each WebKit change notification; cause is explicit / overwrite / expired", true]
       }
     },
     "downloads": {
@@ -136,9 +137,9 @@
         "pause": ["Supported", ""], "resume": ["Supported", ""], "cancel": ["Supported", ""], "erase": ["Supported", ""],
         "open": ["Supported", ""], "show": ["Partial", "Opens the file preview"],
         "showDefaultFolder": ["Partial", "No-op", true], "setUiOptions": ["Partial", "No-op", true],
-        "getFileIcon": ["Unsupported", ""], "removeFile": ["Unsupported", ""],
+        "getFileIcon": ["Partial", "Generic file-type symbol, not the system file icon"], "removeFile": ["Supported", ""],
         "onChanged": ["Partial", "Fired on completion only", true],
-        "onCreated": ["Unsupported", "Not fired"], "onErased": ["Unsupported", "Not fired"]
+        "onCreated": ["Supported", "", true], "onErased": ["Supported", "", true]
       }
     },
     "webNavigation": {
@@ -217,21 +218,64 @@
         "isAllowedIncognitoAccess": ["Supported", "Always false (extensions do not run in private tabs)", true], "isAllowedFileSchemeAccess": ["Supported", "Always false", true] }
     },
     "tabGroups": { "level": "Unsupported", "reason": "Rikugan tab groups are not exposed to extensions yet.", "differences": [], "methods": {} },
-    "history": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "bookmarks": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "history": {
+      "level": "Partial", "reason": "Backed by Rikugan's browsing history (private tabs are never recorded).", "differences": ["Visits to the same URL on the same day are stored as one visit", "transition is always \"link\"; typedCount is 0"],
+      "methods": { "search": ["Supported", "text / startTime / endTime / maxResults"], "getVisits": ["Partial", "One visit per URL per day"], "addUrl": ["Supported", "http / https only"],
+        "deleteUrl": ["Supported", ""], "deleteRange": ["Supported", ""], "deleteAll": ["Supported", ""],
+        "onVisited": ["Supported", "", true], "onVisitRemoved": ["Supported", "", true] }
+    },
+    "bookmarks": {
+      "level": "Supported", "reason": "Backed by Rikugan's bookmarks; the root (id \"0\") contains the top-level bookmarks and the Favorites folder (folderType bookmarks-bar).", "differences": ["IDs are UUID strings", "Folders are listed before bookmarks inside a folder", "onChildrenReordered / onImportBegan / onImportEnded never fire"],
+      "methods": { "get": ["Supported", ""], "getChildren": ["Supported", ""], "getRecent": ["Supported", ""], "getTree": ["Supported", ""], "getSubTree": ["Supported", ""],
+        "search": ["Supported", ""], "create": ["Partial", "index is ignored; new items are appended"], "update": ["Supported", ""], "move": ["Supported", ""],
+        "remove": ["Supported", ""], "removeTree": ["Supported", ""],
+        "onCreated": ["Supported", "", true], "onRemoved": ["Supported", "", true], "onChanged": ["Supported", "", true], "onMoved": ["Supported", "", true],
+        "onChildrenReordered": ["Partial", "Never fires", true] }
+    },
     "sidePanel": { "level": "Unsupported", "reason": "No side panel UI", "differences": [], "methods": {} },
     "offscreen": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "identity": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "management": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "identity": {
+      "level": "Partial", "reason": "launchWebAuthFlow works for OAuth / OpenID providers; there is no Chrome (Google) account sign-in on iOS.", "differences": ["The interactive flow is shown in an in-app sheet with the current site in the title bar", "getProfileUserInfo always reports a signed-out user"],
+      "methods": { "getRedirectURL": ["Supported", "https://<extension id>.chromiumapp.org/", true], "launchWebAuthFlow": ["Supported", "interactive and silent flows"],
+        "getProfileUserInfo": ["Partial", "Always { email: '', id: '' } (not signed in)", true],
+        "removeCachedAuthToken": ["Partial", "No token cache (getAuthToken is unavailable)", true], "clearAllCachedAuthTokens": ["Partial", "No token cache (getAuthToken is unavailable)", true],
+        "getAuthToken": ["Unsupported", "Needs a Chrome sign-in to Google, which does not exist on iOS"], "getAccounts": ["Unsupported", "Needs a Chrome sign-in"],
+        "onSignInChanged": ["Partial", "Never fires", true] }
+    },
+    "management": {
+      "level": "Partial", "reason": "Extensions installed in Rikugan; no apps or themes.", "differences": ["Enabling another extension and uninstalling another extension always ask the user", "App methods are unsupported"],
+      "methods": { "getSelf": ["Supported", ""], "get": ["Supported", ""], "getAll": ["Supported", ""],
+        "getPermissionWarningsById": ["Supported", "Rikugan's (Chinese) permission descriptions"], "getPermissionWarningsByManifest": ["Supported", "Rikugan's (Chinese) permission descriptions"],
+        "setEnabled": ["Supported", "Not for the calling extension; enabling asks the user"], "uninstall": ["Supported", "Always asks the user"], "uninstallSelf": ["Supported", ""],
+        "launchApp": ["Unsupported", "No apps"], "createAppShortcut": ["Unsupported", "No apps"], "setLaunchType": ["Unsupported", "No apps"], "generateAppForLink": ["Unsupported", "No apps"],
+        "onInstalled": ["Supported", "", true], "onUninstalled": ["Supported", "", true], "onEnabled": ["Supported", "", true], "onDisabled": ["Supported", "", true] }
+    },
     "debugger": { "level": "Unsupported", "reason": "No DevTools protocol in WKWebView", "differences": [], "methods": {} },
     "devtools": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "proxy": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "privacy": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "sessions": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "topSites": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "search": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "tts": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "idle": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "sessions": {
+      "level": "Partial", "reason": "Recently closed tabs of this device.", "differences": ["Closed windows are not tracked", "No synced devices"],
+      "methods": { "getRecentlyClosed": ["Partial", "Tabs only"], "restore": ["Supported", ""], "getDevices": ["Partial", "Always []", true], "onChanged": ["Supported", "", true] }
+    },
+    "topSites": {
+      "level": "Supported", "reason": "Most visited sites from Rikugan's history (the same list as the start page).", "differences": [],
+      "methods": { "get": ["Supported", "Up to 20 sites"] }
+    },
+    "search": {
+      "level": "Supported", "reason": "Uses the search engine chosen in Settings.", "differences": [],
+      "methods": { "query": ["Supported", "CURRENT_TAB / NEW_TAB / NEW_WINDOW (opens a tab in the focused window) / tabId"] }
+    },
+    "tts": {
+      "level": "Partial", "reason": "System speech synthesis (AVSpeechSynthesizer).", "differences": ["rate / pitch are mapped approximately", "No sentence / marker events", "onVoicesChanged never fires"],
+      "methods": { "speak": ["Supported", "lang, voiceName, rate, pitch, volume, enqueue, onEvent"], "stop": ["Supported", ""], "pause": ["Supported", ""], "resume": ["Supported", ""],
+        "isSpeaking": ["Supported", ""], "getVoices": ["Supported", ""], "onVoicesChanged": ["Partial", "Never fires", true] }
+    },
+    "idle": {
+      "level": "Partial", "reason": "Only input inside Rikugan is observed.", "differences": ["\"idle\" means no touch in Rikugan for the interval", "\"locked\" while the device is locked"],
+      "methods": { "queryState": ["Partial", "Input inside Rikugan only"], "setDetectionInterval": ["Supported", ""],
+        "getAutoLockDelay": ["Unsupported", "iOS does not expose the auto-lock delay"], "onStateChanged": ["Partial", "Checked every 5 seconds", true] }
+    },
     "power": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "gcm": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "userScripts": { "level": "Unsupported", "reason": "Use Rikugan's built-in userscript manager", "differences": [], "methods": {} },
@@ -245,7 +289,16 @@
         "onFontChanged": ["Unsupported", ""], "onDefaultFontSizeChanged": ["Unsupported", ""], "onDefaultFixedFontSizeChanged": ["Unsupported", ""], "onMinimumFontSizeChanged": ["Unsupported", ""] }
     },
     "contentSettings": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
-    "browsingData": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
+    "browsingData": {
+      "level": "Partial", "reason": "Clears this profile's website data, history and download list.", "differences": ["With origins / excludeOrigins, WebKit removes whole registrable domains and ignores since", "Passwords and form data cannot be removed by extensions"],
+      "methods": { "remove": ["Partial", "See differences"], "settings": ["Supported", ""],
+        "removeAppcache": ["Supported", "", true], "removeCache": ["Supported", "", true], "removeCacheStorage": ["Supported", "", true], "removeCookies": ["Supported", "", true],
+        "removeDownloads": ["Partial", "Removes finished entries from the download list; files are kept", true], "removeFileSystems": ["Supported", "", true],
+        "removeHistory": ["Supported", "", true], "removeIndexedDB": ["Supported", "", true], "removeLocalStorage": ["Supported", "", true],
+        "removeServiceWorkers": ["Supported", "", true], "removeWebSQL": ["Supported", "", true],
+        "removeFormData": ["Unsupported", "Not available to extensions"], "removePasswords": ["Unsupported", "Not available to extensions"],
+        "removePluginData": ["Unsupported", "No plugins"] }
+    },
     "system": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "enterprise": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} },
     "readingList": { "level": "Unsupported", "reason": "", "differences": [], "methods": {} }

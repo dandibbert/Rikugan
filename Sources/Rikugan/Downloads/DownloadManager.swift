@@ -203,6 +203,7 @@ import QuickLook
     }
 
     private func announce(_ item: DownloadItem) {
+        AppServices.shared.profile.extensions.downloadCreated(item)
         ToastCenter.shared.show("开始下载：\(item.fileName)", symbol: "arrow.down.circle", actionTitle: "查看") {
             NotificationCenter.default.post(name: .rikuganShowDownloads, object: nil)
         }
@@ -256,6 +257,7 @@ import QuickLook
         if deleteFile, let file = item.fileURL { try? FileManager.default.removeItem(at: file) }
         items.removeAll { $0.id == item.id }
         persist()
+        AppServices.shared.profile.extensions.downloadErased(item.numericID)
     }
 
     func clearFinished() {

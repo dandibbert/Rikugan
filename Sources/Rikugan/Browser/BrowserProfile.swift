@@ -40,6 +40,10 @@ struct ProfileInfo: Codable, Identifiable, Hashable {
         userscripts = UserScriptStore(directory: AppPaths.directory("Userscripts", in: directory))
         extensions = ExtensionRuntime(profile: self)
         bridge = ScriptBridge(profile: self)
+        // chrome.history / chrome.bookmarks events.
+        history.onVisited = { [weak self] entry in self?.extensions.historyVisited(entry) }
+        history.onRemoved = { [weak self] all, urls in self?.extensions.historyRemoved(all: all, urls: urls) }
+        bookmarks.onChange = { [weak self] change in self?.extensions.bookmarkChanged(change) }
         // Forward nested store changes so SwiftUI views observing the profile refresh.
         for publisher in [history.objectWillChange, bookmarks.objectWillChange, siteSettings.objectWillChange, userscripts.objectWillChange] {
             publisher.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)

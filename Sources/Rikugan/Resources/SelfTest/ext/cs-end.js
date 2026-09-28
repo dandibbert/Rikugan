@@ -31,5 +31,6 @@
     const r = await chrome.runtime.sendMessage({ type: 'runScripting' });
     set('scripting-result', r && r.result === 42 ? 'ok' : 'fail:' + JSON.stringify(r));
   } catch (e) { set('scripting-result', 'error:' + e.message); }
+  set('extras', await chrome.runtime.sendMessage({ type: 'extras' }).then((r) => r && r.result, (e) => 'error:' + e.message));
   set('unsupported', await chrome.runtime.sendMessage({ type: 'unsupported' }).then((r) => r && r.ok ? 'ok' : 'fail', (e) => 'error:' + e.message));
 })();

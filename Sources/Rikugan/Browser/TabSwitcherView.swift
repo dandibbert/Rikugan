@@ -20,32 +20,39 @@ struct TabSwitcherView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                if filtered.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: manager.isPrivateMode ? "hand.raised" : "square.on.square").font(.largeTitle).foregroundStyle(.secondary)
-                        Text(manager.isPrivateMode ? "无痕浏览：不会记录历史、Cookie 和搜索记录" : "没有标签页").foregroundStyle(.secondary)
-                    }
-                    .padding(.top, 80)
-                }
-                LazyVGrid(columns: columns, spacing: 16) {
-                    ForEach(filtered) { tab in
-                        TabCard(tab: tab, active: tab.id == manager.activeTabID) {
-                            manager.select(tab)
-                            dismiss()
-                        } close: {
-                            withAnimation { manager.close(tab) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if filtered.isEmpty {
+                        VStack(spacing: 10) {
+                            Image(systemName: manager.isPrivateMode ? "hand.raised" : "square.on.square").font(.largeTitle).foregroundStyle(.secondary)
+                            Text(manager.isPrivateMode ? "无痕浏览：不会记录历史、Cookie 和搜索记录" : "没有标签页").foregroundStyle(.secondary)
                         }
-                        .contextMenu { TabContextMenu(tab: tab) }
-                        .draggable(tab.id.uuidString)
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let raw = items.first, let dragged = manager.tabs.first(where: { $0.id.uuidString == raw }) else { return false }
-                            withAnimation { manager.move(dragged, before: tab) }
-                            return true
+                        .padding(.top, 80)
+                    }
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(filtered) { tab in
+                            TabCard(tab: tab, active: tab.id == manager.activeTabID) {
+                                manager.select(tab)
+                                dismiss()
+                            } close: {
+                                withAnimation { manager.close(tab) }
+                            }
+                            .id(tab.id)
+                            .contextMenu { TabContextMenu(tab: tab) }
+                            .draggable(tab.id.uuidString)
+                            .dropDestination(for: String.self) { items, _ in
+                                guard let raw = items.first, let dragged = manager.tabs.first(where: { $0.id.uuidString == raw }) else { return false }
+                                withAnimation { manager.move(dragged, before: tab) }
+                                return true
+                            }
                         }
                     }
+                    .padding(14)
                 }
-                .padding(14)
+                // Open on the tab that was just being viewed instead of the top of the grid.
+                // Deferred one run-loop turn so the lazy grid has laid out before scrolling.
+                .onAppear { DispatchQueue.main.async { scrollToActive(proxy) } }
+                .onChange(of: manager.currentSpaceTitle) { scrollToActive(proxy) }
             }
             .searchable(text: $search, prompt: "搜索标签页")
             .background(manager.isPrivateMode ? Color(.systemGray6).opacity(0.9) : Color(.systemGroupedBackground))
@@ -92,6 +99,11 @@ struct TabSwitcherView: View {
                 Button("好") { if let g = renamingGroup { manager.renameGroup(g.id, to: newGroupName) } }
             }
         }
+    }
+
+    private func scrollToActive(_ proxy: ScrollViewProxy) {
+        guard search.isEmpty, let id = manager.activeTabID, filtered.contains(where: { $0.id == id }) else { return }
+        proxy.scrollTo(id, anchor: .center)
     }
 
     private var groupMenu: some View {
@@ -154,10 +166,18 @@ struct TabCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(active ? Color.accentColor : Color.clear, lineWidth: 3))
                 .onTapGesture(perform: open)
+                // 28 pt visible badge inside a 44 pt hit area (Apple's minimum touch target).
                 Button(action: close) {
-                    Image(systemName: "xmark.circle.fill").font(.title3).symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.55))
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(.black.opacity(0.6), in: Circle())
+                        .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 0.5))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
-                .padding(6)
+                .buttonStyle(.plain)
                 .accessibilityLabel("关闭标签页")
             }
             HStack(spacing: 5) {

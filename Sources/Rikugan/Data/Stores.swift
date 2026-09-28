@@ -16,6 +16,9 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     private let file: JSONFile<[HistoryEntry]>
     private let searchFile: JSONFile<[String]>
     static let limit = 5000
+    /// Observers for chrome.history.onVisited / onVisitRemoved (set by the profile).
+    var onVisited: ((HistoryEntry) -> Void)?
+    var onRemoved: ((_ allHistory: Bool, _ urls: [String]) -> Void)?
 
     init(directory: URL) {
         file = JSONFile(directory.appendingPathComponent("history.json"))
@@ -37,6 +40,7 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
         entries.insert(HistoryEntry(url: key, title: title.isEmpty ? (url.host ?? key) : title, visitedAt: Date(), visitCount: count), at: 0)
         if entries.count > Self.limit { entries.removeLast(entries.count - Self.limit) }
         file.save(entries)
+        onVisited?(entries[0])
     }
 
     func updateTitle(url: URL, title: String) {
@@ -54,16 +58,31 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
         searchFile.save(searchHistory)
     }
 
-    func delete(_ entry: HistoryEntry) { entries.removeAll { $0.id == entry.id }; file.save(entries) }
+    func delete(_ entry: HistoryEntry) { remove { $0.id == entry.id } }
 
-    func delete(day: Date) {
-        entries.removeAll { Calendar.current.isDate($0.visitedAt, inSameDayAs: day) }
+    func delete(day: Date) { remove { Calendar.current.isDate($0.visitedAt, inSameDayAs: day) } }
+
+    /// Removes every visit of `url` (chrome.history.deleteUrl).
+    func delete(url: String) { remove { $0.url == url } }
+
+    /// Removes visits in [start, end) (chrome.history.deleteRange / browsingData.removeHistory).
+    func delete(from start: Date, to end: Date) { remove { $0.visitedAt >= start && $0.visitedAt < end } }
+
+    private func remove(where predicate: (HistoryEntry) -> Bool) {
+        let removed = entries.filter(predicate)
+        guard !removed.isEmpty else { return }
+        entries.removeAll(where: predicate)
         file.save(entries)
+        // Only URLs with no visit left are reported, as in Chrome.
+        let remaining = Set(entries.map(\.url))
+        let urls = Array(Set(removed.map(\.url))).filter { !remaining.contains($0) }.sorted()
+        if !urls.isEmpty { onRemoved?(false, urls) }
     }
 
     func clearAll() {
         entries.removeAll(); searchHistory.removeAll()
         file.save(entries, immediately: true); searchFile.save(searchHistory, immediately: true)
+        onRemoved?(true, [])
     }
 
     func search(_ text: String, limit: Int = 8) -> [HistoryEntry] {
@@ -104,6 +123,15 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     @Published private(set) var nodes: [BookmarkNode] = []
     private let file: JSONFile<[BookmarkNode]>
 
+    enum Change {
+        case created(BookmarkNode)
+        case changed(BookmarkNode)
+        case moved(BookmarkNode, oldParent: UUID?, oldIndex: Int)
+        case removed(BookmarkNode, index: Int)
+    }
+    /// Observer for chrome.bookmarks events (set by the profile).
+    var onChange: ((Change) -> Void)?
+
     init(directory: URL) {
         file = JSONFile(directory.appendingPathComponent("bookmarks.json"))
         nodes = file.load() ?? []
@@ -128,13 +156,21 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
         let node = BookmarkNode(title: title, url: url, parentID: parent, isFolder: isFolder, order: order)
         nodes.append(node)
         save()
+        onChange?(.created(node))
         return node
     }
 
+    /// Position of `node` among its siblings, in display order.
+    func index(of node: BookmarkNode) -> Int { children(of: node.parentID).firstIndex { $0.id == node.id } ?? 0 }
+
     func update(_ node: BookmarkNode) {
         guard let index = nodes.firstIndex(where: { $0.id == node.id }) else { return }
+        let old = nodes[index]
+        let oldIndex = self.index(of: old)
         nodes[index] = node
         save()
+        if old.parentID != node.parentID { onChange?(.moved(node, oldParent: old.parentID, oldIndex: oldIndex)) }
+        else if old.title != node.title || old.url != node.url { onChange?(.changed(node)) }
     }
 
     func move(_ node: BookmarkNode, to parent: UUID?) {
@@ -154,6 +190,8 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
 
     func delete(_ node: BookmarkNode) {
         guard node.id != BookmarkNode.favoritesID else { return }
+        let index = self.index(of: node)
+        defer { onChange?(.removed(node, index: index)) }
         var remove: Set<UUID> = [node.id]
         var changed = true
         while changed {

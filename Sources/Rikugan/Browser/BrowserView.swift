@@ -756,7 +756,13 @@ struct TabStripItem: View {
             else { Image(systemName: tab.isPrivate ? "hand.raised" : "globe").font(.caption) }
             Text(tab.isHome ? "起始页" : tab.title).font(.footnote).lineLimit(1)
             Spacer(minLength: 0)
-            Button { manager.close(tab) } label: { Image(systemName: "xmark").font(.caption2) }.buttonStyle(.plain)
+            Button { manager.close(tab) } label: {
+                Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, -8)
+            .accessibilityLabel("关闭标签页")
         }
         .padding(.horizontal, 10)
         .frame(width: 190, height: 30)
