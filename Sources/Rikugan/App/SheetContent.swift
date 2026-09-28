@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SheetContent: View {
     let item: BrowserSheet
@@ -6,6 +7,16 @@ struct SheetContent: View {
     @EnvironmentObject private var manager: TabManager
 
     var body: some View {
+        content
+            .fileImporter(isPresented: Binding(get: { importKind != nil }, set: { if !$0 { importKind = nil } }),
+                          allowedContentTypes: ImportRouter.allowedTypes(importKind), allowsMultipleSelection: false) { result in
+                let kind = importKind
+                importKind = nil
+                ImportRouter.handle(result, kind: kind, manager: manager)
+            }
+    }
+
+    @ViewBuilder private var content: some View {
         switch item {
         case .settings: SettingsView(importKind: $importKind)
         case .extensions: NavigationStack { ExtensionManagerView(importKind: $importKind) }

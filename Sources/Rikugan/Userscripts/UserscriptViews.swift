@@ -149,6 +149,31 @@ struct UserscriptDetailView: View {
                     LabeledContent("上次更新", value: script.updatedAt.formatted(date: .abbreviated, time: .shortened))
                     if let checked = script.lastUpdateCheck { LabeledContent("上次检查", value: checked.formatted(date: .abbreviated, time: .shortened)) }
                 }
+                Section {
+                    let links: [(String, String)] = [
+                        ("安装来源", script.sourceURL ?? ""),
+                        ("主页", script.metadata.homepage ?? ""),
+                        ("更新地址", script.metadata.updateURL ?? ""),
+                        ("下载地址", script.metadata.downloadURL ?? ""),
+                    ].filter { !$0.1.isEmpty }
+                    if links.isEmpty { Text("没有记录来源网址（从文件、剪贴板或编辑器导入）").foregroundStyle(.secondary).font(.caption) }
+                    ForEach(links, id: \.0) { title, link in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(title).font(.caption).foregroundStyle(.secondary)
+                            Text(link).font(.caption.monospaced()).textSelection(.enabled).lineLimit(3)
+                            HStack(spacing: 16) {
+                                Button { UIPasteboard.general.string = link; ToastCenter.shared.show("已拷贝\(title)", symbol: "doc.on.doc") } label: {
+                                    Label("拷贝", systemImage: "doc.on.doc")
+                                }
+                                if let url = URL(string: link), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                                    Button { openInNewTab(url) } label: { Label("打开", systemImage: "safari") }
+                                }
+                            }
+                            .buttonStyle(.borderless).font(.caption)
+                        }
+                        .contextMenu { Button("拷贝") { UIPasteboard.general.string = link } }
+                    }
+                } header: { Text("来源") }
                 Section("匹配网站") {
                     ForEach(script.metadata.matches, id: \.self) { Text("@match " + $0).font(.caption.monospaced()) }
                     ForEach(script.metadata.includes, id: \.self) { Text("@include " + $0).font(.caption.monospaced()) }
@@ -347,5 +372,15 @@ struct UserscriptInstallSheet: View {
                 }
             }
         }
+    }
+}
+
+
+extension UserscriptDetailView {
+    /// Opens a link in a new tab of the focused window and closes the settings sheet.
+    @MainActor func openInNewTab(_ url: URL) {
+        guard let manager = TabRegistry.shared.focusedWindow ?? TabRegistry.shared.allWindows.first else { return }
+        manager.newTab(url: url)
+        NotificationCenter.default.post(name: .rikuganCloseSheet, object: manager)
     }
 }

@@ -189,16 +189,39 @@ struct DownloadsView: View {
     @EnvironmentObject private var downloads: DownloadManager
     @Environment(\.dismiss) private var dismiss
 
+    private var active: [DownloadItem] { downloads.items.filter { $0.state == .downloading || $0.state == .paused } }
+    private var finished: [DownloadItem] { downloads.items.filter { $0.state != .downloading && $0.state != .paused } }
+
     var body: some View {
         List {
-            if downloads.items.isEmpty { Text("没有下载项").foregroundStyle(.secondary) }
-            ForEach(downloads.items) { item in DownloadRow(item: item) }
+            if downloads.items.isEmpty {
+                ContentUnavailableView("没有下载项", systemImage: "arrow.down.circle", description: Text("网页下载、长按链接下载和媒体面板下载会出现在这里。"))
+            }
+            if !active.isEmpty {
+                Section("进行中") { ForEach(active) { DownloadRow(item: $0) } }
+            }
+            if !finished.isEmpty {
+                Section("已完成") { ForEach(finished) { DownloadRow(item: $0) } }
+            }
         }
         .navigationTitle("下载")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
-            ToolbarItem(placement: .topBarLeading) { Button("清除已完成") { downloads.clearFinished() } }
+            ToolbarItem(placement: .topBarLeading) {
+                Menu {
+                    Button { openDownloadsFolder() } label: { Label("在“文件”中打开下载文件夹", systemImage: "folder") }
+                    Button(role: .destructive) { downloads.clearFinished() } label: { Label("清除已完成的记录", systemImage: "trash") }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
+        }
+    }
+
+    private func openDownloadsFolder() {
+        // shareddocuments:// opens the Files app at a folder of this app's Documents.
+        let path = AppPaths.downloads.path
+        if let url = URL(string: "shareddocuments://" + (path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path)) {
+            UIApplication.shared.open(url)
         }
     }
 }
@@ -208,52 +231,96 @@ struct DownloadRow: View {
     @EnvironmentObject private var downloads: DownloadManager
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: symbol).foregroundStyle(.tint)
-                Text(item.fileName).lineLimit(1)
-                Spacer()
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.opacity(0.15)).frame(width: 40, height: 40)
+                Image(systemName: fileSymbol).foregroundStyle(tint).font(.system(size: 18))
             }
-            switch item.state {
-            case .downloading, .paused:
-                ProgressView(value: item.total > 0 ? item.fraction : nil)
-                Text(progressText).font(.caption).foregroundStyle(.secondary)
-            case .completed:
-                Text(ByteCountFormatter.string(fromByteCount: item.total, countStyle: .file)).font(.caption).foregroundStyle(.secondary)
-            case .failed(let message):
-                Text("失败：\(message)").font(.caption).foregroundStyle(.red)
-            case .cancelled:
-                Text("已取消").font(.caption).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.fileName).font(.subheadline.weight(.medium)).lineLimit(2)
                 switch item.state {
-                case .downloading:
-                    Button("暂停") { downloads.pause(item) }
-                    Button("取消") { downloads.cancel(item) }
-                case .paused, .failed:
-                    Button("继续") { downloads.resume(item) }
-                    Button("删除") { downloads.remove(item, deleteFile: true) }
+                case .downloading, .paused:
+                    ProgressView(value: item.total > 0 ? item.fraction : nil).tint(tint)
+                    Text(progressText).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
                 case .completed:
-                    Button("打开") { downloads.open(item) }
-                    Button("分享") { downloads.share(item) }
-                    Button("存储到“文件”") { downloads.saveToFiles(item) }
-                    Button("删除", role: .destructive) { downloads.remove(item, deleteFile: true) }
+                    Text(subtitle(ByteCountFormatter.string(fromByteCount: item.total, countStyle: .file))).font(.caption2).foregroundStyle(.secondary)
+                case .failed(let message):
+                    Text("失败：\(message)").font(.caption2).foregroundStyle(.red).lineLimit(2)
                 case .cancelled:
-                    Button("移除") { downloads.remove(item, deleteFile: true) }
+                    Text(subtitle("已取消")).font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            .buttonStyle(.borderless)
-            .font(.caption)
+            Spacer(minLength: 4)
+            trailingButton
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture { if item.state == .completed { downloads.open(item) } }
+        .contextMenu { menuItems }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) { downloads.remove(item, deleteFile: true) } label: { Label("删除", systemImage: "trash") }
+        }
     }
 
-    private var symbol: String {
+    @ViewBuilder private var trailingButton: some View {
         switch item.state {
-        case .completed: return "checkmark.circle"
-        case .failed: return "exclamationmark.circle"
-        case .paused: return "pause.circle"
-        default: return "arrow.down.circle"
+        case .downloading:
+            Button { downloads.pause(item) } label: { Image(systemName: "pause.circle.fill").font(.title2) }.buttonStyle(.borderless)
+        case .paused, .failed:
+            Button { downloads.resume(item) } label: { Image(systemName: "arrow.clockwise.circle.fill").font(.title2) }.buttonStyle(.borderless)
+        case .completed:
+            Menu { menuItems } label: { Image(systemName: "ellipsis.circle").font(.title3) }
+        case .cancelled:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private var menuItems: some View {
+        switch item.state {
+        case .completed:
+            Button { downloads.open(item) } label: { Label("打开", systemImage: "eye") }
+            Button { downloads.share(item) } label: { Label("分享", systemImage: "square.and.arrow.up") }
+            Button { downloads.saveToFiles(item) } label: { Label("存储到“文件”…", systemImage: "folder") }
+        case .downloading:
+            Button { downloads.pause(item) } label: { Label("暂停", systemImage: "pause") }
+            Button(role: .destructive) { downloads.cancel(item) } label: { Label("取消", systemImage: "xmark") }
+        case .paused, .failed:
+            Button { downloads.resume(item) } label: { Label("继续", systemImage: "arrow.clockwise") }
+        case .cancelled:
+            EmptyView()
+        }
+        if let url = item.sourceURL {
+            Button { UIPasteboard.general.url = url } label: { Label("拷贝下载地址", systemImage: "link") }
+        }
+        Button(role: .destructive) { downloads.remove(item, deleteFile: true) } label: { Label("删除", systemImage: "trash") }
+    }
+
+    private func subtitle(_ detail: String) -> String {
+        var parts = [detail]
+        if let host = item.sourceURL?.host { parts.append(host) }
+        parts.append(item.startDate.formatted(date: .abbreviated, time: .shortened))
+        return parts.joined(separator: " · ")
+    }
+
+    private var tint: Color {
+        switch item.state {
+        case .failed: return .red
+        case .cancelled: return .gray
+        default: return .accentColor
+        }
+    }
+
+    private var fileSymbol: String {
+        let ext = (item.fileName as NSString).pathExtension.lowercased()
+        switch ext {
+        case "pdf": return "doc.richtext"
+        case "zip", "rar", "7z", "gz", "tar", "crx": return "doc.zipper"
+        case "jpg", "jpeg", "png", "gif", "webp", "heic", "svg": return "photo"
+        case "mp4", "mov", "m4v", "webm", "mkv", "ts": return "film"
+        case "mp3", "m4a", "aac", "wav", "flac", "ogg": return "music.note"
+        case "md", "txt", "json", "js", "css", "html", "xml", "csv": return "doc.text"
+        case "ttf", "otf", "woff", "woff2": return "textformat"
+        default: return "doc"
         }
     }
 

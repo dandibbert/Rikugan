@@ -24,6 +24,8 @@ import QuickLook
     var task: URLSessionDownloadTask?
     var resumeData: Data?
     var hlsTask: Task<Void, Never>?
+    /// Chosen in the download prompt: open the Files exporter once finished.
+    var exportToFiles = false
     private var progressObservation: NSKeyValueObservation?
     private var lastSample: (date: Date, bytes: Int64) = (Date(), 0)
 
@@ -127,10 +129,24 @@ import QuickLook
         download.delegate = self
         item.observe(download.progress)
         items.insert(item, at: 0)
-        announce(item)
+        // Announced once the destination is decided (after the optional prompt).
     }
 
     // MARK: Direct downloads (links, media sniffer, extensions, GM_download)
+
+    /// User-initiated download (link / media panel): asks for name and destination first when the
+    /// prompt is enabled. Programmatic callers (GM_download, chrome.downloads, tests) use `download`.
+    func downloadInteractively(url: URL, suggestedName: String?, from tab: BrowserTab?) {
+        guard DownloadPrompt.enabled, url.scheme != "blob" else { download(url: url, suggestedName: suggestedName, from: tab); return }
+        let isHLS = url.pathExtension.lowercased() == "m3u8"
+        let name = suggestedName ?? (isHLS ? url.deletingPathExtension().lastPathComponent + ".ts"
+                                          : (url.lastPathComponent.isEmpty ? (url.host ?? "download") : url.lastPathComponent))
+        Task {
+            guard let decision = await DownloadPrompt.ask(fileName: name, size: 0, source: url, mime: nil) else { return }
+            let item = download(url: url, suggestedName: decision.fileName, from: tab)
+            item?.exportToFiles = decision.exportToFiles
+        }
+    }
 
     @discardableResult
     func download(url: URL, suggestedName: String?, from tab: BrowserTab?, headers: [String: String] = [:]) -> DownloadItem? {
@@ -276,6 +292,7 @@ import QuickLook
         item.state = .completed
         item.speed = 0
         persist()
+        if item.exportToFiles { item.exportToFiles = false; saveToFiles(item) }
         AppServices.shared.profile.extensions.dispatchAll("downloads.onChanged", permission: "downloads") { _ in
             [["id": item.numericID, "state": ["previous": "in_progress", "current": "complete"]]]
         }
@@ -314,14 +331,33 @@ extension DownloadManager: WKDownloadDelegate {
     nonisolated func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
                               completionHandler: @escaping (URL?) -> Void) {
         MainActor.assumeIsolated {
-            let file = AppPaths.uniqueFile(in: AppPaths.downloads, name: suggestedFilename)
-            if let item = wkItems[ObjectIdentifier(download)] {
-                item.fileName = file.lastPathComponent
-                item.mime = response.mimeType ?? item.mime
-                if response.expectedContentLength > 0 { item.total = response.expectedContentLength }
-                item.fileURL = file
+            let item = wkItems[ObjectIdentifier(download)]
+            let place: (String, Bool) -> Void = { name, exportToFiles in
+                let file = AppPaths.uniqueFile(in: AppPaths.downloads, name: name)
+                if let item {
+                    item.fileName = file.lastPathComponent
+                    item.mime = response.mimeType ?? item.mime
+                    if response.expectedContentLength > 0 { item.total = response.expectedContentLength }
+                    item.fileURL = file
+                    item.exportToFiles = exportToFiles
+                    self.announce(item)
+                }
+                completionHandler(file)
             }
-            completionHandler(file)
+            guard DownloadPrompt.enabled else { place(suggestedFilename, false); return }
+            Task { @MainActor in
+                // WebKit waits for the destination: the download does not start before the user confirms.
+                if let decision = await DownloadPrompt.ask(fileName: suggestedFilename, size: response.expectedContentLength,
+                                                           source: download.originalRequest?.url ?? response.url, mime: response.mimeType) {
+                    place(decision.fileName, decision.exportToFiles)
+                } else {
+                    completionHandler(nil)
+                    if let item {
+                        self.wkItems.removeValue(forKey: ObjectIdentifier(download))
+                        self.items.removeAll { $0.id == item.id }
+                    }
+                }
+            }
         }
     }
 

@@ -33,7 +33,7 @@ struct MediaSnifferView: View {
                         Text(details(item)).font(.caption).foregroundStyle(.secondary)
                         Text(item.url.absoluteString).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
                         HStack(spacing: 16) {
-                            Button("下载") { downloads.download(url: item.url, suggestedName: nil, from: tab) }
+                            Button("下载") { downloads.downloadInteractively(url: item.url, suggestedName: nil, from: tab) }
                             Button("播放") { player = item.url }
                             Button("拷贝链接") { UIPasteboard.general.url = item.url; ToastCenter.shared.show("已拷贝", symbol: "doc.on.doc") }
                             Button { Presenter.share([item.url]) } label: { Image(systemName: "square.and.arrow.up") }
@@ -164,7 +164,7 @@ struct ImageGalleryView: View {
                 }
             }
             .task { await scan() }
-            .sheet(item: $preview) { image in ImagePreview(image: image) }
+            .sheet(item: $preview) { image in ImagePreview(image: image) { preview = nil; tab.manager?.newTab(url: image.url, isPrivate: tab.isPrivate); dismiss() } }
         }
     }
 
@@ -183,11 +183,19 @@ struct ImageGalleryView: View {
     private func save(_ list: [PageImage]) async {
         saving = true
         defer { saving = false }
+        let saved = await Self.saveToPhotos(list.map(\.url))
+        if saved >= 0 { ToastCenter.shared.show("已存储 \(saved) 张图片", symbol: "photo") }
+        selecting = false
+        selection.removeAll()
+    }
+
+    /// Returns the number saved, or -1 without photo-library permission (a toast explains it).
+    static func saveToPhotos(_ urls: [URL]) async -> Int {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else { ToastCenter.shared.show("没有相册写入权限", symbol: "exclamationmark.triangle"); return }
+        guard status == .authorized || status == .limited else { ToastCenter.shared.show("没有相册写入权限", symbol: "exclamationmark.triangle"); return -1 }
         var saved = 0
-        for image in list {
-            guard let data = try? await URLSession.shared.data(from: image.url).0 else { continue }
+        for url in urls {
+            guard let data = try? await URLSession.shared.data(from: url).0 else { continue }
             let ok: Bool = await withCheckedContinuation { continuation in
                 PHPhotoLibrary.shared().performChanges({
                     PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
@@ -195,22 +203,44 @@ struct ImageGalleryView: View {
             }
             if ok { saved += 1 }
         }
-        ToastCenter.shared.show("已存储 \(saved) 张图片", symbol: "photo")
-        selecting = false
-        selection.removeAll()
+        return saved
     }
 }
 
+/// Full-size image with the same actions as the thumbnails (long press, or the … button).
 struct ImagePreview: View {
     let image: ImageGalleryView.PageImage
+    var openInTab: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var scale: CGFloat = 1
+    @State private var baseScale: CGFloat = 1
+
+    @ViewBuilder private var actions: some View {
+        Button { Task { if await ImageGalleryView.saveToPhotos([image.url]) > 0 { ToastCenter.shared.show("已存储到相册", symbol: "photo") } } } label: {
+            Label("存储到相册", systemImage: "square.and.arrow.down")
+        }
+        Button { Task { await copyImage() } } label: { Label("拷贝图片", systemImage: "doc.on.doc") }
+        Button { UIPasteboard.general.url = image.url; ToastCenter.shared.show("已拷贝图片地址", symbol: "link") } label: { Label("拷贝图片地址", systemImage: "link") }
+        Button { Presenter.share([image.url]) } label: { Label("分享", systemImage: "square.and.arrow.up") }
+        if let openInTab { Button { openInTab() } label: { Label("在新标签页打开原图", systemImage: "arrow.up.right.square") } }
+    }
 
     var body: some View {
         NavigationStack {
             AsyncImage(url: image.url) { phase in
-                if let img = phase.image { img.resizable().scaledToFit().scaleEffect(scale).gesture(MagnificationGesture().onChanged { scale = max(1, $0) }) }
-                else { ProgressView() }
+                if let img = phase.image {
+                    img.resizable().scaledToFit()
+                        .scaleEffect(scale)
+                        .gesture(MagnificationGesture()
+                            .onChanged { scale = max(1, baseScale * $0) }
+                            .onEnded { _ in baseScale = scale })
+                        .onTapGesture(count: 2) { withAnimation { scale = scale > 1 ? 1 : 2.5; baseScale = scale } }
+                        .contextMenu { actions }
+                } else if phase.error != nil {
+                    Label("图片无法加载", systemImage: "exclamationmark.triangle").foregroundStyle(.white)
+                } else {
+                    ProgressView().tint(.white)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black)
@@ -218,8 +248,18 @@ struct ImagePreview: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
-                ToolbarItem(placement: .primaryAction) { Button { Presenter.share([image.url]) } label: { Image(systemName: "square.and.arrow.up") } }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu { actions } label: { Image(systemName: "ellipsis.circle") }.accessibilityIdentifier("imagePreviewActions")
+                }
             }
         }
+    }
+
+    private func copyImage() async {
+        guard let data = try? await URLSession.shared.data(from: image.url).0, let uiImage = UIImage(data: data) else {
+            ToastCenter.shared.show("无法拷贝图片", symbol: "exclamationmark.triangle"); return
+        }
+        UIPasteboard.general.image = uiImage
+        ToastCenter.shared.show("已拷贝图片", symbol: "doc.on.doc")
     }
 }

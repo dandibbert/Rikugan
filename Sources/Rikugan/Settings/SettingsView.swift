@@ -133,10 +133,16 @@ struct AppearanceSettingsView: View {
                 }
             }
             Section {
-                Picker("快捷按钮", selection: Binding(get: { services.prefs.quickActions.first ?? .darkMode }, set: { services.prefs.quickActions = [$0] })) {
-                    ForEach(ToolbarAction.allCases) { Label(QuickActions.title($0), systemImage: QuickActions.symbol($0)).tag($0) }
+                Picker("地址栏显示", selection: $services.prefs.addressBarDisplay) {
+                    Text("标题和域名").tag(AddressBarDisplay.titleAndDomain)
+                    Text("网页标题").tag(AddressBarDisplay.title)
+                    Text("域名").tag(AddressBarDisplay.domain)
+                    Text("完整网址").tag(AddressBarDisplay.fullURL)
                 }
-            } footer: { Text("长按工具栏中间的快捷按钮也可以更换。") }
+            } footer: { Text("浏览时地址栏显示的内容；点击地址栏编辑时总是显示完整网址。") }
+            Section {
+                NavigationLink { ToolbarCustomizeView() } label: { Label("工具栏按钮与手势", systemImage: "hand.tap") }
+            } footer: { Text("自定义底部工具栏 5 个按钮、每个按钮的长按动作，以及滑动 / 双击手势。长按没有设置长按动作的按钮也会打开这里。") }
             Section {
                 NavigationLink { AppIconPickerView() } label: {
                     HStack {
@@ -327,13 +333,30 @@ struct DarkModeSettingsView: View {
                     Text("开").tag(TriState.on)
                 }
                 .pickerStyle(.inline)
-            } footer: { Text("这是网页内容的深色模式，而不只是 App 界面。已经是深色的网页会自动跳过。每个网站可在 页面菜单 → 网页深色模式 中单独设置。") }
+            } header: { Text("全局（所有网站的默认值）") } footer: { Text("这是网页内容的深色模式，而不只是 App 界面。已经是深色的网页会自动跳过。单个网站可以覆盖这里的设置：页面菜单 → 网页工具 → 网页深色模式，选择“本网站始终开启 / 关闭”；选“跟随全局设置”则使用这里的值。") }
+            DarkModeSiteOverrides(store: services.profile.siteSettings)
             Section("调整") {
                 Stepper("亮度 \(services.prefs.darkModeBrightness)%", value: $services.prefs.darkModeBrightness, in: 50...150, step: 5)
                 Stepper("对比度 \(services.prefs.darkModeContrast)%", value: $services.prefs.darkModeContrast, in: 50...150, step: 5)
             }
         }
         .navigationTitle("网页深色模式")
+    }
+}
+
+/// Sites whose dark mode differs from the global setting (observes the store so resets show at once).
+struct DarkModeSiteOverrides: View {
+    @ObservedObject var store: SiteSettingsStore
+
+    var body: some View {
+        Section {
+            let overrides = store.sites.filter { $0.value.darkMode != nil }.sorted { $0.key < $1.key }
+            if overrides.isEmpty { Text("没有单独设置的网站").foregroundStyle(.secondary) }
+            ForEach(overrides, id: \.key) { host, site in
+                LabeledContent(host, value: site.darkMode == .on ? "始终开启" : (site.darkMode == .off ? "始终关闭" : "自动"))
+                    .swipeActions { Button("跟随全局") { store.update(host) { $0.darkMode = nil } } }
+            }
+        } header: { Text("单独设置的网站") } footer: { Text("左滑可恢复为跟随全局设置。") }
     }
 }
 
@@ -393,9 +416,14 @@ struct MediaSettingsView: View {
             Section {
                 Toggle("媒体资源嗅探", isOn: $services.prefs.mediaSnifferEnabled)
             } footer: { Text("记录网页通过 fetch / XHR / DOM 加载的视频、音频和 M3U8 地址。受 DRM（FairPlay / Widevine）保护的内容不在支持范围内。") }
-            Section("下载位置") {
-                Text("文件 App → 我的 iPhone → Rikugan → Downloads").font(.footnote)
+            Section {
+                Toggle("下载前询问文件名和保存位置", isOn: $services.prefs.downloadConfirm)
+            } header: { Text("下载") } footer: {
+                Text("开启后，网页下载、长按链接下载和媒体面板下载会先让你修改文件名，并选择保存到 Rikugan 下载文件夹或完成后在“文件”中选择位置。默认位置：文件 App → 我的 iPhone → Rikugan → Downloads。")
             }
+            Section {
+                Toggle("重启后保留标签页缩略图", isOn: $services.prefs.persistTabThumbnails)
+            } footer: { Text("缩略图保存在 App 缓存中（无痕标签页不保存），关闭标签页时删除。") }
         }
         .navigationTitle("媒体与下载")
     }

@@ -87,6 +87,8 @@ struct BrowserWindowHost: View {
                     BackgroundHostContainer.shared.flush()
                     services.consumeSharedPendingItems()
                 case .background, .inactive:
+                    // Keep the current page's thumbnail for the tab switcher after a relaunch.
+                    manager.activeTab?.captureThumbnail()
                     manager.save()
                 @unknown default: break
                 }

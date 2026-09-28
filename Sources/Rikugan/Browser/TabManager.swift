@@ -130,6 +130,7 @@ import UIKit
         let wasActive = tab.id == activeTabID
         let space = tabs.filter { $0.isPrivate == tab.isPrivate && (tab.isPrivate || $0.groupID == tab.groupID) }
         tabs.remove(at: index)
+        TabThumbnailStore.remove(tab.id)
         profile.extensions.tabRemoved(tab)
         tab.teardown()
         if tab.isPrivate { profile.releasePrivateStoreIfUnused() }

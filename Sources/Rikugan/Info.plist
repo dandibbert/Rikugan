@@ -67,10 +67,6 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>NSAllowsArbitraryLoadsInWebContent</key>
-		<true/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>网页请求使用摄像头，或扫描二维码时需要访问摄像头。</string>

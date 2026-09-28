@@ -313,7 +313,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
                 },
                 UIAction(title: "拷贝链接", image: UIImage(systemName: "doc.on.doc")) { _ in UIPasteboard.general.url = link },
                 UIAction(title: "下载链接文件", image: UIImage(systemName: "arrow.down.circle")) { _ in
-                    AppServices.shared.downloads.download(url: link, suggestedName: nil, from: self)
+                    AppServices.shared.downloads.downloadInteractively(url: link, suggestedName: nil, from: self)
                 },
                 UIAction(title: "添加到书签", image: UIImage(systemName: "book")) { _ in
                     self?.profile.bookmarks.add(title: link.host ?? link.absoluteString, url: link.absoluteString, parent: nil)

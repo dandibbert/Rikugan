@@ -15,7 +15,46 @@ public enum HomepageMode: String, Codable, CaseIterable { case start, blank, cus
 public enum ToolbarAction: String, Codable, CaseIterable, Identifiable {
     case newTab, closeTab, reload, darkMode, translate, userscripts, media, desktopSite, readerMode, findInPage,
          share, bookmarks, privateTab, images, extensions, elementPicker
+    // Navigation / app actions usable as bottom-toolbar buttons, long-press actions and gestures.
+    case back, forward, tabSwitcher, pageMenu, home, downloads, history, settings, addBookmark, scrollToTop,
+         reopenClosedTab, nextTab, previousTab, webTools, none
     public var id: String { rawValue }
+
+    /// Actions that make sense as a quick-action / long-press / gesture target.
+    public static var assignable: [ToolbarAction] { allCases.filter { $0 != .none && $0 != .pageMenu } }
+}
+
+/// What the collapsed address bar shows (editing always shows the full URL).
+public enum AddressBarDisplay: String, Codable, CaseIterable, Identifiable {
+    case domain, fullURL, title, titleAndDomain
+    public var id: String { rawValue }
+}
+
+/// Bottom toolbar (iPhone): the button in each slot and what a long press on that slot does.
+public struct ToolbarLayout: Codable, Equatable {
+    public var buttons: [ToolbarAction]
+    /// Long-press action per slot index; `.none` (or missing) = the button's built-in long press
+    /// (history list for back / forward, tab menu for tabs, customise for other buttons).
+    public var longPress: [ToolbarAction]
+
+    public static let slotCount = 5
+    public static let `default` = ToolbarLayout(buttons: [.back, .forward, .darkMode, .tabSwitcher, .pageMenu],
+                                                longPress: Array(repeating: .none, count: slotCount))
+
+    public init(buttons: [ToolbarAction], longPress: [ToolbarAction]) {
+        self.buttons = buttons
+        self.longPress = longPress
+    }
+
+    /// Always exactly `slotCount` slots and always one page-menu button (settings stay reachable).
+    public var normalized: ToolbarLayout {
+        var b = Array(buttons.prefix(Self.slotCount))
+        while b.count < Self.slotCount { b.append(Self.default.buttons[b.count]) }
+        if !b.contains(.pageMenu) { b[Self.slotCount - 1] = .pageMenu }
+        var l = Array(longPress.prefix(Self.slotCount))
+        while l.count < Self.slotCount { l.append(.none) }
+        return ToolbarLayout(buttons: b, longPress: l)
+    }
 }
 
 /// App-wide preferences (per install, not per profile).
@@ -30,6 +69,17 @@ public struct Preferences: Codable, Equatable {
     ]
     public var toolbarPosition: ToolbarPosition = .bottom
     public var quickActions: [ToolbarAction] = [.darkMode]
+    public var toolbarLayout: ToolbarLayout = .default
+    public var addressBarDisplay: AddressBarDisplay = .titleAndDomain
+    /// Gestures: swipe left / right on the address bar switches tabs; swipe up on the bottom
+    /// toolbar opens the tab switcher; double-tap on the address bar is up to the action.
+    public var swipeAddressBarSwitchesTabs = true
+    public var swipeUpToolbarAction: ToolbarAction = .tabSwitcher
+    public var doubleTapAddressBarAction: ToolbarAction = .none
+    /// Ask for file name and destination before a download starts.
+    public var downloadConfirm = true
+    /// Keep tab thumbnails on disk so the tab switcher still shows them after a relaunch.
+    public var persistTabThumbnails = true
     public var homepageMode: HomepageMode = .start
     public var homepageURL = ""
     public var showFrequentlyVisited = true
@@ -91,6 +141,15 @@ public struct Preferences: Codable, Equatable {
         shortcuts = v("shortcuts", shortcuts)
         toolbarPosition = v("toolbarPosition", toolbarPosition)
         quickActions = v("quickActions", quickActions)
+        // Older settings only had the single quick-action slot: carry it into the layout.
+        toolbarLayout = v("toolbarLayout", ToolbarLayout(buttons: [.back, .forward, quickActions.first ?? .darkMode, .tabSwitcher, .pageMenu],
+                                                         longPress: ToolbarLayout.default.longPress)).normalized
+        addressBarDisplay = v("addressBarDisplay", addressBarDisplay)
+        swipeAddressBarSwitchesTabs = v("swipeAddressBarSwitchesTabs", swipeAddressBarSwitchesTabs)
+        swipeUpToolbarAction = v("swipeUpToolbarAction", swipeUpToolbarAction)
+        doubleTapAddressBarAction = v("doubleTapAddressBarAction", doubleTapAddressBarAction)
+        downloadConfirm = v("downloadConfirm", downloadConfirm)
+        persistTabThumbnails = v("persistTabThumbnails", persistTabThumbnails)
         homepageMode = v("homepageMode", homepageMode)
         homepageURL = v("homepageURL", homepageURL)
         showFrequentlyVisited = v("showFrequentlyVisited", showFrequentlyVisited)

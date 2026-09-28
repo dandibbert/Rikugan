@@ -75,7 +75,9 @@ import SwiftUI
 
     static func cycleDarkMode(_ tab: BrowserTab?) {
         guard let tab else { return }
-        let current = tab.profile.siteSettings.settings(for: tab.host).darkMode ?? AppServices.shared.prefs.pageDarkMode
+        var current = tab.profile.siteSettings.settings(for: tab.host).darkMode ?? AppServices.shared.prefs.pageDarkMode
+        // "Automatic" follows the system appearance: toggle relative to what the page shows now.
+        if current == .auto { current = UITraitCollection.current.userInterfaceStyle == .dark ? .on : .off }
         let next: TriState = current == .on ? .off : .on
         tab.setPageDarkMode(next)
         ToastCenter.shared.show(next == .on ? "网页深色模式：开" : "网页深色模式：关", symbol: "moon")

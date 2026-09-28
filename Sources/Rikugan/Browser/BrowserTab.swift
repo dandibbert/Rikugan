@@ -111,6 +111,7 @@ enum TranslationState: Equatable {
         pendingExternalConfiguration = configuration
         super.init()
         TabRegistry.shared.register(self)
+        if !isPrivate { thumbnail = TabThumbnailStore.load(id) }
         if configuration != nil { ensureWebView() }
     }
 
@@ -379,7 +380,11 @@ enum TranslationState: Equatable {
         let config = WKSnapshotConfiguration()
         config.snapshotWidth = 360
         webView.takeSnapshot(with: config) { [weak self] image, _ in
-            Task { @MainActor in if let image { self?.thumbnail = image } }
+            Task { @MainActor in
+                guard let self, let image else { return }
+                self.thumbnail = image
+                if !self.isPrivate { TabThumbnailStore.save(image, for: self.id) }
+            }
         }
     }
 
@@ -462,4 +467,30 @@ enum TranslationState: Equatable {
         images[host] = image
         return image
     }
+}
+
+
+/// Tab thumbnails on disk (Caches/TabThumbnails/<tab id>.jpg) so the tab switcher still has them
+/// after the app is relaunched. Private tabs are never written. Removed when the tab is closed.
+@MainActor enum TabThumbnailStore {
+    private static var directory: URL {
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("TabThumbnails", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    private static func file(_ id: UUID) -> URL { directory.appendingPathComponent(id.uuidString + ".jpg") }
+
+    static func load(_ id: UUID) -> UIImage? {
+        guard AppServices.shared.prefs.persistTabThumbnails else { return nil }
+        return UIImage(contentsOfFile: file(id).path)
+    }
+
+    static func save(_ image: UIImage, for id: UUID) {
+        guard AppServices.shared.prefs.persistTabThumbnails, let data = image.jpegData(compressionQuality: 0.6) else { return }
+        let target = file(id)
+        DispatchQueue.global(qos: .utility).async { try? data.write(to: target, options: .atomic) }
+    }
+
+    static func remove(_ id: UUID) { try? FileManager.default.removeItem(at: file(id)) }
+
 }

@@ -93,13 +93,21 @@ struct BrowserView: View {
         .sheet(item: $runtime.popup) { request in ExtensionPopupSheet(request: request).environmentObject(runtime) }
         .sheet(item: $runtime.permissionRequest) { prompt in PermissionPromptSheet(prompt: prompt) }
         .sheet(isPresented: $showQuickActionPicker) { QuickActionPicker().environmentObject(services) }
-        .fileImporter(isPresented: Binding(get: { importKind != nil }, set: { if !$0 { importKind = nil } }),
-                      allowedContentTypes: allowedTypes, allowsMultipleSelection: false) { result in
-            handleImport(result)
+        // While a sheet (e.g. Settings) is up, the picker is presented by the sheet instead: a view
+        // cannot present a second modal over its own sheet.
+        .fileImporter(isPresented: Binding(get: { importKind != nil && sheet == nil }, set: { if !$0 { importKind = nil } }),
+                      allowedContentTypes: ImportRouter.allowedTypes(importKind), allowsMultipleSelection: false) { result in
+            let kind = importKind
+            importKind = nil
+            ImportRouter.handle(result, kind: kind, manager: manager)
         }
         .onReceive(NotificationCenter.default.publisher(for: .rikuganOpenSheet)) { note in
             guard (note.object as? TabManager) === manager, let target = note.userInfo?["sheet"] as? BrowserSheet else { return }
             sheet = target
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .rikuganShowTabs)) { note in
+            guard (note.object as? TabManager) === manager else { return }
+            showTabs = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .rikuganCloseSheet)) { note in
             guard (note.object as? TabManager) === manager else { return }
@@ -111,32 +119,6 @@ struct BrowserView: View {
         .onReceive(services.$pendingOpen) { items in handlePending(items) }
         .onAppear { if SelfTestRunner.autoRun { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { sheet = .selfTest } } }
         .animation(.easeInOut(duration: 0.18), value: editing)
-    }
-
-    private var allowedTypes: [UTType] {
-        switch importKind {
-        case .extensionPackage: return [.zip, UTType(filenameExtension: "crx") ?? .data, .data]
-        case .extensionFolder: return [.folder]
-        case .userscript: return [UTType(filenameExtension: "js") ?? .plainText, .plainText, .sourceCode, .data]
-        case .font: return [.font, UTType(filenameExtension: "ttf") ?? .data, UTType(filenameExtension: "otf") ?? .data, UTType(filenameExtension: "ttc") ?? .data, UTType(filenameExtension: "woff2") ?? .data]
-        case .settings: return [.json]
-        case nil: return [.data]
-        }
-    }
-
-    private func handleImport(_ result: Result<[URL], Error>) {
-        let kind = importKind
-        importKind = nil
-        guard case .success(let urls) = result, let url = urls.first else { return }
-        switch kind {
-        case .extensionPackage, .extensionFolder: extensionInstaller.stage(fileURL: url)
-        case .userscript: scriptInstaller.importFile(url)
-        case .font:
-            do { let list = try services.fonts.importFonts(from: url); toasts.show("已导入字体：" + list.map(\.family).joined(separator: "、"), symbol: "textformat") }
-            catch { toasts.show(error.localizedDescription, symbol: "exclamationmark.triangle") }
-        case .settings: ImportExport.importBundle(from: url, into: manager)
-        case nil: break
-        }
     }
 
     private func handlePending(_ items: [AppServices.PendingOpen]) {
@@ -157,6 +139,47 @@ struct BrowserView: View {
                 if let font = try? services.fonts.importFont(from: url) { toasts.show("已导入字体「\(font.family)」", symbol: "textformat") }
             } else if ext == "json" { ImportExport.importBundle(from: url, into: manager) }
             else { manager.newTab(url: url, isPrivate: false) }
+        }
+    }
+}
+
+/// Handles a file picked for import, whether the picker was shown by the browser or by a sheet.
+@MainActor enum ImportRouter {
+    static func allowedTypes(_ kind: BrowserView.ImportKind?) -> [UTType] {
+        switch kind {
+        case .extensionPackage: return [.zip, UTType(filenameExtension: "crx") ?? .data, .data]
+        case .extensionFolder: return [.folder]
+        case .userscript: return [UTType(filenameExtension: "js") ?? .plainText, .plainText, .sourceCode, .data]
+        case .font: return [.font, UTType(filenameExtension: "ttf") ?? .data, UTType(filenameExtension: "otf") ?? .data, UTType(filenameExtension: "ttc") ?? .data, UTType(filenameExtension: "woff2") ?? .data]
+        // Archives are JSON; some file providers report them only as generic data.
+        case .settings: return [.json, UTType(filenameExtension: "rikugan") ?? .json, .data]
+        case nil: return [.data]
+        }
+    }
+
+    static func handle(_ result: Result<[URL], Error>, kind: BrowserView.ImportKind?, manager: TabManager) {
+        let services = AppServices.shared
+        switch result {
+        case .failure(let error):
+            ToastCenter.shared.show("无法打开文件：\(error.localizedDescription)", symbol: "exclamationmark.triangle")
+            return
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            switch kind {
+            case .extensionPackage, .extensionFolder:
+                // The permission prompt is presented by the browser window: close any sheet first.
+                NotificationCenter.default.post(name: .rikuganCloseSheet, object: manager)
+                ExtensionInstaller.shared.stage(fileURL: url)
+            case .userscript:
+                NotificationCenter.default.post(name: .rikuganCloseSheet, object: manager)
+                UserscriptInstallCoordinator.shared.importFile(url)
+            case .font:
+                do { let list = try services.fonts.importFonts(from: url); ToastCenter.shared.show("已导入字体：" + list.map(\.family).joined(separator: "、"), symbol: "textformat") }
+                catch { ToastCenter.shared.show(error.localizedDescription, symbol: "exclamationmark.triangle") }
+            case .settings:
+                ImportExport.importBundle(from: url, into: manager)
+            case nil: break
+            }
         }
     }
 }
@@ -337,27 +360,52 @@ struct AddressBar: View {
 struct AddressBarContent: View {
     @ObservedObject var tab: BrowserTab
     @EnvironmentObject private var runtime: ExtensionRuntime
+    @EnvironmentObject private var services: AppServices
+    @EnvironmentObject private var manager: TabManager
     @Binding var editing: Bool
     @Binding var sheet: BrowserSheet?
+
+    private var domain: String { Omnibox.displayText(for: tab.url) }
+    private var pageTitle: String {
+        let t = tab.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty || t == tab.url?.host ? domain : t
+    }
+
+    @ViewBuilder private var label: some View {
+        if tab.isHome {
+            Text("搜索或输入网址").foregroundStyle(.secondary).font(.body).lineLimit(1)
+        } else {
+            switch services.prefs.addressBarDisplay {
+            case .domain:
+                Text(domain).font(.body).lineLimit(1)
+            case .fullURL:
+                Text(tab.url?.absoluteString ?? domain).font(.callout).lineLimit(1).truncationMode(.middle)
+            case .title:
+                Text(pageTitle).font(.body).lineLimit(1)
+            case .titleAndDomain:
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(pageTitle).font(.subheadline.weight(.medium)).lineLimit(1)
+                    if pageTitle != domain { Text(domain).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                }
+            }
+        }
+    }
 
     var body: some View {
         HStack(spacing: 6) {
             if tab.isPrivate { Image(systemName: "hand.raised.fill").foregroundStyle(.purple).font(.caption) }
-            Button { editing = true } label: {
-                HStack(spacing: 6) {
-                    if let url = tab.url, url.scheme == "https", !tab.isHome {
-                        Image(systemName: tab.hasSecureContent ? "lock.fill" : "lock.open").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Text(tab.isHome ? "搜索或输入网址" : Omnibox.displayText(for: tab.url))
-                        .lineLimit(1)
-                        .foregroundStyle(tab.isHome ? .secondary : .primary)
-                        .font(.body)
-                    Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                if let url = tab.url, url.scheme == "https", !tab.isHome {
+                    Image(systemName: tab.hasSecureContent ? "lock.fill" : "lock.open").font(.caption2).foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
+                label
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .modifier(AddressBarGestures(tab: tab, editing: $editing, sheet: $sheet))
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier("addressBar")
             if !runtime.toolbarExtensions.isEmpty {
                 ExtensionToolbarMenu(tab: tab)
@@ -371,6 +419,41 @@ struct AddressBarContent: View {
         .padding(.horizontal, 12)
         .frame(height: 40)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// Tap = edit; optional double-tap action; horizontal swipe switches tabs (Settings → 工具栏与手势).
+struct AddressBarGestures: ViewModifier {
+    @ObservedObject var tab: BrowserTab
+    @EnvironmentObject private var services: AppServices
+    @EnvironmentObject private var manager: TabManager
+    @Binding var editing: Bool
+    @Binding var sheet: BrowserSheet?
+    @State private var showTabs = false
+    @State private var showCustomize = false
+
+    func body(content: Content) -> some View {
+        let doubleTap = services.prefs.doubleTapAddressBarAction
+        let context = ToolbarActionContext(tab: tab, manager: manager, sheet: $sheet, showTabs: $showTabs, showCustomize: $showCustomize)
+        Group {
+            if doubleTap == .none {
+                content.onTapGesture { editing = true }
+            } else {
+                content
+                    .onTapGesture(count: 2) { QuickActions.perform(doubleTap, context) }
+                    .onTapGesture { editing = true }
+            }
+        }
+        .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
+            guard services.prefs.swipeAddressBarSwitchesTabs, abs(value.translation.width) > 60,
+                  abs(value.translation.width) > abs(value.translation.height) * 2 else { return }
+            QuickActions.switchTab(manager, by: value.translation.width < 0 ? 1 : -1)
+        })
+        .onChange(of: showTabs) { _, open in
+            // The tab switcher lives in BrowserView; route the request there.
+            if open { showTabs = false; NotificationCenter.default.post(name: .rikuganShowTabs, object: manager) }
+        }
+        .sheet(isPresented: $showCustomize) { QuickActionPicker().environmentObject(services) }
     }
 }
 
@@ -457,33 +540,6 @@ struct CompactToolbar: View {
     }
 }
 
-struct CompactToolbarContent: View {
-    @ObservedObject var tab: BrowserTab
-    @EnvironmentObject private var services: AppServices
-    @EnvironmentObject private var manager: TabManager
-    @Binding var showTabs: Bool
-    @Binding var sheet: BrowserSheet?
-    @Binding var importKind: BrowserView.ImportKind?
-    @Binding var showQuickActionPicker: Bool
-
-    var body: some View {
-        HStack {
-            BackForwardButton(tab: tab, forward: false)
-            Spacer()
-            BackForwardButton(tab: tab, forward: true)
-            Spacer()
-            QuickActionButton(tab: tab, sheet: $sheet, showPicker: $showQuickActionPicker)
-            Spacer()
-            TabsButton(showTabs: $showTabs)
-            Spacer()
-            PageMenuButton(tab: tab, sheet: $sheet, importKind: $importKind)
-        }
-        .font(.system(size: 19))
-        .padding(.horizontal, 22)
-        .frame(height: 46)
-    }
-}
-
 struct BackForwardButton: View {
     @ObservedObject var tab: BrowserTab
     let forward: Bool
@@ -532,116 +588,6 @@ struct TabsButton: View {
             showTabs = true
         }
         .accessibilityIdentifier("tabsButton")
-    }
-}
-
-/// Long-press customisable quick action slot (spec §46).
-struct QuickActionButton: View {
-    @ObservedObject var tab: BrowserTab
-    @EnvironmentObject private var services: AppServices
-    @EnvironmentObject private var manager: TabManager
-    @Binding var sheet: BrowserSheet?
-    @Binding var showPicker: Bool
-
-    var body: some View {
-        let action = services.prefs.quickActions.first ?? .darkMode
-        Button { QuickActions.perform(action, tab: tab, manager: manager, sheet: $sheet) } label: {
-            Image(systemName: QuickActions.symbol(action))
-        }
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in showPicker = true })
-        .accessibilityLabel(QuickActions.title(action))
-    }
-}
-
-@MainActor enum QuickActions {
-    static func title(_ action: ToolbarAction) -> String {
-        switch action {
-        case .newTab: return "新标签页"
-        case .closeTab: return "关闭标签页"
-        case .reload: return "刷新"
-        case .darkMode: return "网页深色模式"
-        case .translate: return "翻译"
-        case .userscripts: return "用户脚本"
-        case .media: return "媒体嗅探"
-        case .desktopSite: return "桌面版网站"
-        case .readerMode: return "阅读模式"
-        case .findInPage: return "页内查找"
-        case .share: return "分享"
-        case .bookmarks: return "书签"
-        case .privateTab: return "无痕标签页"
-        case .images: return "查看图片"
-        case .extensions: return "扩展"
-        case .elementPicker: return "隐藏网页元素"
-        }
-    }
-
-    static func symbol(_ action: ToolbarAction) -> String {
-        switch action {
-        case .newTab: return "plus.square.on.square"
-        case .closeTab: return "xmark.square"
-        case .reload: return "arrow.clockwise"
-        case .darkMode: return "moon"
-        case .translate: return "character.bubble"
-        case .userscripts: return "curlybraces"
-        case .media: return "play.rectangle.on.rectangle"
-        case .desktopSite: return "desktopcomputer"
-        case .readerMode: return "doc.plaintext"
-        case .findInPage: return "doc.text.magnifyingglass"
-        case .share: return "square.and.arrow.up"
-        case .bookmarks: return "book"
-        case .privateTab: return "hand.raised"
-        case .images: return "photo.on.rectangle"
-        case .extensions: return "puzzlepiece.extension"
-        case .elementPicker: return "eye.slash"
-        }
-    }
-
-    static func perform(_ action: ToolbarAction, tab: BrowserTab, manager: TabManager, sheet: Binding<BrowserSheet?>) {
-        switch action {
-        case .newTab: manager.newTab()
-        case .closeTab: manager.close(tab)
-        case .reload: tab.reload()
-        case .darkMode: PageActions.cycleDarkMode(tab)
-        case .translate: PageActions.translate(tab)
-        case .userscripts: sheet.wrappedValue = .userscripts
-        case .media: sheet.wrappedValue = .media
-        case .desktopSite: tab.toggleDesktopMode()
-        case .readerMode: sheet.wrappedValue = .reader
-        case .findInPage: PageActions.findInPage(tab)
-        case .share: PageActions.share(tab)
-        case .bookmarks: sheet.wrappedValue = .bookmarks
-        case .privateTab: manager.newTab(isPrivate: true)
-        case .images: sheet.wrappedValue = .images
-        case .extensions: sheet.wrappedValue = .extensions
-        case .elementPicker: PageActions.elementPicker(tab)
-        }
-    }
-}
-
-struct QuickActionPicker: View {
-    @EnvironmentObject private var services: AppServices
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            List(ToolbarAction.allCases) { action in
-                Button {
-                    services.prefs.quickActions = [action]
-                    dismiss()
-                } label: {
-                    HStack {
-                        Label(QuickActions.title(action), systemImage: QuickActions.symbol(action))
-                        Spacer()
-                        if services.prefs.quickActions.first == action { Image(systemName: "checkmark").foregroundStyle(.tint) }
-                    }
-                }
-                .foregroundStyle(.primary)
-            }
-            .navigationTitle("自定义快捷按钮")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-        }
-        .presentationDetents([.medium, .large])
     }
 }
 

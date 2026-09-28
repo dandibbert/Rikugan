@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -99,12 +100,47 @@ def main():
             entry["downloadError"] = f"{type(e).__name__}: {e}"
         sources.append(entry)
         print(key, entry.get("version"), entry.get("downloadError", "ok"))
+    edge = edge_download_probe()
+    print("edge download probe:", json.dumps(edge))
+    with open(os.path.join(OUT, "edge-download-probe.json"), "w") as f:
+        json.dump(edge, f, indent=2)
     probe = violentmonkey_mv3_probe()
     print("violentmonkey MV3 probe:", json.dumps(probe))
     with open(os.path.join(OUT, "sources.json"), "w") as f:
         json.dump(sources, f, indent=2)
     with open(os.path.join(OUT, "violentmonkey-mv3-probe.json"), "w") as f:
         json.dump(probe, f, indent=2)
+
+
+def edge_download_probe():
+    """Where does the Edge Add-ons package endpoint redirect to, and does the HTTPS form of that
+    URL serve the same package? (The app upgrades the redirect to HTTPS before falling back.)"""
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    url = ("https://edge.microsoft.com/extensionwebstorebase/v1/crx?response=redirect&prodversion=138.0.0.0"
+           "&x=id%3Deeagobfjdenkkddmbclomhiblgggliao%26installsource%3Dondemand%26uc")
+    result = {}
+    try:
+        opener = urllib.request.build_opener(NoRedirect)
+        try:
+            opener.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=60)
+            result["redirect"] = None
+        except urllib.error.HTTPError as e:
+            result["status"] = e.code
+            result["redirect"] = e.headers.get("Location")
+        target = result.get("redirect") or ""
+        result["redirectScheme"] = target.split(":", 1)[0] if target else None
+        if target.startswith("http://"):
+            https = "https://" + target[len("http://"):]
+            try:
+                data = get(https)
+                result["httpsUpgrade"] = {"ok": data[:4] == b"Cr24", "bytes": len(data)}
+            except Exception as e:
+                result["httpsUpgrade"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    except Exception as e:
+        result["error"] = f"{type(e).__name__}: {e}"
+    return result
 
 
 def violentmonkey_mv3_probe():

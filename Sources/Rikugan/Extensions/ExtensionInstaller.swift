@@ -44,6 +44,50 @@ struct WebStoreItem: Equatable, Hashable {
     var storeName: String { store == .chrome ? "Chrome 应用商店" : "Microsoft Edge 加载项" }
 }
 
+/// Downloads a store package. The Edge endpoint redirects to a plain-HTTP Microsoft CDN URL:
+/// redirects are upgraded to HTTPS first (CRX signatures are not verified locally, so transport
+/// security matters); only if the HTTPS copy cannot be fetched is the original HTTP URL used.
+enum StoreDownload {
+    static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+
+    final class UpgradeRedirects: NSObject, URLSessionTaskDelegate {
+        let upgrade: Bool
+        private(set) var insecureRedirect: URL?
+        init(upgrade: Bool) { self.upgrade = upgrade }
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            guard upgrade, let url = request.url, url.scheme?.lowercased() == "http",
+                  var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { completionHandler(request); return }
+            insecureRedirect = url
+            parts.scheme = "https"
+            var upgraded = request
+            upgraded.url = parts.url
+            completionHandler(upgraded)
+        }
+    }
+
+    static func fetch(_ url: URL) async throws -> Data {
+        do {
+            return try await get(url, upgrade: true)
+        } catch let error as URLError where [.secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
+                                             .serverCertificateHasUnknownRoot, .cannotConnectToHost, .timedOut].contains(error.code) {
+            ErrorLog.shared.record("HTTPS copy of store package unavailable (\(error.code.rawValue)); using the store's HTTP redirect", source: "extension install")
+            return try await get(url, upgrade: false)
+        }
+    }
+
+    private static func get(_ url: URL, upgrade: Bool) async throws -> Data {
+        var request = URLRequest(url: url, timeoutInterval: 60)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let delegate = UpgradeRedirects(upgrade: upgrade)
+        let (data, response) = try await URLSession.shared.data(for: request, delegate: delegate)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw RikuganError("下载失败（HTTP \(http.statusCode)），该扩展可能不可用或需要登录")
+        }
+        return data
+    }
+}
+
 /// Parsed package waiting for the user's permission confirmation (spec §19 / §20).
 struct PendingExtensionInstall: Identifiable {
     let id = UUID()
@@ -107,13 +151,7 @@ struct PendingExtensionInstall: Identifiable {
         Task {
             defer { busy = nil }
             do {
-                var request = URLRequest(url: item.downloadURL, timeoutInterval: 60)
-                request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-                                 forHTTPHeaderField: "User-Agent")
-                let (data, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                    throw RikuganError("下载失败（HTTP \(http.statusCode)），该扩展可能不可用或需要登录")
-                }
+                let data = try await StoreDownload.fetch(item.downloadURL)
                 pending = try preparePackage(data, source: item.store == .chrome ? .chromeWebStore : .edgeAddons,
                                              storeURL: item.pageURL.absoluteString, seed: item.extensionID, expectedID: item.extensionID)
             } catch {
@@ -130,6 +168,10 @@ struct PendingExtensionInstall: Identifiable {
             let crx = try CRXPackage(data: data)
             zipData = crx.zipData
             crxID = crx.crxID
+            // A store download must be the package of the listing that was opened.
+            if let expectedID, let id = crx.crxID, id != expectedID {
+                throw RikuganError("下载的扩展包与商店页面不符（ID \(id) ≠ \(expectedID)），已拒绝安装")
+            }
         }
         let archive = try ZipArchive(data: zipData)
         guard let root = archive.rootPrefix(containing: "manifest.json") else {
@@ -191,7 +233,7 @@ struct PendingExtensionInstall: Identifiable {
             return "此扩展来自本地文件，请重新导入新版本的 ZIP / CRX 以更新"
         }
         do {
-            let (data, _) = try await URLSession.shared.data(from: item.downloadURL)
+            let data = try await StoreDownload.fetch(item.downloadURL)
             let candidate = try preparePackage(data, source: record.source, storeURL: record.storeURL, seed: record.id, expectedID: record.id)
             guard MetadataParser.compareVersions(candidate.manifest.version, record.version) == .orderedDescending else {
                 try? FileManager.default.removeItem(at: candidate.stagingDirectory)

@@ -73,6 +73,13 @@ jobs:
           plutil -p "$APP/Info.plist" | tee icons.txt | grep -E "CFBundle(Primary|Alternate)Icons|AppIcon" || true
           for name in AppIconOrbit AppIconNova; do grep -q "\"$name\"" icons.txt || { echo "missing alternate icon $name"; exit 1; }; done
           test -f "$APP/Assets.car"
+      - name: App Transport Security keys (NSAllowsArbitraryLoads must not be overridden)
+        run: |
+          APP=build/Build/Products/Release-iphoneos/Rikugan.app
+          plutil -p "$APP/Info.plist" | grep -A4 NSAppTransportSecurity
+          # iOS ignores NSAllowsArbitraryLoads when either of these keys is present, which blocked
+          # plain-HTTP native requests (Edge store packages, HTTP downloads, GM_xmlhttpRequest).
+          if plutil -p "$APP/Info.plist" | grep -qE "NSAllowsArbitraryLoadsInWebContent|NSAllowsLocalNetworking"; then echo "ATS override key present"; exit 1; fi
       - name: Package IPA
         run: |
           mkdir -p dist/Payload
@@ -182,6 +189,7 @@ jobs:
           path: |
             compat-packages/sources.json
             compat-packages/violentmonkey-mv3-probe.json
+            compat-packages/edge-download-probe.json
           if-no-files-found: warn
           retention-days: 30
 
