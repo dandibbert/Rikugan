@@ -30,7 +30,7 @@ struct AdBlockSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(sub.name)
                             Text(sub.lastUpdated.map { "\(sub.ruleCount) 条 · 更新于 \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "尚未下载")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.subheadline).foregroundStyle(.secondary)
                         }
                     }
                     .swipeActions { if !sub.isBuiltIn { Button("删除", role: .destructive) { adBlock.removeSubscription(sub.id) } } }
@@ -205,7 +205,7 @@ struct AutofillSettingsView: View {
                     Button("添加支付卡") { autofill.save(card); card = PaymentCard() }.disabled(card.cardNumber.count < 12)
                 }
             } else {
-                Button { Task { unlocked = await Keychain.authenticate(reason: "查看保存的密码与支付信息") } } label: { Label("解锁以查看", systemImage: "lock") }
+                Button { Task { unlocked = await Keychain.authenticate(reason: "查看保存的密码与支付信息") } } label: { Text("解锁以查看") }
             }
         }
         .navigationTitle("密码与自动填充")
@@ -269,7 +269,7 @@ struct ImportExportView: View {
                 Button { ImportExport.exportAll(from: manager, includeSource: includeSource, includeValues: includeValues) } label: {
                     Label("导出全部身份的设置、标签页与分组", systemImage: "square.and.arrow.up")
                 }
-                Button { importKind = .settings } label: { Label("从文件导入…", systemImage: "square.and.arrow.down") }
+                Button { importKind = .settings } label: { Text("从文件导入…") }
             } footer: {
                 Text("格式：rikugan-archive，版本 \(RikuganArchive.currentFormatVersion)。包含：设置、搜索引擎、网站设置、身份、标签页组、标签页（含顺序、当前组、当前标签页）、书签、用户脚本、字体元数据、内容拦截规则、扩展列表（仅元数据）。\n\n不包含：" + RikuganArchive.excludedAlways.joined(separator: "、") + "。\n\n导入前会显示预览，可选择“合并”或“替换”；导入前自动备份当前状态到 App 的 Backups 目录。")
             }

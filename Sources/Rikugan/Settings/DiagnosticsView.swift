@@ -165,7 +165,7 @@ struct DiagnosticsView: View {
                     Text("\(ext.name)：\(ext.state)\(ext.parked ? "（驻留）" : "") · 唤醒 \(ext.wakeCount) · 冷启动 \(ext.coldStartCount) · 卡住恢复 \(ext.stuckStartRecoveries) · 端口 \(ext.activePorts)")
                         .font(.caption2.monospaced())
                 }
-                NavigationLink { BackgroundRuntimesView() } label: { Label("后台运行时控制", systemImage: "gearshape.2") }
+                NavigationLink { BackgroundRuntimesView() } label: { Text("后台运行时控制") }
             } header: { Text("扩展后台运行时") } footer: { Text(BackgroundRuntimeSummary.memoryNote) }
             Section("安全") {
                 row("被拒绝的特权调用", "\(report.security.rejectedPrivilegedCalls)")
@@ -173,7 +173,7 @@ struct DiagnosticsView: View {
             }
             Section {
                 row("通过 / 失败 / 不适用 / 未测试", "\(report.manualTests.counts["pass"] ?? 0) / \(report.manualTests.counts["fail"] ?? 0) / \(report.manualTests.counts["notApplicable"] ?? 0) / \(report.manualTests.counts["untested"] ?? 0)")
-                NavigationLink { ManualTestChecklistView() } label: { Label("人工测试清单", systemImage: "checklist") }
+                NavigationLink { ManualTestChecklistView() } label: { Text("人工测试清单") }
             } header: { Text("人工测试（非 CI 结果）") }
             Section("扩展") {
                 if report.extensions.isEmpty { Text("未安装扩展").foregroundStyle(.secondary) }
@@ -222,7 +222,7 @@ struct DiagnosticsView: View {
             }
             Section {
                 row("兼容性矩阵版本", report.compatibilityMatrixVersion)
-                Button { export() } label: { Label("导出诊断报告（单个 JSON 文件）", systemImage: "square.and.arrow.up") }
+                Button { export() } label: { Text("导出诊断报告（单个 JSON 文件）") }
             } header: { Text("导出") } footer: {
                 Text("""
                 包含：构建与 commit、系统与设备型号、标签页与后台运行时计数、扩展和用户脚本的名称 / 版本 / 权限、功能开关、兼容性矩阵版本、DNR 跳过规则摘要、最近的运行时与安全日志（网址只保留域名）、人工测试状态（标注为人工结果，非 CI）。

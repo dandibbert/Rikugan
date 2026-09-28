@@ -613,12 +613,70 @@ html::-webkit-scrollbar { background: #222; }`;
     post('credentialCaptured', { username: f && f.user ? f.user.value : '', password: pw.value, host: location.hostname }).catch(() => {});
   }, true);
 
+  // ---- Find in page ----------------------------------------------------------------------------------
+  // Case-insensitive text search over visible text. Matches are painted with the CSS Custom
+  // Highlight API (no DOM changes, so page scripts and layout are untouched); without it the
+  // current match is shown as the selection.
+  let found = { ranges: [], index: -1 };
+  const hasHighlights = () => !!(window.CSS && CSS.highlights && window.Highlight);
+  const findPaint = () => {
+    const current = found.ranges[found.index];
+    if (hasHighlights()) {
+      CSS.highlights.set('rikugan-find', new Highlight(...found.ranges));
+      if (current) CSS.highlights.set('rikugan-find-current', new Highlight(current)); else CSS.highlights.delete('rikugan-find-current');
+    } else if (current) {
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(current);
+    }
+    if (current) {
+      const rect = current.getBoundingClientRect();
+      if (rect.top < 80 || rect.bottom > innerHeight - 80) window.scrollBy({ top: rect.top - innerHeight / 3, behavior: 'smooth' });
+    }
+    return { count: found.ranges.length, index: found.index };
+  };
+  const findClear = () => {
+    if (hasHighlights()) { CSS.highlights.delete('rikugan-find'); CSS.highlights.delete('rikugan-find-current'); }
+    found = { ranges: [], index: -1 };
+    return { count: 0, index: -1 };
+  };
+  const findStart = (query) => {
+    findClear();
+    const q = String(query || '').toLocaleLowerCase();
+    if (!q || !document.body) return { count: 0, index: -1 };
+    setSheet('find', '::highlight(rikugan-find){background-color:rgba(255,214,10,.55);color:inherit}' +
+      '::highlight(rikugan-find-current){background-color:rgba(255,149,0,.95);color:#000}');
+    const skip = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|TEXTAREA|SELECT|OPTION)$/;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => {
+        const parent = node.parentElement;
+        if (!parent || skip.test(parent.tagName) || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        return parent.getClientRects().length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+    for (let node = walker.nextNode(); node && found.ranges.length < 2000; node = walker.nextNode()) {
+      const text = node.nodeValue.toLocaleLowerCase();
+      for (let at = text.indexOf(q); at !== -1 && found.ranges.length < 2000; at = text.indexOf(q, at + q.length)) {
+        const range = document.createRange();
+        range.setStart(node, at); range.setEnd(node, at + q.length);
+        found.ranges.push(range);
+      }
+    }
+    // Start at the first match below the current scroll position, like Safari.
+    found.index = found.ranges.length ? Math.max(0, found.ranges.findIndex((r) => r.getBoundingClientRect().top >= 0)) : -1;
+    return findPaint();
+  };
+  const findStep = (forward) => {
+    if (!found.ranges.length) return { count: 0, index: -1 };
+    found.index = (found.index + (forward ? 1 : -1) + found.ranges.length) % found.ranges.length;
+    return findPaint();
+  };
+
   // ---- Public API (called from Swift through evaluateJavaScript in this world) ------------------------
   window.__rikuganTools = {
     applyDarkMode, applyFont, fontStatus, applyCosmetic, hideNow, startPicker, stopPicker: () => picker && picker.finish(), selectorFor,
     extractReader, startTranslation, applyTranslations, showOriginal, stopTranslation, languageSample,
     scanImages, scanMedia, videoAction, autofillInfo, fillLogin, fillForm,
     selection: () => String(window.getSelection ? window.getSelection() : ''),
+    findStart, findStep, findClear,
   };
 
   applyDarkMode(cfg.dark);

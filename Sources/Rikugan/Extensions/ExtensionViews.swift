@@ -24,18 +24,18 @@ struct ExtensionManagerView: View {
                 }
             }
             Section {
-                Button { importKind = .extensionPackage } label: { Label("导入 ZIP / CRX", systemImage: "doc.zipper") }
-                Button { importKind = .extensionFolder } label: { Label("导入解压后的文件夹", systemImage: "folder") }
-                Button { openStore("https://chromewebstore.google.com/") } label: { Label("打开 Chrome 应用商店", systemImage: "bag") }
-                Button { openStore("https://microsoftedge.microsoft.com/addons/") } label: { Label("打开 Edge 加载项", systemImage: "bag") }
-                Button { storeLink = ""; askStoreLink = true } label: { Label("通过商店链接或扩展 ID 安装", systemImage: "link") }
+                Button { importKind = .extensionPackage } label: { Text("导入 ZIP / CRX") }
+                Button { importKind = .extensionFolder } label: { Text("导入解压后的文件夹") }
+                Button { openStore("https://chromewebstore.google.com/") } label: { Text("打开 Chrome 应用商店") }
+                Button { openStore("https://microsoftedge.microsoft.com/addons/") } label: { Text("打开 Edge 加载项") }
+                Button { storeLink = ""; askStoreLink = true } label: { Text("通过商店链接或扩展 ID 安装") }
             } header: {
                 Text("安装")
             } footer: {
                 Text("商店会在新标签页打开。商店自己的“添加 / 获取”按钮在 iPhone 上不可用（Chrome 提示仅限桌面，Edge 按钮为灰色）：打开扩展详情页后，使用页面顶部 Rikugan 的“安装到 Rikugan”栏。")
             }
             Section {
-                NavigationLink { CompatibilityView() } label: { Label("Chrome API 兼容性矩阵", systemImage: "checklist") }
+                NavigationLink { CompatibilityView() } label: { Text("Chrome API 兼容性矩阵") }
             } footer: {
                 Text("Rikugan 在自己的 WKWebView 环境中实现 Chrome Manifest V3 兼容运行时（不是 Safari Web Extension）。未实现的 API 会返回明确的 “Unsupported API” 错误。扩展默认不在无痕标签页运行。")
             }
@@ -84,8 +84,8 @@ struct ExtensionRow: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(record.name).font(.body.weight(.medium)).lineLimit(1)
-                Text("版本 \(record.version)").font(.caption).foregroundStyle(.secondary)
-                if !record.lastErrors.isEmpty { Text(record.lastErrors[0]).font(.caption2).foregroundStyle(.red).lineLimit(1) }
+                Text(record.lastErrors.isEmpty ? "版本 \(record.version)" : record.lastErrors[0])
+                    .font(.subheadline).foregroundStyle(record.lastErrors.isEmpty ? Color.secondary : Color.red).lineLimit(1)
             }
             Spacer()
             Toggle("", isOn: Binding(get: { record.enabled }, set: { runtime.setEnabled(record.id, $0) })).labelsHidden()
@@ -108,68 +108,70 @@ struct ExtensionDetailView: View {
             let loaded = runtime.loaded[extID]
             Form {
                 Section {
-                    HStack(spacing: 14) {
-                        if let icon = loaded?.icon { Image(uiImage: icon).resizable().scaledToFit().frame(width: 48, height: 48) }
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(record.name).font(.headline)
-                            Text(record.description).font(.caption).foregroundStyle(.secondary)
-                        }
+                    ItemHeader(title: record.name, subtitle: record.description) {
+                        if let icon = loaded?.icon { Image(uiImage: icon).resizable().scaledToFit() }
+                        else { Image(systemName: "puzzlepiece.extension.fill").resizable().scaledToFit().foregroundStyle(.gray) }
                     }
                     Toggle("启用", isOn: Binding(get: { record.enabled }, set: { runtime.setEnabled(record.id, $0) }))
-                    LabeledContent("版本", value: record.version)
-                    LabeledContent("扩展 ID") { Text(record.id).font(.caption.monospaced()).textSelection(.enabled) }
-                    LabeledContent("来源", value: sourceName(record.source))
-                    if let manifest = loaded?.manifest { LabeledContent("后台", value: manifest.backgroundKind) }
                 }
-                if let loaded {
+                if let loaded, record.enabled {
                     Section {
-                        Button { runtime.performAction(loaded, tab: manager.activeTab) } label: { Label("打开扩展（工具栏按钮）", systemImage: "cursorarrow.click") }
+                        Button("打开扩展") { runtime.performAction(loaded, tab: manager.activeTab) }
                         if loaded.manifest.optionsPage != nil {
-                            Button { runtime.openOptions(loaded, from: manager.activeTab) } label: { Label("选项", systemImage: "slider.horizontal.3") }
-                        }
-                        if let bg = loaded.background {
-                            LabeledContent("后台运行时", value: bg.isReady ? "运行中" : "启动中")
+                            Button("扩展选项") { runtime.openOptions(loaded, from: manager.activeTab) }
                         }
                     }
                 }
                 Section {
-                    Picker("网站访问权限", selection: Binding(get: { record.hostAccess }, set: { runtime.setHostAccess(record.id, $0) })) {
-                        Text("在已授权的网站上自动运行").tag(InstalledExtension.HostAccess.granted)
-                        Text("点击扩展时才运行").tag(InstalledExtension.HostAccess.onClick)
+                    LabeledContent("版本", value: record.version)
+                    LabeledContent("来源", value: sourceName(record.source))
+                    if let manifest = loaded?.manifest { LabeledContent("后台类型", value: manifest.backgroundKind) }
+                    if let bg = loaded?.background { LabeledContent("后台运行时", value: bg.isReady ? "运行中" : "未运行") }
+                    LinkRow(title: "扩展 ID", value: record.id)
+                    if let store = record.storeURL, !store.isEmpty { LinkRow(title: "商店页面", value: store) { openInNewTab($0) } }
+                }
+                Section {
+                    Picker("网站访问", selection: Binding(get: { record.hostAccess }, set: { runtime.setHostAccess(record.id, $0) })) {
+                        Text("自动运行").tag(InstalledExtension.HostAccess.granted)
+                        Text("点击时运行").tag(InstalledExtension.HostAccess.onClick)
                     }
                     ForEach(record.grantedHosts, id: \.self) { host in
-                        Text(host).font(.caption.monospaced())
+                        Text(host).font(.callout.monospaced())
                             .swipeActions { Button("撤销", role: .destructive) { runtime.revokeHost(record.id, pattern: host) } }
                     }
-                } header: { Text("网站访问（Site Access）") } footer: { Text("左滑可撤销某个网站的访问权限。") }
+                } header: { Text("网站访问") } footer: {
+                    Text(record.hostAccess == .granted ? "在下列已授权的网站上自动运行。左滑可撤销。" : "只有在网页上点击扩展按钮后，才在该网站运行。")
+                }
                 Section("权限") {
                     ForEach(PermissionDescriber.describe(apiPermissions: record.grantedPermissions, hostPatterns: [])) { line in
-                        HStack { Text(line.level.symbol); Text(line.text).font(.subheadline) }
+                        Text(line.text).foregroundStyle(line.level == .unsupported ? .secondary : .primary)
                     }
                     if record.grantedPermissions.isEmpty { Text("无 API 权限").foregroundStyle(.secondary) }
                 }
                 if !record.lastErrors.isEmpty {
-                    Section("错误") { ForEach(record.lastErrors, id: \.self) { Text($0).font(.caption).foregroundStyle(.red) } }
+                    Section("最近错误") { ForEach(record.lastErrors, id: \.self) { Text($0).font(.footnote).foregroundStyle(.red) } }
                 }
                 Section {
-                    Button { showManifest = true } label: { Label("查看 manifest.json", systemImage: "doc.text.magnifyingglass") }
-                    Button {
-                        Task { status = await installer.checkUpdate(record) }
-                    } label: { Label("检查更新", systemImage: "arrow.triangle.2.circlepath") }
-                    Button { runtime.reload(record.id); status = "已重新加载" } label: { Label("重新加载", systemImage: "arrow.clockwise") }
-                    Button(role: .destructive) { confirmRemove = true } label: { Label("移除扩展", systemImage: "trash") }
+                    Button("检查更新") { Task { status = await installer.checkUpdate(record) } }
+                    Button("重新加载") { runtime.reload(record.id); status = "已重新加载" }
+                    Button("查看 manifest.json") { showManifest = true }
+                } footer: {
+                    if let status { Text(status) }
                 }
-                if let status { Section { Text(status).font(.footnote) } }
+                Section {
+                    Button("移除扩展", role: .destructive) { confirmRemove = true }
+                }
             }
             .navigationTitle(record.name)
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showManifest) {
                 NavigationStack {
                     ScrollView {
-                        Text(manifestText(loaded)).font(.caption.monospaced()).textSelection(.enabled).padding()
+                        Text(manifestText(loaded)).font(.footnote.monospaced()).textSelection(.enabled).padding()
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .navigationTitle("manifest.json").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showManifest = false } } }
                 }
             }
             .confirmationDialog("移除「\(record.name)」及其数据？", isPresented: $confirmRemove, titleVisibility: .visible) {
@@ -204,28 +206,21 @@ struct ExtensionInstallSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    HStack(spacing: 14) {
-                        if let icon = pending.icon { Image(uiImage: icon).resizable().scaledToFit().frame(width: 52, height: 52) }
-                        else { Image(systemName: "puzzlepiece.extension.fill").font(.largeTitle).foregroundStyle(.gray) }
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(pending.displayName).font(.headline)
-                            Text("版本 \(pending.manifest.version) · Manifest V\(pending.manifest.manifestVersion)").font(.caption).foregroundStyle(.secondary)
-                            if let existing = pending.existing { Text("当前已安装 \(existing.version)").font(.caption).foregroundStyle(.orange) }
-                        }
+                    ItemHeader(title: pending.displayName,
+                               subtitle: "版本 \(pending.manifest.version)" + (pending.existing.map { " · 当前已安装 \($0.version)" } ?? "")) {
+                        if let icon = pending.icon { Image(uiImage: icon).resizable().scaledToFit() }
+                        else { Image(systemName: "puzzlepiece.extension.fill").resizable().scaledToFit().foregroundStyle(.gray) }
                     }
                 }
                 Section(pending.existing == nil ? "该扩展希望：" : "新版本需要新的权限：") {
                     let lines = pending.descriptionLines
                     if lines.isEmpty { Text("不需要特殊权限").foregroundStyle(.secondary) }
                     ForEach(lines) { line in
-                        HStack(alignment: .top) {
-                            Image(systemName: "checkmark").foregroundStyle(line.level == .unsupported ? .gray : .accentColor)
-                            Text(line.text)
-                        }
+                        Text(line.text).foregroundStyle(line.level == .unsupported ? .secondary : .primary)
                     }
                 }
                 Section {
-                    LabeledContent("扩展 ID") { Text(pending.extensionID).font(.caption2.monospaced()) }
+                    LinkRow(title: "扩展 ID", value: pending.extensionID)
                     LabeledContent("后台", value: pending.manifest.backgroundKind)
                     LabeledContent("内容脚本", value: "\(pending.manifest.contentScripts.count) 组")
                     if pending.manifest.actionPopup != nil { LabeledContent("弹出页面", value: pending.manifest.actionPopup ?? "") }
@@ -352,5 +347,15 @@ struct ExtensionPopupSheet: View {
         alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completionHandler(false) })
         alert.addAction(UIAlertAction(title: "好", style: .default) { _ in completionHandler(true) })
         Presenter.present(alert, from: webView)
+    }
+}
+
+
+extension ExtensionDetailView {
+    /// Opens a link in a new tab of the focused window and closes the settings sheet.
+    @MainActor func openInNewTab(_ url: URL) {
+        guard let manager = TabRegistry.shared.focusedWindow else { return }
+        manager.newTab(url: url)
+        NotificationCenter.default.post(name: .rikuganCloseSheet, object: manager)
     }
 }

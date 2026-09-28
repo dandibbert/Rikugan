@@ -5,9 +5,10 @@ import SwiftUI
 
 /// Page-level actions used by menus, toolbars and quick actions (spec §30).
 @MainActor enum PageActions {
+    /// Shows Rikugan's find bar (in place of the address bar); see FindBarContent.
     static func findInPage(_ tab: BrowserTab?) {
-        guard let webView = tab?.webView else { return }
-        webView.findInteraction?.presentFindNavigator(showingReplace: false)
+        guard let tab, !tab.isHome, tab.webView != nil else { return }
+        tab.findActive = true
     }
 
     static func share(_ tab: BrowserTab?) {

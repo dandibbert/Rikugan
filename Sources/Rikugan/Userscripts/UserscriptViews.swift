@@ -50,12 +50,12 @@ struct UserscriptManagerView: View {
                 if !store.scripts.isEmpty { Text("脚本按列表顺序注入。修改后刷新网页生效。") }
             }
             Section("添加") {
-                Button { editorTarget = EditorTarget(script: nil, source: Self.template) } label: { Label("新建脚本", systemImage: "square.and.pencil") }
-                Button {
+                Button("新建脚本") { editorTarget = EditorTarget(script: nil, source: Self.template) }
+                Button("从剪贴板粘贴") {
                     if let text = UIPasteboard.general.string { installer.present(source: text, sourceURL: nil) }
-                } label: { Label("从剪贴板粘贴", systemImage: "doc.on.clipboard") }
-                Button { showURLPrompt = true } label: { Label("从网址安装", systemImage: "link") }
-                Button { importKind = .userscript } label: { Label("从“文件”导入", systemImage: "folder") }
+                }
+                Button("从网址安装…") { showURLPrompt = true }
+                Button("从“文件”导入…") { importKind = .userscript }
             }
             Section {
                 Button {
@@ -65,8 +65,11 @@ struct UserscriptManagerView: View {
                         checking = false
                         ToastCenter.shared.show("已更新 \(result.updated) 个脚本" + (result.failed > 0 ? "，\(result.failed) 个检查失败" : ""), symbol: "arrow.triangle.2.circlepath")
                     }
-                } label: { HStack { Label("检查全部更新", systemImage: "arrow.triangle.2.circlepath"); if checking { Spacer(); ProgressView() } } }
-                NavigationLink { CompatibilityView() } label: { Label("GM API 兼容性", systemImage: "checklist") }
+                } label: {
+                    HStack { Text("检查全部更新"); Spacer(); if checking { ProgressView() } }
+                }
+                .disabled(checking || store.scripts.isEmpty)
+                NavigationLink("GM API 兼容性") { CompatibilityView() }
             }
         }
         .navigationTitle("用户脚本")
@@ -91,7 +94,7 @@ struct UserscriptRow: View {
             ScriptIcon(url: script.metadata.icon)
             VStack(alignment: .leading, spacing: 3) {
                 Text(script.name).font(.body.weight(.medium)).lineLimit(1)
-                Text("v\(script.metadata.version) · \(matchSummary)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text("v\(script.metadata.version) · \(matchSummary)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             Toggle("", isOn: Binding(get: { script.enabled }, set: { store.setEnabled(script.id, $0) })).labelsHidden()
@@ -107,14 +110,15 @@ struct UserscriptRow: View {
 
 struct ScriptIcon: View {
     let url: String?
+    var size: CGFloat = 32
     var body: some View {
         AsyncImage(url: url.flatMap(URL.init(string:))) { image in
             image.resizable().scaledToFit()
         } placeholder: {
             Image(systemName: "curlybraces.square.fill").resizable().scaledToFit().foregroundStyle(.orange)
         }
-        .frame(width: 32, height: 32)
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
     }
 }
 
@@ -130,70 +134,54 @@ struct UserscriptDetailView: View {
         if let script = store.script(scriptID) {
             Form {
                 Section {
-                    HStack(spacing: 14) {
-                        ScriptIcon(url: script.metadata.icon).frame(width: 48, height: 48)
-                        VStack(alignment: .leading) {
-                            Text(script.name).font(.headline)
-                            Text(script.metadata.description).font(.caption).foregroundStyle(.secondary)
-                        }
+                    ItemHeader(title: script.name, subtitle: script.metadata.description) {
+                        ScriptIcon(url: script.metadata.icon, size: 44)
                     }
                     Toggle("启用", isOn: Binding(get: { script.enabled }, set: { store.setEnabled(script.id, $0) }))
+                }
+                Section {
                     LabeledContent("版本", value: script.metadata.version)
                     if !script.metadata.author.isEmpty { LabeledContent("作者", value: script.metadata.author) }
                     LabeledContent("运行时机", value: script.metadata.runAt.rawValue)
-                    LabeledContent("运行环境", value: script.usesPageWorld ? "页面环境（真正的 unsafeWindow，无特权 GM API）" : "隔离环境（特权 GM API；unsafeWindow 看不到页面 JS 全局变量）")
-                    if !script.metadata.unavailableInPageWorld.isEmpty {
-                        Text("此脚本以 @inject-into page 运行在页面环境，以下 API 出于安全不可用（网页可伪造页面环境中的任何调用）：" + script.metadata.unavailableInPageWorld.joined(separator: "、"))
-                            .font(.caption).foregroundStyle(.orange)
-                    }
+                    LabeledContent("运行环境", value: script.usesPageWorld ? "页面环境" : "隔离环境")
                     LabeledContent("上次更新", value: script.updatedAt.formatted(date: .abbreviated, time: .shortened))
                     if let checked = script.lastUpdateCheck { LabeledContent("上次检查", value: checked.formatted(date: .abbreviated, time: .shortened)) }
+                } footer: {
+                    if !script.metadata.unavailableInPageWorld.isEmpty {
+                        Text("此脚本以 @inject-into page 运行在页面环境，出于安全以下 API 不可用：" + script.metadata.unavailableInPageWorld.joined(separator: "、"))
+                    } else {
+                        Text(script.usesPageWorld ? "页面环境：unsafeWindow 就是网页窗口，没有特权 GM API。" : "隔离环境：可使用特权 GM API；unsafeWindow 看不到网页的 JS 全局变量。")
+                    }
                 }
-                Section {
+                Section("来源") {
                     let links: [(String, String)] = [
                         ("安装来源", script.sourceURL ?? ""),
                         ("主页", script.metadata.homepage ?? ""),
                         ("更新地址", script.metadata.updateURL ?? ""),
                         ("下载地址", script.metadata.downloadURL ?? ""),
                     ].filter { !$0.1.isEmpty }
-                    if links.isEmpty { Text("没有记录来源网址（从文件、剪贴板或编辑器导入）").foregroundStyle(.secondary).font(.caption) }
-                    ForEach(links, id: \.0) { title, link in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(title).font(.caption).foregroundStyle(.secondary)
-                            Text(link).font(.caption.monospaced()).textSelection(.enabled).lineLimit(3)
-                            HStack(spacing: 16) {
-                                Button { UIPasteboard.general.string = link; ToastCenter.shared.show("已拷贝\(title)", symbol: "doc.on.doc") } label: {
-                                    Label("拷贝", systemImage: "doc.on.doc")
-                                }
-                                if let url = URL(string: link), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-                                    Button { openInNewTab(url) } label: { Label("打开", systemImage: "safari") }
-                                }
-                            }
-                            .buttonStyle(.borderless).font(.caption)
-                        }
-                        .contextMenu { Button("拷贝") { UIPasteboard.general.string = link } }
-                    }
-                } header: { Text("来源") }
+                    if links.isEmpty { Text("未记录（从文件、剪贴板或编辑器导入）").foregroundStyle(.secondary) }
+                    ForEach(links, id: \.0) { title, link in LinkRow(title: title, value: link) { openInNewTab($0) } }
+                }
                 Section("匹配网站") {
-                    ForEach(script.metadata.matches, id: \.self) { Text("@match " + $0).font(.caption.monospaced()) }
-                    ForEach(script.metadata.includes, id: \.self) { Text("@include " + $0).font(.caption.monospaced()) }
-                    ForEach(script.metadata.excludes + script.metadata.excludeMatches, id: \.self) { Text("@exclude " + $0).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                    ForEach(script.metadata.matches, id: \.self) { PatternRow(kind: "match", value: $0) }
+                    ForEach(script.metadata.includes, id: \.self) { PatternRow(kind: "include", value: $0) }
+                    ForEach(script.metadata.excludes + script.metadata.excludeMatches, id: \.self) { PatternRow(kind: "exclude", value: $0) }
+                    if (script.metadata.matches + script.metadata.includes).isEmpty { Text("不匹配任何网站").foregroundStyle(.secondary) }
                 }
                 Section("权限") {
-                    if script.metadata.grants.isEmpty || script.metadata.grantsNone { Text("@grant none（在页面环境运行，无特殊权限）").font(.caption) }
+                    if script.metadata.grants.isEmpty || script.metadata.grantsNone { Text("无（@grant none）").foregroundStyle(.secondary) }
                     ForEach(script.metadata.grants.filter { $0 != "none" }, id: \.self) { grant in
-                        HStack {
-                            Text(grant).font(.caption.monospaced())
-                            Spacer()
-                            if !GMCompatibility.supportedGrants.contains(grant) { Text("不支持").font(.caption2).foregroundStyle(.red) }
-                        }
+                        LabeledContent {
+                            if !GMCompatibility.supportedGrants.contains(grant) { Text("不支持").foregroundStyle(.red) }
+                        } label: { Text(grant).font(.body.monospaced()) }
                     }
-                    ForEach(script.metadata.connects, id: \.self) { Text("@connect " + $0).font(.caption.monospaced()) }
-                    if !script.metadata.requires.isEmpty { Text("\(script.metadata.requires.count) 个 @require 依赖").font(.caption) }
-                    if !script.metadata.resources.isEmpty { Text("\(script.metadata.resources.count) 个 @resource 资源").font(.caption) }
+                    ForEach(script.metadata.connects, id: \.self) { PatternRow(kind: "connect", value: $0) }
+                    if !script.metadata.requires.isEmpty { LabeledContent("@require 依赖", value: "\(script.metadata.requires.count) 个") }
+                    if !script.metadata.resources.isEmpty { LabeledContent("@resource 资源", value: "\(script.metadata.resources.count) 个") }
                 }
                 Section {
-                    Button { editorTarget = .init(script: script, source: script.source) } label: { Label("编辑", systemImage: "pencil") }
+                    Button("编辑脚本") { editorTarget = .init(script: script, source: script.source) }
                     Button {
                         busy = true
                         Task {
@@ -206,18 +194,24 @@ struct UserscriptDetailView: View {
                             case .failed(let message): status = "检查失败：\(message)"
                             }
                         }
-                    } label: { HStack { Label("检查更新", systemImage: "arrow.triangle.2.circlepath"); if busy { Spacer(); ProgressView() } } }
-                    Button {
+                    } label: { HStack { Text("检查更新"); Spacer(); if busy { ProgressView() } } }
+                    .disabled(busy)
+                    Button("重新安装") {
                         Task {
                             let outcome = await UserscriptUpdater.check(script, in: store, force: true)
                             if case .failed(let m) = outcome { status = "重新安装失败：\(m)" } else if case .noUpdateURL = outcome { status = "脚本没有下载地址" } else { status = "已重新安装" }
                         }
-                    } label: { Label("重新安装", systemImage: "arrow.down.circle") }
-                    Button { export(script) } label: { Label("导出 .user.js", systemImage: "square.and.arrow.up") }
-                    Button(role: .destructive) { store.replaceValues([:], for: script.id); status = "已清除脚本存储" } label: { Label("清除脚本存储（\(store.values(for: script.id).count) 项）", systemImage: "externaldrive.badge.xmark") }
-                    Button(role: .destructive) { store.delete(script.id); dismiss() } label: { Label("删除", systemImage: "trash") }
+                    }
+                    Button("导出 .user.js") { export(script) }
+                } footer: {
+                    if let status { Text(status) }
                 }
-                if let status { Section { Text(status).font(.footnote) } }
+                Section {
+                    Button("清除脚本存储（\(store.values(for: script.id).count) 项）", role: .destructive) {
+                        store.replaceValues([:], for: script.id); status = "已清除脚本存储"
+                    }
+                    Button("删除脚本", role: .destructive) { store.delete(script.id); dismiss() }
+                }
             }
             .navigationTitle(script.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -311,42 +305,39 @@ struct UserscriptInstallSheet: View {
                 let meta = pending.result.metadata
                 Form {
                     Section {
-                        HStack(spacing: 14) {
-                            ScriptIcon(url: meta.icon).frame(width: 52, height: 52)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(meta.name.isEmpty ? "未命名脚本" : meta.name).font(.headline)
-                                Text("版本 \(meta.version)" + (meta.author.isEmpty ? "" : " · \(meta.author)")).font(.caption).foregroundStyle(.secondary)
-                            }
+                        ItemHeader(title: meta.name.isEmpty ? "未命名脚本" : meta.name,
+                                   subtitle: "版本 \(meta.version)" + (meta.author.isEmpty ? "" : " · \(meta.author)")) {
+                            ScriptIcon(url: meta.icon, size: 44)
                         }
-                        if !meta.description.isEmpty { Text(meta.description).font(.subheadline) }
+                        if !meta.description.isEmpty { Text(meta.description).foregroundStyle(.secondary) }
+                        if let url = pending.sourceURL { LinkRow(title: "来源", value: url.absoluteString) }
+                    } footer: {
                         if let existing = pending.existing {
-                            Label("将\(MetadataParser.compareVersions(meta.version, existing.metadata.version) == .orderedDescending ? "更新" : "重新安装")已安装的 v\(existing.metadata.version)",
-                                  systemImage: "arrow.triangle.2.circlepath").font(.footnote).foregroundStyle(.orange)
+                            Text("将\(MetadataParser.compareVersions(meta.version, existing.metadata.version) == .orderedDescending ? "更新" : "重新安装")已安装的 v\(existing.metadata.version)。")
                         }
-                        if let url = pending.sourceURL { Text(url.absoluteString).font(.caption2).foregroundStyle(.secondary).lineLimit(2) }
                     }
                     if !pending.result.issues.isEmpty {
                         Section("检查结果") {
                             ForEach(pending.result.issues) { issue in
-                                Label("第 \(issue.line) 行：\(issue.message)", systemImage: issue.severity == .error ? "xmark.octagon" : "exclamationmark.triangle")
-                                    .font(.caption).foregroundStyle(issue.severity == .error ? .red : .orange)
+                                Text("第 \(issue.line) 行：\(issue.message)").foregroundStyle(issue.severity == .error ? .red : .orange)
                             }
                         }
                     }
                     Section("将在以下网站运行") {
-                        ForEach(meta.matches + meta.includes, id: \.self) { Text($0).font(.caption.monospaced()) }
+                        ForEach(meta.matches, id: \.self) { PatternRow(kind: "match", value: $0) }
+                        ForEach(meta.includes, id: \.self) { PatternRow(kind: "include", value: $0) }
                         if meta.matches.isEmpty && meta.includes.isEmpty { Text("无").foregroundStyle(.secondary) }
                     }
                     Section("请求的权限") {
-                        if meta.grantsNone { Text("无（@grant none）").font(.caption) }
-                        ForEach(meta.grants.filter { $0 != "none" }, id: \.self) { Text($0).font(.caption.monospaced()) }
-                        ForEach(meta.connects, id: \.self) { Text("可访问：\($0)").font(.caption) }
-                        if !meta.requires.isEmpty { Text("将下载 \(meta.requires.count) 个外部依赖（@require）").font(.caption) }
+                        if meta.grantsNone { Text("无（@grant none）").foregroundStyle(.secondary) }
+                        ForEach(meta.grants.filter { $0 != "none" }, id: \.self) { Text($0).font(.body.monospaced()) }
+                        ForEach(meta.connects, id: \.self) { PatternRow(kind: "connect", value: $0) }
+                        if !meta.requires.isEmpty { LabeledContent("外部依赖（@require）", value: "\(meta.requires.count) 个") }
                     }
                     Section {
-                        Button { showSource = true } label: { Label("查看源代码", systemImage: "doc.text") }
+                        Button { showSource = true } label: { Text("查看源代码") }
                     }
-                    if let error { Section { Text(error).foregroundStyle(.red).font(.footnote) } }
+                    if let error { Section { Text(error).foregroundStyle(.red) } }
                 }
                 .navigationTitle("安装用户脚本")
                 .navigationBarTitleDisplayMode(.inline)
@@ -366,8 +357,9 @@ struct UserscriptInstallSheet: View {
                 }
                 .sheet(isPresented: $showSource) {
                     NavigationStack {
-                        ScrollView { Text(pending.source).font(.caption.monospaced()).textSelection(.enabled).padding() }
+                        ScrollView { Text(pending.source).font(.footnote.monospaced()).textSelection(.enabled).padding().frame(maxWidth: .infinity, alignment: .leading) }
                             .navigationTitle("源代码").navigationBarTitleDisplayMode(.inline)
+                            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showSource = false } } }
                     }
                 }
             }
@@ -382,5 +374,18 @@ extension UserscriptDetailView {
         guard let manager = TabRegistry.shared.focusedWindow ?? TabRegistry.shared.allWindows.first else { return }
         manager.newTab(url: url)
         NotificationCenter.default.post(name: .rikuganCloseSheet, object: manager)
+    }
+}
+
+
+/// "@match https://example.com/*" as a quiet two-part row.
+struct PatternRow: View {
+    let kind: String
+    let value: String
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("@" + kind).font(.footnote).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+            Text(value).font(.callout.monospaced()).foregroundStyle(kind == "exclude" ? .secondary : .primary).textSelection(.enabled)
+        }
     }
 }

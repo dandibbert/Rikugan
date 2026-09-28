@@ -236,50 +236,83 @@ struct ToolbarCustomizeView: View {
         Form {
             Section {
                 ForEach(0..<ToolbarLayout.slotCount, id: \.self) { index in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Picker(selection: Binding(get: { layout.buttons[index] }, set: { setButton(index, $0) })) {
-                            ForEach(ToolbarAction.allCases.filter { $0 != .none }) { action in
-                                Label(QuickActions.title(action), systemImage: QuickActions.symbol(action)).tag(action)
-                            }
-                        } label: {
-                            Text("按钮 \(index + 1)")
-                        }
-                        if layout.buttons[index] != .pageMenu {
-                            Picker(selection: Binding(get: { layout.longPress[index] }, set: { setLongPress(index, $0) })) {
-                                Text(defaultLongPressTitle(layout.buttons[index])).tag(ToolbarAction.none)
-                                ForEach(ToolbarAction.assignable) { action in
-                                    Label(QuickActions.title(action), systemImage: QuickActions.symbol(action)).tag(action)
-                                }
-                            } label: {
-                                Text("长按").foregroundStyle(.secondary)
-                            }
-                            .font(.callout)
+                    NavigationLink {
+                        ToolbarSlotEditor(index: index)
+                    } label: {
+                        LabeledContent("按钮 \(index + 1)") {
+                            Text(slotSummary(index)).lineLimit(1)
                         }
                     }
                 }
-                Button("恢复默认布局") { services.prefs.toolbarLayout = .default }
             } header: {
-                Text("底部工具栏（iPhone）")
+                Text("底部工具栏（从左到右）")
             } footer: {
-                Text("从左到右 5 个按钮。菜单按钮必须保留（设置从这里进入），如果被替换，最后一个按钮会自动变回菜单。")
+                Text("必须保留一个“菜单”按钮（设置从这里进入）。")
+            }
+            Section {
+                Button("恢复默认布局") { services.prefs.toolbarLayout = .default }
             }
             Section {
                 Toggle("左右滑动地址栏切换标签页", isOn: $services.prefs.swipeAddressBarSwitchesTabs)
                 Picker("在工具栏上向上滑", selection: $services.prefs.swipeUpToolbarAction) {
-                    Text("无").tag(ToolbarAction.none)
-                    ForEach(ToolbarAction.assignable) { Text(QuickActions.title($0)).tag($0) }
+                    ForEach([ToolbarAction.none] + ToolbarAction.assignable) { Text(QuickActions.title($0)).tag($0) }
                 }
                 Picker("双击地址栏", selection: $services.prefs.doubleTapAddressBarAction) {
-                    Text("无").tag(ToolbarAction.none)
-                    ForEach(ToolbarAction.assignable) { Text(QuickActions.title($0)).tag($0) }
+                    ForEach([ToolbarAction.none] + ToolbarAction.assignable) { Text(QuickActions.title($0)).tag($0) }
                 }
             } header: {
                 Text("手势")
             } footer: {
-                Text("设置了双击动作后，单击地址栏进入编辑会有很短的延迟。")
+                Text("设置双击动作后，单击地址栏进入编辑会稍有延迟。")
             }
         }
         .navigationTitle("工具栏与手势")
+    }
+
+    private func slotSummary(_ index: Int) -> String {
+        let button = layout.buttons[index]
+        let long = layout.longPress[index]
+        guard button != .pageMenu, long != .none else { return QuickActions.title(button) }
+        return QuickActions.title(button) + " · 长按" + QuickActions.title(long)
+    }
+}
+
+/// One toolbar slot: its button and its long-press action, as two plain choice lists.
+struct ToolbarSlotEditor: View {
+    let index: Int
+    @EnvironmentObject private var services: AppServices
+
+    private var layout: ToolbarLayout { services.prefs.toolbarLayout.normalized }
+
+    var body: some View {
+        Form {
+            Section("按钮") {
+                ForEach(ToolbarAction.allCases.filter { $0 != .none }) { action in
+                    choice(QuickActions.title(action), selected: layout.buttons[index] == action) { set(button: action) }
+                }
+            }
+            if layout.buttons[index] != .pageMenu {
+                Section {
+                    choice(defaultLongPressTitle(layout.buttons[index]), selected: layout.longPress[index] == .none) { set(longPress: .none) }
+                    ForEach(ToolbarAction.assignable) { action in
+                        choice(QuickActions.title(action), selected: layout.longPress[index] == action) { set(longPress: action) }
+                    }
+                } header: { Text("长按") }
+            }
+        }
+        .navigationTitle("按钮 \(index + 1)")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func choice(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                if selected { Image(systemName: "checkmark").foregroundStyle(.tint).fontWeight(.semibold) }
+            }
+            .contentShape(Rectangle())
+        }
     }
 
     private func defaultLongPressTitle(_ button: ToolbarAction) -> String {
@@ -290,14 +323,14 @@ struct ToolbarCustomizeView: View {
         }
     }
 
-    private func setButton(_ index: Int, _ action: ToolbarAction) {
+    private func set(button action: ToolbarAction) {
         var l = layout
         l.buttons[index] = action
         services.prefs.toolbarLayout = l.normalized
         if index == 2 { services.prefs.quickActions = [action] }
     }
 
-    private func setLongPress(_ index: Int, _ action: ToolbarAction) {
+    private func set(longPress action: ToolbarAction) {
         var l = layout
         l.longPress[index] = action
         services.prefs.toolbarLayout = l.normalized

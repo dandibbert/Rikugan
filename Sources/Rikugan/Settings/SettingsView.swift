@@ -90,7 +90,7 @@ struct SearchSettingsView: View {
                 ForEach(services.prefs.customEngines) { engine in
                     VStack(alignment: .leading) {
                         Text(engine.name)
-                        Text(engine.searchTemplate).font(.caption).foregroundStyle(.secondary)
+                        Text(engine.searchTemplate).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 .onDelete { services.prefs.customEngines.remove(atOffsets: $0) }
@@ -104,7 +104,7 @@ struct SearchSettingsView: View {
             }
             Section {
                 ForEach(services.prefs.shortcuts) { s in
-                    HStack { Text(s.keyword).bold(); Text(s.template).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    HStack { Text(s.keyword).bold(); Text(s.template).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 .onDelete { services.prefs.shortcuts.remove(atOffsets: $0) }
                 TextField("关键词，例如 gh", text: $keyword).textInputAutocapitalization(.never)
@@ -141,7 +141,7 @@ struct AppearanceSettingsView: View {
                 }
             } footer: { Text("浏览时地址栏显示的内容；点击地址栏编辑时总是显示完整网址。") }
             Section {
-                NavigationLink { ToolbarCustomizeView() } label: { Label("工具栏按钮与手势", systemImage: "hand.tap") }
+                NavigationLink { ToolbarCustomizeView() } label: { Text("工具栏按钮与手势") }
             } footer: { Text("自定义底部工具栏 5 个按钮、每个按钮的长按动作，以及滑动 / 双击手势。长按没有设置长按动作的按钮也会打开这里。") }
             Section {
                 NavigationLink { AppIconPickerView() } label: {
@@ -181,7 +181,7 @@ struct HomepageSettingsView: View {
                 Toggle("显示经常访问", isOn: $services.prefs.showFrequentlyVisited)
             }
             Section("壁纸") {
-                PhotosPicker(selection: $photo, matching: .images) { Label("选择壁纸", systemImage: "photo") }
+                PhotosPicker(selection: $photo, matching: .images) { Text("选择壁纸") }
                 if services.prefs.wallpaperFileName != nil {
                     Toggle("沉浸式壁纸", isOn: $services.prefs.immersiveWallpaper)
                     Button("移除壁纸", role: .destructive) { services.prefs.wallpaperFileName = nil }
@@ -235,11 +235,11 @@ struct WebFontSettingsView: View {
                     HStack {
                         Text(font.family).font(.custom(font.postScriptName, size: 17))
                         Spacer()
-                        Text(font.fileURL.pathExtension.uppercased()).font(.caption2).foregroundStyle(.secondary)
+                        Text(font.fileURL.pathExtension.uppercased()).font(.footnote).foregroundStyle(.secondary)
                     }
                 }
                 .onDelete { idx in idx.map { fonts.imported[$0] }.forEach { fonts.delete($0) } }
-                Button { importKind = .font } label: { Label("导入字体文件（TTF / OTF / TTC / WOFF2）", systemImage: "square.and.arrow.down") }
+                Button { importKind = .font } label: { Text("导入字体文件（TTF / OTF / TTC / WOFF2）") }
             }
             Section {
                 ForEach(profile.siteSettings.sites.values.filter { $0.fontBody != nil || $0.fontHeading != nil || $0.fontMono != nil || $0.webFont != nil }.sorted { $0.host < $1.host }) { site in
@@ -247,7 +247,7 @@ struct WebFontSettingsView: View {
                         VStack(alignment: .leading) {
                             Text(site.host)
                             Text(site.webFont == false ? "已停用" : [site.fontBody, site.fontHeading, site.fontMono].compactMap { $0 }.joined(separator: " / "))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.subheadline).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -461,13 +461,13 @@ struct DeveloperSettingsView: View {
                 Toggle("位置权限按网站询问", isOn: $services.prefs.geolocationShim)
             } footer: { Text("应用内检查器可查看 console 输出、执行 JavaScript、查看 DOM 与资源。新设置在下次加载页面时生效。") }
             Section("测试与调试") {
-                NavigationLink { BackgroundRuntimesView() } label: { Label("扩展后台运行时", systemImage: "gearshape.2") }
-                NavigationLink { ManualTestChecklistView() } label: { Label("人工测试清单", systemImage: "checklist") }
-                NavigationLink { SecurityLogView() } label: { Label("安全拒绝记录", systemImage: "lock.shield") }
+                NavigationLink { BackgroundRuntimesView() } label: { Text("扩展后台运行时") }
+                NavigationLink { ManualTestChecklistView() } label: { Text("人工测试清单") }
+                NavigationLink { SecurityLogView() } label: { Text("安全拒绝记录") }
             }
             Section {
                 Toggle("在设置中显示“诊断”页", isOn: $services.prefs.showDiagnostics)
-                NavigationLink { DiagnosticsView() } label: { Label("打开诊断", systemImage: "waveform.path.ecg") }
+                NavigationLink { DiagnosticsView() } label: { Text("打开诊断") }
             } footer: { Text("诊断页显示构建信息、标签页生命周期、扩展后台状态、API 兼容性、DNR 能力与最近错误，可导出为不含敏感信息的 JSON。") }
             Section {
                 Stepper("后台存活标签页上限：\(services.prefs.maxLiveBackgroundTabs)", value: $services.prefs.maxLiveBackgroundTabs, in: 0...20)
@@ -494,7 +494,7 @@ struct CompatibilityView: View {
                                 Spacer()
                                 if !entry.methods.isEmpty { Text("\(entry.implemented.count)/\(entry.methods.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
                             }
-                            if !entry.reason.isEmpty { Text(entry.reason).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                            if !entry.reason.isEmpty { Text(entry.reason).font(.subheadline).foregroundStyle(.secondary).lineLimit(2) }
                         }
                     }
                 }
@@ -503,7 +503,7 @@ struct CompatibilityView: View {
                 ForEach(Array(GMCompatibility.table.enumerated()), id: \.offset) { _, entry in
                     VStack(alignment: .leading, spacing: 3) {
                         HStack { Text(entry.level.symbol); Text(entry.api).font(.callout.monospaced()) }
-                        if !entry.note.isEmpty { Text(entry.note).font(.caption).foregroundStyle(.secondary) }
+                        if !entry.note.isEmpty { Text(entry.note).font(.subheadline).foregroundStyle(.secondary) }
                     }
                 }
             }
@@ -539,7 +539,7 @@ struct CompatibilityDetailView: View {
     private func methodRow(_ method: ChromeAPIMatrix.Method) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack { Text(method.level.symbol); Text(method.name).font(.callout.monospaced()) }
-            if !method.note.isEmpty { Text(method.note).font(.caption).foregroundStyle(.secondary) }
+            if !method.note.isEmpty { Text(method.note).font(.subheadline).foregroundStyle(.secondary) }
         }
     }
 }

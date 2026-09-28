@@ -52,7 +52,7 @@ struct BookmarkFolderView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(node.title).foregroundStyle(.primary).lineLimit(1)
-                                Text(node.url ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text(node.url ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
                     }
@@ -177,7 +177,7 @@ struct HistoryListView: View {
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.title).foregroundStyle(.primary).lineLimit(1)
-                Text("\(entry.visitedAt.formatted(date: .omitted, time: .shortened))  \(entry.url)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text("\(entry.visitedAt.formatted(date: .omitted, time: .shortened))  \(entry.url)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .swipeActions { Button("删除", role: .destructive) { profile.history.delete(entry) } }
@@ -241,13 +241,13 @@ struct DownloadRow: View {
                 switch item.state {
                 case .downloading, .paused:
                     ProgressView(value: item.total > 0 ? item.fraction : nil).tint(tint)
-                    Text(progressText).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                    Text(progressText).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                 case .completed:
-                    Text(subtitle(ByteCountFormatter.string(fromByteCount: item.total, countStyle: .file))).font(.caption2).foregroundStyle(.secondary)
+                    Text(subtitle(ByteCountFormatter.string(fromByteCount: item.total, countStyle: .file))).font(.footnote).foregroundStyle(.secondary)
                 case .failed(let message):
-                    Text("失败：\(message)").font(.caption2).foregroundStyle(.red).lineLimit(2)
+                    Text("失败：\(message)").font(.footnote).foregroundStyle(.red).lineLimit(2)
                 case .cancelled:
-                    Text(subtitle("已取消")).font(.caption2).foregroundStyle(.secondary)
+                    Text(subtitle("已取消")).font(.footnote).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 4)
@@ -310,8 +310,10 @@ struct DownloadRow: View {
         }
     }
 
-    private var fileSymbol: String {
-        let ext = (item.fileName as NSString).pathExtension.lowercased()
+    private var fileSymbol: String { Self.symbol(forFileName: item.fileName) }
+
+    static func symbol(forFileName fileName: String) -> String {
+        let ext = (fileName as NSString).pathExtension.lowercased()
         switch ext {
         case "pdf": return "doc.richtext"
         case "zip", "rar", "7z", "gz", "tar", "crx": return "doc.zipper"

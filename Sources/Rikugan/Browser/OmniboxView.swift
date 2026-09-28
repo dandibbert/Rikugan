@@ -101,7 +101,7 @@ struct OmniboxOverlay: View {
                 Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).lineLimit(1).foregroundStyle(.primary)
-                    if let subtitle, !subtitle.isEmpty { Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    if let subtitle, !subtitle.isEmpty { Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
                 }
             }
         }

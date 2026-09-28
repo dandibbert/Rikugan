@@ -54,6 +54,32 @@ final class ZipAndCRXTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("a.js").path))
     }
 
+    /// Device regression: iOS temp directories live under /private/var. URL standardisation strips
+    /// "/private" only from existing paths, so the old prefix check rejected every new file.
+    func testExtractIntoPrivatePrefixedDirectory() throws {
+        let zip = ZipBuilder.make([("manifest.json", Data("{}".utf8)), ("js/bg.js", Data("x".utf8)), ("_locales/en/messages.json", Data("{}".utf8))])
+        let archive = try ZipArchive(data: zip)
+        let tmp = FileManager.default.temporaryDirectory.path
+        let base = tmp.hasPrefix("/private/") ? tmp : "/private" + tmp
+        let dir = URL(fileURLWithPath: base).appendingPathComponent("rk-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try archive.extractAll(to: dir)
+        for path in ["manifest.json", "js/bg.js", "_locales/en/messages.json"] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent(path).path), path)
+        }
+    }
+
+    func testSafeRelativePath() {
+        XCTAssertEqual(ZipArchive.safeRelativePath("js/a.js"), "js/a.js")
+        XCTAssertEqual(ZipArchive.safeRelativePath("./js//a.js"), "js/a.js")
+        XCTAssertEqual(ZipArchive.safeRelativePath("js\\win.js"), "js/win.js")
+        XCTAssertNil(ZipArchive.safeRelativePath("../evil.js"))
+        XCTAssertNil(ZipArchive.safeRelativePath("a/../../evil.js"))
+        XCTAssertNil(ZipArchive.safeRelativePath("/etc/passwd"))
+        XCTAssertNil(ZipArchive.safeRelativePath("C:/evil.js"))
+        XCTAssertNil(ZipArchive.safeRelativePath(""))
+    }
+
     func testRejectsTraversal() {
         let zip = ZipBuilder.make([("../evil.js", Data("x".utf8))])
         XCTAssertThrowsError(try ZipArchive(data: zip))

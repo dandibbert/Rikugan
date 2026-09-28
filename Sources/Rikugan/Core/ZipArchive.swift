@@ -121,13 +121,31 @@ public struct ZipArchive {
             guard entry.path.hasPrefix(root) else { continue }
             let relative = String(entry.path.dropFirst(root.count))
             if relative.isEmpty || relative.hasPrefix("__MACOSX/") || relative.hasSuffix(".DS_Store") { continue }
-            let destination = directory.appendingPathComponent(relative)
-            guard destination.standardizedFileURL.path.hasPrefix(directory.standardizedFileURL.path) else {
+            // Validate the archive path itself (not a filesystem-normalised URL: on iOS devices the
+            // temporary directory lives under /private/var, and URL standardisation strips
+            // "/private" only from paths that already exist, which made every new file look
+            // "outside" the destination).
+            guard let safe = ZipArchive.safeRelativePath(relative) else {
                 throw RikuganError("ZIP 路径越界：\(entry.path)")
             }
+            let destination = directory.appendingPathComponent(safe)
             try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try extract(entry).write(to: destination)
         }
+    }
+
+    /// A relative path that stays inside the extraction directory, or nil (absolute paths, `..`
+    /// components, drive letters). Backslashes (Windows archivers) are treated as separators.
+    public static func safeRelativePath(_ path: String) -> String? {
+        let normalized = path.replacingOccurrences(of: "\\", with: "/")
+        if normalized.hasPrefix("/") || normalized.range(of: "^[A-Za-z]:", options: .regularExpression) != nil { return nil }
+        var parts: [String] = []
+        for component in normalized.split(separator: "/", omittingEmptySubsequences: true) {
+            if component == "." { continue }
+            if component == ".." { return nil }
+            parts.append(String(component))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "/")
     }
 
     /// Locates the folder inside the archive that contains `fileName` at its root

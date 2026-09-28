@@ -99,9 +99,10 @@ struct ExtensionAlarm {
         let clean = path.split(separator: "?").first.map(String.init) ?? path
         let relative = clean.hasPrefix("/") ? String(clean.dropFirst()) : clean
         let decoded = relative.removingPercentEncoding ?? relative
-        let url = directory.appendingPathComponent(decoded).standardizedFileURL
-        guard url.path.hasPrefix(directory.standardizedFileURL.path) else { return nil }
-        return url
+        // Lexical check (see ZipArchive.safeRelativePath): filesystem-normalised prefixes differ
+        // between existing and not-yet-existing paths under /private on devices.
+        guard let safe = ZipArchive.safeRelativePath(decoded) else { return nil }
+        return directory.appendingPathComponent(safe)
     }
 
     func text(_ path: String) -> String? {

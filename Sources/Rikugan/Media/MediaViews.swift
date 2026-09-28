@@ -30,8 +30,8 @@ struct MediaSnifferView: View {
                             Image(systemName: icon(item.kind)).foregroundStyle(.tint)
                             Text(item.fileName).font(.subheadline.weight(.medium)).lineLimit(1)
                         }
-                        Text(details(item)).font(.caption).foregroundStyle(.secondary)
-                        Text(item.url.absoluteString).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                        Text(details(item)).font(.subheadline).foregroundStyle(.secondary)
+                        Text(item.url.absoluteString).font(.footnote).foregroundStyle(.tertiary).lineLimit(2)
                         HStack(spacing: 16) {
                             Button("下载") { downloads.downloadInteractively(url: item.url, suggestedName: nil, from: tab) }
                             Button("播放") { player = item.url }

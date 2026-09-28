@@ -116,7 +116,7 @@ struct TabSwitcherView: View {
                               systemImage: !manager.isPrivateMode && manager.currentGroupID == group.id ? "checkmark" : "square.grid.2x2")
                     }
                 }
-                Button { showNewGroup = true } label: { Label("新建空白标签页组", systemImage: "plus") }
+                Button { showNewGroup = true } label: { Text("新建空白标签页组") }
                 if manager.groups.count > 1 { Button { showManageGroups = true } label: { Label("调整组顺序…", systemImage: "arrow.up.arrow.down") } }
             }
         } label: {

@@ -19,7 +19,6 @@ struct BrowserView: View {
     @State private var importKind: ImportKind?
     @State private var showQuickActionPicker = false
     @State private var importPreview: ImportPreview?
-    @State private var queuedImportPreview: ImportPreview?
 
     struct ImportPreview: Identifiable { let id = UUID(); let archive: RikuganArchive; let source: String }
 
@@ -75,17 +74,15 @@ struct BrowserView: View {
         .overlay(alignment: .bottom) { ToastView().padding(.bottom, isRegular ? 24 : 110) }
         .overlay { if let busy = extensionInstaller.busy { BusyOverlay(text: busy) } }
         .overlay { if let url = scriptInstaller.loading { BusyOverlay(text: "正在获取脚本 \(url.lastPathComponent)…") } }
-        .sheet(item: $sheet, onDismiss: {
-            // A preview requested while another sheet was up is shown once that sheet is gone.
-            if let queued = queuedImportPreview { queuedImportPreview = nil; importPreview = queued }
-        }) { item in SheetContent(item: item, importKind: $importKind).environmentObjects(services, manager) }
+        .sheet(item: $sheet) { item in SheetContent(item: item, importKind: $importKind).environmentObjects(services, manager) }
         .sheet(item: $importPreview) { preview in
             ArchiveImportSheet(archive: preview.archive, source: preview.source).environmentObjects(services, manager)
         }
         .onReceive(NotificationCenter.default.publisher(for: .rikuganImportPreview)) { note in
             guard (note.object as? TabManager) === manager, let box = note.userInfo?["archive"] as? ArchiveBox else { return }
-            let preview = ImportPreview(archive: box.archive, source: note.userInfo?["source"] as? String ?? "")
-            if sheet != nil { queuedImportPreview = preview; sheet = nil } else { importPreview = preview }
+            // With a sheet (Settings) up, the sheet presents the preview itself (SheetContent).
+            guard sheet == nil else { return }
+            importPreview = ImportPreview(archive: box.archive, source: note.userInfo?["source"] as? String ?? "")
         }
         .fullScreenCover(isPresented: $showTabs) { TabSwitcherView().environmentObjects(services, manager) }
         .sheet(item: $scriptInstaller.pending) { _ in UserscriptInstallSheet().environmentObject(scriptInstaller) }
@@ -352,8 +349,83 @@ struct AddressBar: View {
 
     var body: some View {
         if let tab = manager.activeTab {
+            AddressOrFindBar(tab: tab, editing: $editing, sheet: $sheet)
+        }
+    }
+}
+
+/// The address bar, or the find bar while "find in page" is active.
+struct AddressOrFindBar: View {
+    @ObservedObject var tab: BrowserTab
+    @Binding var editing: Bool
+    @Binding var sheet: BrowserSheet?
+
+    var body: some View {
+        if tab.findActive {
+            FindBarContent(tab: tab)
+        } else {
             AddressBarContent(tab: tab, editing: $editing, sheet: $sheet)
         }
+    }
+}
+
+/// Find in page, styled like the address bar: field, "n / total", previous / next, Done.
+struct FindBarContent: View {
+    @ObservedObject var tab: BrowserTab
+    @State private var query = ""
+    @State private var search: Task<Void, Never>?
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.subheadline)
+                TextField("在页面中查找", text: $query)
+                    .focused($focused)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .onSubmit { step(true) }
+                    .accessibilityIdentifier("findField")
+                if !query.isEmpty {
+                    Text(tab.findResult.count == 0 ? "无结果" : "\(tab.findResult.index + 1) / \(tab.findResult.count)")
+                        .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                        .accessibilityIdentifier("findCount")
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Button { step(false) } label: { Image(systemName: "chevron.up") }
+                .disabled(tab.findResult.count < 2).accessibilityLabel("上一个")
+            Button { step(true) } label: { Image(systemName: "chevron.down") }
+                .disabled(tab.findResult.count < 2).accessibilityLabel("下一个")
+            Button("完成") { close() }.fontWeight(.semibold)
+        }
+        .onAppear { focused = true }
+        .onChange(of: query) { _, text in
+            search?.cancel()
+            search = Task {
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                guard !Task.isCancelled else { return }
+                apply(await tab.webView?.rkTools("findStart", [text]))
+            }
+        }
+    }
+
+    private func step(_ forward: Bool) {
+        Task { apply(await tab.webView?.rkTools("findStep", [forward])) }
+    }
+
+    private func apply(_ value: Any?) {
+        let dict = value as? [String: Any]
+        tab.findResult = ((dict?["count"] as? Int) ?? 0, (dict?["index"] as? Int) ?? -1)
+    }
+
+    private func close() {
+        search?.cancel()
+        Task { _ = await tab.webView?.rkTools("findClear") }
+        tab.findResult = (0, -1)
+        tab.findActive = false
     }
 }
 
@@ -625,7 +697,7 @@ struct RegularToolbarContent: View {
             Button { withAnimation { showSidebar.toggle() } } label: { Image(systemName: "sidebar.left") }
             BackForwardButton(tab: tab, forward: false)
             BackForwardButton(tab: tab, forward: true)
-            AddressBarContent(tab: tab, editing: $editing, sheet: $sheet).frame(maxWidth: 720)
+            AddressOrFindBar(tab: tab, editing: $editing, sheet: $sheet).frame(maxWidth: 720)
             ForEach(runtime.toolbarExtensions.prefix(6)) { ext in ExtensionActionButton(ext: ext, tab: tab) }
             Button { PageActions.share(tab) } label: { Image(systemName: "square.and.arrow.up") }
             Button { manager.newTab() } label: { Image(systemName: "plus") }.accessibilityIdentifier("newTabButton")

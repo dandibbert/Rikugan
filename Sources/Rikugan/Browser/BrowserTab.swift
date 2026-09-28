@@ -53,6 +53,9 @@ enum TranslationState: Equatable {
     @Published private(set) var url: URL?
     @Published var favicon: UIImage?
     @Published var thumbnail: UIImage?
+    /// Find in page: shown in place of the address bar while active.
+    @Published var findActive = false
+    @Published var findResult: (count: Int, index: Int) = (0, -1)
     @Published private(set) var progress: Double = 0
     @Published private(set) var isLoading = false
     @Published private(set) var canGoBack = false
@@ -426,6 +429,7 @@ enum TranslationState: Equatable {
 
     /// Clears per-document state when a new main-frame document commits.
     func documentDidCommit() {
+        if findActive { findResult = (0, -1) }
         menuCommands.removeAll()
         sniffedMedia.removeAll()
         consoleEntries.removeAll()

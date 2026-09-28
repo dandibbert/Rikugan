@@ -177,6 +177,13 @@ import WebKit
         check("data-gmxhr", "GM_xmlhttpRequest")
         ctx.record("GM_addStyle", snapshot["gm"] == "rgb(4, 5, 6)", snapshot["gm"] ?? "")
         check("data-unsafe-window", "unsafeWindow")
+        // Find in page: case-insensitive, visible text only (the hidden ad's "target" is skipped).
+        let findStart = await tab.webView?.rkTools("findStart", ["TARGET"]) as? [String: Any]
+        let findNext = await tab.webView?.rkTools("findStep", [true]) as? [String: Any]
+        let findCleared = await tab.webView?.rkTools("findClear") as? [String: Any]
+        ctx.record("页内查找（大小写不敏感、跳过隐藏文字、上下切换、清除）",
+                   findStart?["count"] as? Int == 2 && findNext?["index"] as? Int == ((findStart?["index"] as? Int ?? 0) + 1) % 2 && findCleared?["count"] as? Int == 0,
+                   "start=\(findStart ?? [:]) next=\(findNext ?? [:]) cleared=\(findCleared ?? [:])")
         ctx.record("AdBlock 元素隐藏规则", snapshot["ad"] == "true",
                    "hidden=\(snapshot["ad"] ?? "nil") ruleIndexedBeforeOpen=\(cosmeticReady) compiling=\(services.adBlock.isCompiling) cosmetic=\(services.adBlock.stats.cosmetic)")
         // Menu command.
@@ -246,7 +253,7 @@ struct SelfTestView: View {
                         Image(systemName: result.passed ? "checkmark.circle.fill" : "xmark.octagon.fill").foregroundStyle(result.passed ? .green : .red)
                         VStack(alignment: .leading) {
                             Text(result.name)
-                            if !result.detail.isEmpty { Text(result.detail).font(.caption).foregroundStyle(.secondary) }
+                            if !result.detail.isEmpty { Text(result.detail).font(.subheadline).foregroundStyle(.secondary) }
                         }
                     }
                 }

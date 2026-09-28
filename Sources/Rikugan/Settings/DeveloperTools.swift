@@ -203,7 +203,7 @@ struct ManualTestChecklistView: View {
                 }
             }
             Section {
-                NavigationLink { DiagnosticsView() } label: { Label("导出诊断信息与清单", systemImage: "square.and.arrow.up") }
+                NavigationLink { DiagnosticsView() } label: { Text("导出诊断信息与清单") }
                 Button("全部重置为未测试", role: .destructive) { confirmReset = true }
             }
         }
