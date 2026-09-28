@@ -256,7 +256,7 @@ import Combine
                     audible = await webView.rkTools("audible", frame: record.frame) as? Bool ?? false
                 }
             }
-            return ["isMuted": tab.audioMuted, "muteReason": tab.audioMuted ? "user" : NSNull(), "isAudible": audible]
+            return ["isMuted": tab.audioMuted, "muteReason": tab.audioMuted ? "user" as Any : NSNull(), "isAudible": audible]
         default:
             throw RikuganError("Unsupported API: GM op \(op)")
         }
