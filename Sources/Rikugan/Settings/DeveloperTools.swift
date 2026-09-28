@@ -52,6 +52,7 @@ enum ManualTestChecklist {
 
     static let sections: [ManualTestSection] = [
         ManualTestSection(id: "browser", title: "浏览器", items: [
+            ManualTestItem(id: "browser.appicon", title: "更换 App 图标", steps: "设置 → 外观与工具栏 → App 图标，依次切换三种图标，确认桌面图标变化。部分侧载方式不支持时设为“不适用”。"),
             ManualTestItem(id: "browser.navigate", title: "打开网址、搜索、前进 / 后退 / 刷新", steps: "地址栏输入网址与关键词；使用工具栏导航按钮。"),
             ManualTestItem(id: "browser.tabs", title: "新建 / 关闭 / 切换标签页，标签组", steps: "新建 5+ 个标签页，建一个标签组，切换并关闭。"),
             ManualTestItem(id: "browser.suspend", title: "后台标签页挂起后恢复（网址、滚动位置）", steps: "打开超过“后台存活上限”的标签页后逐个切回，确认恢复且不丢失位置。"),
@@ -66,6 +67,7 @@ enum ManualTestChecklist {
             ManualTestItem(id: "us.update", title: "脚本更新检查", steps: "对带 @updateURL 的脚本执行“检查更新”。"),
         ]),
         ManualTestSection(id: "extensions", title: "扩展", items: [
+            ManualTestItem(id: "ext.storeinstall", title: "从 Chrome / Edge 商店安装（页面顶部“安装到 Rikugan”栏）", steps: "设置 → 扩展 → 打开商店（应在新标签页打开并关闭设置），进入扩展详情页，用顶部栏的“添加”安装；再试“通过商店链接或扩展 ID 安装”。"),
             ManualTestItem(id: "ext.darkreader", title: "Dark Reader：安装、开关、按站点设置", steps: "从 Chrome 应用店或 CRX 安装，打开 popup 切换站点。"),
             ManualTestItem(id: "ext.ubol", title: "uBlock Origin Lite：拦截广告（DNR）", steps: "安装后访问广告较多的网站，检查“诊断”中 DNR 跳过规则摘要。"),
             ManualTestItem(id: "ext.popup", title: "扩展 popup 打开与交互", steps: "从页面菜单打开每个已安装扩展的 popup。"),

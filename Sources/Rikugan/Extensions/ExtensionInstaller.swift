@@ -23,12 +23,21 @@ struct WebStoreItem: Equatable, Hashable {
         return nil
     }
 
+    /// Store listing URL (any form `detect` accepts) or a bare 32-character ID (Chrome Web Store).
+    static func parse(_ text: String) -> WebStoreItem? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if ExtensionID.isValid(trimmed), let page = URL(string: "https://chromewebstore.google.com/detail/\(trimmed)") {
+            return WebStoreItem(store: .chrome, extensionID: trimmed, pageURL: page)
+        }
+        return detect(url: URL(string: trimmed))
+    }
+
     var downloadURL: URL {
         switch store {
         case .chrome:
-            return URL(string: "https://clients2.google.com/service/update2/crx?response=redirect&prodversion=131.0.0.0&acceptformat=crx2,crx3&x=id%3D\(extensionID)%26uc")!
+            return URL(string: "https://clients2.google.com/service/update2/crx?response=redirect&prodversion=138.0.0.0&acceptformat=crx2,crx3&x=id%3D\(extensionID)%26installsource%3Dondemand%26uc")!
         case .edge:
-            return URL(string: "https://edge.microsoft.com/extensionwebstorebase/v1/crx?response=redirect&x=id%3D\(extensionID)%26installsource%3Dondemand%26uc")!
+            return URL(string: "https://edge.microsoft.com/extensionwebstorebase/v1/crx?response=redirect&prodversion=138.0.0.0&x=id%3D\(extensionID)%26installsource%3Dondemand%26uc")!
         }
     }
 
@@ -99,7 +108,7 @@ struct PendingExtensionInstall: Identifiable {
             defer { busy = nil }
             do {
                 var request = URLRequest(url: item.downloadURL, timeoutInterval: 60)
-                request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
                                  forHTTPHeaderField: "User-Agent")
                 let (data, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {

@@ -125,6 +125,16 @@ import WebKit
         let dnrReady = await ctx.waitForDNRCompile(after: installStarted)
         ctx.record("DNR 规则编译", dnrReady && !profile.extensions.dnrLists.isEmpty, "\(profile.extensions.dnrStatus.convertedRules) rules")
 
+        // Web store listings (the stores' own install buttons do not work on iOS; Rikugan's bar does).
+        let chromeItem = WebStoreItem.detect(url: URL(string: "https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh?hl=zh-CN"))
+        let edgeItem = WebStoreItem.detect(url: URL(string: "https://microsoftedge.microsoft.com/addons/detail/dark-reader/ifoakfbpdcdoeenechcleahebpibofpc"))
+        let bareID = WebStoreItem.parse("  eimadpbcbfnmbkopoojfekhnkhdbieeh ")
+        ctx.record("商店详情页识别（Chrome / Edge / 纯 ID / 非详情页）",
+                   chromeItem?.store == .chrome && chromeItem?.extensionID == "eimadpbcbfnmbkopoojfekhnkhdbieeh"
+                       && edgeItem?.store == .edge && edgeItem?.extensionID == "ifoakfbpdcdoeenechcleahebpibofpc"
+                       && bareID?.store == .chrome && WebStoreItem.parse("https://chromewebstore.google.com/") == nil,
+                   "chrome=\(chromeItem?.extensionID ?? "nil") edge=\(edgeItem?.extensionID ?? "nil") id=\(bareID?.extensionID ?? "nil")")
+
         let declaredIcons = AppIconOption.declaredAlternateNames
         let expectedIcons = Set(AppIconOption.allCases.compactMap(\.alternateName))
         ctx.record("App 图标：备用图标已编入 Info.plist", expectedIcons.isSubset(of: declaredIcons),

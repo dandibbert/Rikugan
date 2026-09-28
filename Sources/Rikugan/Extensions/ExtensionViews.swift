@@ -7,12 +7,14 @@ struct ExtensionManagerView: View {
     @EnvironmentObject private var installer: ExtensionInstaller
     @EnvironmentObject private var manager: TabManager
     @Binding var importKind: BrowserView.ImportKind?
+    @State private var askStoreLink = false
+    @State private var storeLink = ""
 
     var body: some View {
         List {
             if runtime.records.isEmpty {
                 Section {
-                    Text("还没有安装扩展。可以导入 ZIP / CRX / 解压后的扩展文件夹，或在 Chrome 应用商店 / Edge 加载项页面点击“添加”。").foregroundStyle(.secondary)
+                    Text("还没有安装扩展。可以导入 ZIP / CRX / 解压后的扩展文件夹，或打开 Chrome 应用商店 / Edge 加载项的扩展详情页，用页面顶部的“安装到 Rikugan”安装。").foregroundStyle(.secondary)
                 }
             }
             Section {
@@ -24,8 +26,11 @@ struct ExtensionManagerView: View {
             Section("安装") {
                 Button { importKind = .extensionPackage } label: { Label("导入 ZIP / CRX", systemImage: "doc.zipper") }
                 Button { importKind = .extensionFolder } label: { Label("导入解压后的文件夹", systemImage: "folder") }
-                Button { manager.activeTab?.load(URL(string: "https://chromewebstore.google.com/")!) } label: { Label("打开 Chrome 应用商店", systemImage: "bag") }
-                Button { manager.activeTab?.load(URL(string: "https://microsoftedge.microsoft.com/addons/")!) } label: { Label("打开 Edge 加载项", systemImage: "bag") }
+                Button { openStore("https://chromewebstore.google.com/") } label: { Label("打开 Chrome 应用商店", systemImage: "bag") }
+                Button { openStore("https://microsoftedge.microsoft.com/addons/") } label: { Label("打开 Edge 加载项", systemImage: "bag") }
+                Button { storeLink = ""; askStoreLink = true } label: { Label("通过商店链接或扩展 ID 安装", systemImage: "link") }
+            } footer: {
+                Text("商店会在新标签页打开。商店自己的“添加 / 获取”按钮在 iPhone 上不可用（Chrome 提示仅限桌面，Edge 按钮为灰色）：打开扩展详情页后，使用页面顶部 Rikugan 的“安装到 Rikugan”栏。")
             }
             Section {
                 NavigationLink { CompatibilityView() } label: { Label("Chrome API 兼容性矩阵", systemImage: "checklist") }
@@ -34,6 +39,33 @@ struct ExtensionManagerView: View {
             }
         }
         .navigationTitle("扩展")
+        .alert("通过商店链接安装", isPresented: $askStoreLink) {
+            TextField("商店链接或 32 位扩展 ID", text: $storeLink)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("安装") { installFromLink() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("粘贴 Chrome 应用商店或 Edge 加载项的扩展详情页链接；只填 ID 时按 Chrome 应用商店处理。")
+        }
+    }
+
+    /// Opens the store in a new foreground tab and closes the settings / extensions sheet so the
+    /// store is actually visible.
+    private func openStore(_ address: String) {
+        guard let url = URL(string: address) else { return }
+        manager.newTab(url: url)
+        NotificationCenter.default.post(name: .rikuganCloseSheet, object: manager)
+    }
+
+    private func installFromLink() {
+        guard let item = WebStoreItem.parse(storeLink) else {
+            ToastCenter.shared.show("无法识别：请粘贴扩展详情页链接或 32 位扩展 ID", symbol: "exclamationmark.triangle", duration: 4)
+            return
+        }
+        // The permission confirmation is presented by the browser window, which cannot show it
+        // while this sheet is up: close it first, the download then prompts over the browser.
+        NotificationCenter.default.post(name: .rikuganCloseSheet, object: manager)
+        installer.stage(store: item)
     }
 }
 

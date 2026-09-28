@@ -101,6 +101,10 @@ struct BrowserView: View {
             guard (note.object as? TabManager) === manager, let target = note.userInfo?["sheet"] as? BrowserSheet else { return }
             sheet = target
         }
+        .onReceive(NotificationCenter.default.publisher(for: .rikuganCloseSheet)) { note in
+            guard (note.object as? TabManager) === manager else { return }
+            sheet = nil
+        }
         .onReceive(NotificationCenter.default.publisher(for: .rikuganShowDownloads)) { _ in
             if TabRegistry.shared.focusedWindow === manager { sheet = .downloads }
         }
@@ -224,12 +228,23 @@ struct LoadErrorView: View {
 struct StoreInstallBanner: View {
     let item: WebStoreItem
     @EnvironmentObject private var installer: ExtensionInstaller
+    @EnvironmentObject private var runtime: ExtensionRuntime
     var body: some View {
-        HStack {
+        let installed = runtime.records.contains { $0.id == item.extensionID }
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: "puzzlepiece.extension.fill").foregroundStyle(.tint)
-            Text("在 Rikugan 中安装此扩展").font(.subheadline)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(installed ? "已安装到 Rikugan" : "安装到 Rikugan").font(.subheadline.weight(.semibold))
+                Text("商店页面上的“添加 / 获取”按钮在 iPhone 上不可用，请用这里安装").font(.caption2).foregroundStyle(.secondary)
+            }
             Spacer()
-            Button("添加") { installer.stage(store: item) }.buttonStyle(.borderedProminent).controlSize(.small)
+            if installer.busy != nil {
+                ProgressView().controlSize(.small)
+            } else {
+                Button(installed ? "重新安装" : "添加") { installer.stage(store: item) }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    .accessibilityIdentifier("store-install")
+            }
         }
         .padding(10)
         .background(.regularMaterial)

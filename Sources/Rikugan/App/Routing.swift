@@ -45,4 +45,6 @@ extension BrowserSheet {
 
 extension Notification.Name {
     static let rikuganOpenSheet = Notification.Name("rikugan.openSheet")
+    /// Closes the sheet shown over this window (object: the window's TabManager).
+    static let rikuganCloseSheet = Notification.Name("rikugan.closeSheet")
 }

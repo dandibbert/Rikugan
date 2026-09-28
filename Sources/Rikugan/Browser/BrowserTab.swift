@@ -250,6 +250,10 @@ enum TranslationState: Equatable {
                 Task { @MainActor in
                     guard let self else { return }
                     if let u = wv.url { self.url = u }
+                    // Both web stores are single-page apps: opening a listing from the store's home
+                    // changes the URL without a new document, so the install bar follows the URL.
+                    let candidate = WebStoreItem.detect(url: wv.url)
+                    if candidate != self.storeInstallCandidate { self.storeInstallCandidate = candidate }
                     self.manager?.scheduleSave()
                 }
             },
