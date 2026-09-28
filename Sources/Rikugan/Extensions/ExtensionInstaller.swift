@@ -71,7 +71,7 @@ enum StoreDownload {
             return try await get(url, upgrade: true)
         } catch let error as URLError where [.secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
                                              .serverCertificateHasUnknownRoot, .cannotConnectToHost, .timedOut].contains(error.code) {
-            ErrorLog.shared.record("HTTPS copy of store package unavailable (\(error.code.rawValue)); using the store's HTTP redirect", source: "extension install")
+            await ErrorLog.shared.record("HTTPS copy of store package unavailable (\(error.code.rawValue)); using the store's HTTP redirect", source: "extension install")
             return try await get(url, upgrade: false)
         }
     }
