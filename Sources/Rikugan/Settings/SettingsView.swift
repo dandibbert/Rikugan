@@ -138,6 +138,16 @@ struct AppearanceSettingsView: View {
                 }
             } footer: { Text("长按工具栏中间的快捷按钮也可以更换。") }
             Section {
+                NavigationLink { AppIconPickerView() } label: {
+                    HStack {
+                        Text("App 图标")
+                        Spacer()
+                        Image(AppIconOption.current.previewImage).resizable().frame(width: 28, height: 28)
+                            .clipShape(RoundedRectangle(cornerRadius: 6.5, style: .continuous))
+                    }
+                }
+            }
+            Section {
                 Toggle("在后台打开新链接", isOn: $services.prefs.openLinksInBackground)
                 Toggle("默认请求桌面版网站", isOn: $services.prefs.defaultDesktopMode)
                 Toggle("恢复上次的标签页", isOn: $services.prefs.restoreTabs)

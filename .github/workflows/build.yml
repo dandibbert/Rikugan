@@ -67,6 +67,12 @@ jobs:
       - name: Show compiler errors
         if: failure()
         run: grep -E "error:" build.log | sort -u | head -150 || true
+      - name: App icons are compiled (primary + alternates declared in Info.plist)
+        run: |
+          APP=build/Build/Products/Release-iphoneos/Rikugan.app
+          plutil -p "$APP/Info.plist" | tee icons.txt | grep -E "CFBundle(Primary|Alternate)Icons|AppIcon" || true
+          for name in AppIconOrbit AppIconNova; do grep -q "\"$name\"" icons.txt || { echo "missing alternate icon $name"; exit 1; }; done
+          test -f "$APP/Assets.car"
       - name: Package IPA
         run: |
           mkdir -p dist/Payload

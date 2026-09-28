@@ -45,6 +45,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan
         INFOPLIST_FILE: Sources/Rikugan/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Alternate icons selectable in Settings → 外观与工具栏 → App 图标.
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: AppIconOrbit AppIconNova
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO

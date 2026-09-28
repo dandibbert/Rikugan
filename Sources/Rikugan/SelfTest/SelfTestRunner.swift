@@ -125,6 +125,11 @@ import WebKit
         let dnrReady = await ctx.waitForDNRCompile(after: installStarted)
         ctx.record("DNR 规则编译", dnrReady && !profile.extensions.dnrLists.isEmpty, "\(profile.extensions.dnrStatus.convertedRules) rules")
 
+        let declaredIcons = AppIconOption.declaredAlternateNames
+        let expectedIcons = Set(AppIconOption.allCases.compactMap(\.alternateName))
+        ctx.record("App 图标：备用图标已编入 Info.plist", expectedIcons.isSubset(of: declaredIcons),
+                   "declared=\(declaredIcons.sorted()) supportsAlternateIcons=\(UIApplication.shared.supportsAlternateIcons)")
+
         let tab = await ctx.open("/index.html")
         ctx.record("测试页面加载", tab.webView?.url?.path == "/index.html")
         // Wait for every asynchronous result to be reported by the page (no fixed delay).
