@@ -111,7 +111,8 @@ import UIKit
                                               injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
 
         // 2. Page tools (dark mode, fonts, cosmetic filters, picker, reader, translate, media).
-        var tools: [String: Any] = ["handler": Worlds.messageHandlerName, "dark": darkModeConfig(host: host, profile: profile) as Any]
+        var tools: [String: Any] = ["handler": Worlds.messageHandlerName, "dark": darkModeConfig(host: host, profile: profile) as Any,
+                                    "muted": tab.audioMuted]
         if let font = fontConfig(host: host, profile: profile) { tools["font"] = font }
         if isWeb, AppServices.shared.prefs.adBlockEnabled, site.contentBlocking != false, !AppServices.shared.adBlock.isAllowlisted(host) {
             let cosmetic = AppServices.shared.adBlock.cosmeticRules(forHost: host)

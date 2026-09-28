@@ -126,24 +126,24 @@ public enum GMCompatibility {
         ("GM_addStyle / GM.addStyle", .supported, "受 CSP 限制时自动改用 adoptedStyleSheets"),
         ("GM_addElement", .supported, ""),
         ("GM_setClipboard / GM.setClipboard", .supported, "通过原生剪贴板"),
-        ("GM_xmlhttpRequest / GM.xmlHttpRequest", .supported, "原生网络请求，遵守 @connect；支持 text/json/blob/arraybuffer/document，进度事件为模拟"),
-        ("GM_download / GM.download", .supported, "交给下载管理器"),
-        ("GM_openInTab / GM.openInTab", .supported, ""),
+        ("GM_xmlhttpRequest / GM.xmlHttpRequest", .supported, "原生网络请求，遵守 @connect；支持 text/json/blob/arraybuffer/document/stream，真实下载进度，cookie / nocache / revalidate / anonymous 选项；不支持上传进度"),
+        ("GM_download / GM.download", .supported, "交给下载管理器；下载完成后才触发 onload，支持 onprogress / abort / timeout / saveAs"),
+        ("GM_openInTab / GM.openInTab", .supported, "active / insert / incognito；返回的对象支持 close()、closed 和 onclose"),
         ("GM_registerMenuCommand", .supported, "显示在页面菜单 → 脚本命令"),
         ("GM_unregisterMenuCommand", .supported, ""),
         ("GM_getResourceText / GM.getResourceText", .supported, "@resource 安装时下载"),
         ("GM_getResourceURL / GM.getResourceUrl", .supported, "返回 data: URL"),
         ("GM_info / GM.info", .supported, ""),
         ("GM_log", .supported, ""),
-        ("GM_notification / GM.notification", .partial, "应用内横幅 + 本地通知，不支持 highlight / 进度"),
-        ("GM_getTab / GM_saveTab / GM_getTabs", .partial, "仅在应用运行期间保存"),
+        ("GM_notification / GM.notification", .partial, "应用内横幅 + 本地通知；支持 onclick / ondone / timeout / highlight / url，不支持图片、tag 替换和进度"),
+        ("GM_getTab / GM_saveTab / GM_getTabs", .supported, "按标签页保存，App 重启后仍在，标签页关闭后清除；无痕标签页不保存"),
+        ("GM_cookie / GM.cookie", .supported, "list / set / delete，可读写 HttpOnly Cookie；仅限当前网页所在网站和脚本 @match / @include / @connect 覆盖的域名"),
+        ("GM_audio / GM.audio", .partial, "setMute / getState / 状态监听；静音作用于网页中的 video / audio 元素（含之后新加入的），不含 Web Audio 和未插入网页的 Audio 对象；状态监听每秒检查一次"),
         ("unsafeWindow", .partial, "只申请无特权 @grant（none / unsafeWindow / GM_info / GM_addStyle / GM_addElement / GM_log）的脚本运行在页面环境，unsafeWindow 是真正的页面 window；同时申请特权 GM API 的脚本出于安全运行在隔离环境，unsafeWindow 等同隔离环境的 window（共享 DOM，看不到页面 JS 全局变量）"),
         ("@inject-into page + 特权 GM API", .partial, "页面环境中不提供原生 GM 桥（网页脚本可伪造其中的任何调用），这些 API 调用时明确报错；需要特权 API 时请改用 @inject-into content / auto"),
         ("window.onurlchange", .partial, "通过 history API 钩子实现"),
         ("window.close / window.focus", .supported, ""),
-        ("GM_cookie", .unsupported, "调用时返回 Unsupported API 错误"),
-        ("GM_webRequest", .unsupported, "调用时返回 Unsupported API 错误"),
-        ("GM_audio", .unsupported, "调用时返回 Unsupported API 错误"),
+        ("GM_webRequest", .unsupported, "WKWebView 不能拦截或改写网页请求，调用时返回 Unsupported API 错误（Tampermonkey 也已不推荐）"),
     ]
 
     public static let supportedGrants: Set<String> = [
@@ -159,6 +159,7 @@ public enum GMCompatibility {
         "GM_registerMenuCommand", "GM.registerMenuCommand", "GM_unregisterMenuCommand", "GM.unregisterMenuCommand",
         "GM_getResourceText", "GM.getResourceText", "GM_getResourceURL", "GM.getResourceUrl", "GM.getResourceURL",
         "GM_notification", "GM.notification", "GM_getTab", "GM.getTab", "GM_saveTab", "GM.saveTab", "GM_getTabs", "GM.getTabs",
+        "GM_cookie", "GM.cookie", "GM_audio", "GM.audio",
     ]
 }
 

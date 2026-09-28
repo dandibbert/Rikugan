@@ -86,6 +86,8 @@ enum TranslationState: Equatable {
     private var observers: [NSKeyValueObservation] = []
     private var autoRefreshTimer: Timer?
     private var injectedForURL: URL?
+    /// Tab mute set by GM_audio.setMute; re-applied to every document loaded in this tab.
+    @Published var audioMuted = false
     var gmTabValue: Any?
     var frames: [WKFrameInfo] = []
     var pendingExternalConfiguration: WKWebViewConfiguration?

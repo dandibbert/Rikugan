@@ -36,7 +36,7 @@ function makeEnv(bridge, extra = {}) {
     MouseEvent: class { constructor(t) { this.type = t; } }, TextDecoder, TextEncoder, URL, URLSearchParams, Blob, atob, btoa,
     JSON, Promise, Object, Array, Map, Set, Error, RegExp, String, Number, Math, Date, Uint8Array, ArrayBuffer, DOMParser: class {},
     CSSStyleSheet: class { replaceSync(t) { this.text = t; } }, crypto: { randomUUID: () => 'uuid-' + Math.random() },
-    Proxy, Reflect, Symbol, TypeError, isFinite, parseFloat, EventTarget: class {}, Event: class { constructor(t) { this.type = t; } },
+    Proxy, Reflect, Symbol, TypeError, isFinite, parseFloat, ReadableStream: globalThis.ReadableStream, EventTarget: class {}, Event: class { constructor(t) { this.type = t; } },
     ...extra,
   };
   window.window = window; window.self = window; window.top = window; window.globalThis = window;
@@ -158,10 +158,89 @@ test('GM.xmlHttpRequest promise rejects on error; unsupported APIs throw', async
   const bridge = async (msg) => (msg.op === 'xhr' ? { error: 'Blocked by @connect' } : null);
   const { window } = runUserscript(`
     window.p = GM.xmlHttpRequest({ url: 'https://evil.test/' }).then(() => 'ok', (e) => 'rejected:' + e.message);
-    try { GM_cookie.list({}); window.cookie = 'no'; } catch (e) { window.cookie = e.message; }
+    try { GM_webRequest([], () => {}); window.webRequest = 'no'; } catch (e) { window.webRequest = e.message; }
   `, {}, bridge);
   assert.strictEqual(await window.p, 'rejected:Blocked by @connect');
-  assert.match(window.cookie, /Unsupported API/);
+  assert.match(window.webRequest, /Unsupported API/);
+});
+
+test('GM_cookie / GM.cookie and GM_audio go through the bridge', async () => {
+  const calls = [];
+  const bridge = async (msg) => {
+    calls.push(msg);
+    if (msg.op === 'cookieList') return [{ name: 'sid', value: 'x', domain: 'example.com', httpOnly: true }];
+    if (msg.op === 'audioGetState') return { isMuted: true, muteReason: 'user', isAudible: false };
+    return null;
+  };
+  const { window } = runUserscript(`
+    window.out = [];
+    GM_cookie.list({ name: 'sid' }, (cookies, error) => window.out.push(['cb', cookies.length, cookies[0].httpOnly, error]));
+    window.p = GM.cookie.list({ domain: 'example.com' }).then(c => c[0].name);
+    window.m = GM.audio.setMute({ isMuted: true }).then(() => GM.audio.getState()).then(s => s.isMuted);
+    GM_cookie.delete({ name: 'sid' }, (err) => window.out.push(['deleted', err]));
+  `, { grants: ['GM_cookie', 'GM.cookie', 'GM_audio', 'GM.audio'] }, bridge);
+  assert.strictEqual(await window.p, 'sid');
+  assert.strictEqual(await window.m, true);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(window.out)), [['cb', 1, true, null], ['deleted', null]]);
+  const list = calls.find((m) => m.op === 'cookieList');
+  assert.strictEqual(list.args.url, 'https://example.com/page', 'defaults to the current page URL');
+  assert.strictEqual(calls.find((m) => m.op === 'audioSetMute').args.isMuted, true);
+});
+
+test('GM_xmlhttpRequest reports native progress and streams chunks', async () => {
+  let dispatch;
+  let xhrID;
+  const bridge = async (msg) => {
+    if (msg.op !== 'xhr') return null;
+    xhrID = msg.args.id;
+    const fn = dispatch();
+    fn({ type: 'xhr', id: xhrID, phase: 'headers', status: 200, statusText: 'OK', finalUrl: msg.args.url, responseHeaders: 'a: b\r\n', total: 6 });
+    fn({ type: 'xhr', id: xhrID, phase: 'chunk', base64: Buffer.from('abc').toString('base64') });
+    fn({ type: 'xhr', id: xhrID, phase: 'progress', loaded: 3, total: 6 });
+    fn({ type: 'xhr', id: xhrID, phase: 'chunk', base64: Buffer.from('def').toString('base64') });
+    return { status: 200, statusText: 'OK', finalUrl: msg.args.url, responseHeaders: 'a: b\r\n', contentType: 'text/plain', base64: '', size: 6, streamed: true };
+  };
+  const env = runUserscript(`
+    window.events = [];
+    window.done = new Promise((resolve) => GM_xmlhttpRequest({ url: '/s', responseType: 'stream',
+      onloadstart: (r) => window.events.push(['start', r.readyState, !!r.response]),
+      onprogress: (r) => window.events.push(['progress', r.loaded, r.total]),
+      onload: async (r) => {
+        const reader = r.response.getReader();
+        let text = '';
+        for (;;) { const { value, done } = await reader.read(); if (done) break; text += new TextDecoder().decode(value); }
+        resolve(text);
+      } }));
+  `, { grants: ['GM_xmlhttpRequest'] }, bridge);
+  // The dispatch function is non-enumerable: look it up by name.
+  dispatch = () => env.window['__rikuganGM_' + 'script-1'.replace(/-/g, '')];
+  assert.strictEqual(await env.window.done, 'abcdef');
+  const events = JSON.parse(JSON.stringify(env.window.events));
+  assert.deepStrictEqual(events[0], ['start', 2, true]);
+  assert.deepStrictEqual(events[1], ['progress', 3, 6]);
+});
+
+test('GM_download reports completion, not just queueing', async () => {
+  let resolveDownload;
+  const bridge = async (msg) => (msg.op === 'download' ? new Promise((r) => { resolveDownload = r; }) : null);
+  const { window } = runUserscript(`
+    window.state = 'pending';
+    GM_download({ url: '/f.zip', name: 'f.zip', onload: () => { window.state = 'loaded'; }, onerror: (e) => { window.state = 'error:' + e.error; } });
+  `, { grants: ['GM_download'] }, bridge);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(window.state, 'pending');
+  resolveDownload({ url: 'https://example.com/f.zip', name: 'f.zip' });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(window.state, 'loaded');
+});
+
+test('window.close with @grant closes through the bridge', async () => {
+  const ops = [];
+  const { window } = runUserscript(`window.close();`, { grants: ['window.close'] }, async (msg) => { ops.push(msg.op); return null; });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(ops.includes('closeTab'));
+  void window;
 });
 
 test('Sub-frame variant checks include/exclude regex', async () => {

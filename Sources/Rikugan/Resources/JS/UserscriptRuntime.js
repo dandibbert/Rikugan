@@ -152,30 +152,56 @@
     p.then(() => { if (typeof cb === 'function') cb(); }).catch(e => console.error(logPrefix, e));
     return p;
   };
+  const openedTabs = new Map();
   const GM_openInTab = (url, options) => {
     const background = options === true || (options && (options.active === false || options.loadInBackground === true));
-    const handle = { closed: false, onclose: null, close() { if (handle._id) post('closeTab', { tabId: handle._id }); handle.closed = true; } };
-    handle._promise = post('openInTab', { url: new URL(String(url), location.href).href, background: !!background, insert: !!(options && options.insert) })
-      .then(id => { handle._id = id; return handle; });
+    const handle = { closed: false, onclose: null, close() { if (handle._id) post('closeTab', { tabId: handle._id }).catch(() => {}); } };
+    const opts = options && typeof options === 'object' ? options : {};
+    handle._promise = post('openInTab', {
+      url: new URL(String(url), location.href).href, background: !!background,
+      insert: opts.insert === undefined ? true : !!opts.insert, incognito: !!opts.incognito,
+    }).then(id => { handle._id = id; if (id) openedTabs.set(id, handle); return handle; });
     return handle;
+  };
+  const tabClosed = (id) => {
+    const handle = openedTabs.get(id);
+    if (!handle) return;
+    openedTabs.delete(id);
+    handle.closed = true;
+    try { if (typeof handle.onclose === 'function') handle.onclose(); } catch (e) { console.error(logPrefix, e); }
   };
   const GM_notification = (details, title, image, onclick) => {
     if (typeof details === 'string') details = { text: details, title, image, onclick };
     details = details || {};
-    const p = post('notification', { text: String(details.text || ''), title: String(details.title || __RK.name), timeout: details.timeout || 0 });
+    const p = post('notification', {
+      text: String(details.text || details.body || ''), title: String(details.title || __RK.name), timeout: details.timeout || 0,
+      highlight: !!details.highlight, url: details.url ? new URL(String(details.url), location.href).href : null,
+    });
     p.then(r => {
-      if (r === 'clicked' && typeof details.onclick === 'function') details.onclick();
+      if (r === 'clicked' && typeof details.onclick === 'function') details.onclick({ preventDefault() {} });
       if (typeof details.ondone === 'function') details.ondone(r === 'clicked');
     }).catch(() => {});
     return p;
   };
+  let downloadSeq = 0;
+  const downloadProgress = new Map();
   const GM_download = (details, name) => {
     if (typeof details === 'string') details = { url: details, name };
     details = details || {};
-    const p = post('download', { url: new URL(String(details.url), location.href).href, name: details.name || '', headers: details.headers || {} });
-    p.then(r => { if (typeof details.onload === 'function') details.onload(r); })
-      .catch(e => { if (typeof details.onerror === 'function') details.onerror({ error: 'download_failed', details: String(e) }); });
-    return { abort() {} };
+    const id = String(++downloadSeq);
+    const call = (fn, arg) => { try { if (typeof details[fn] === 'function') details[fn](arg); } catch (e) { console.error(logPrefix, e); } };
+    downloadProgress.set(id, (ev) => call('onprogress', { loaded: ev.loaded, total: ev.total, lengthComputable: ev.total > 0 }));
+    const p = post('download', {
+      id, url: new URL(String(details.url), location.href).href, name: details.name || '', headers: details.headers || {},
+      saveAs: !!details.saveAs, timeout: details.timeout || 0,
+    });
+    p.then(r => {
+      downloadProgress.delete(id);
+      if (r && r.error === 'timeout') call('ontimeout', r);
+      else if (r && r.error) call('onerror', { error: r.error === 'aborted' ? 'aborted' : 'download_failed', details: r.details || r.error });
+      else call('onload', r);
+    }).catch(e => { downloadProgress.delete(id); call('onerror', { error: 'download_failed', details: String(e && e.message || e) }); });
+    return { abort() { post('downloadAbort', { id }).catch(() => {}); } };
   };
   const tabState = { value: null };
   const GM_getTab = (cb) => { const p = post('getTab', null).then(v => { tabState.value = v || {}; if (cb) cb(tabState.value); return tabState.value; }); return p; };
@@ -272,32 +298,72 @@
     } });
     return response;
   };
+  // Native progress / header / stream-chunk events, keyed by request id.
+  const xhrEvents = new Map();
+  const b64ToBytes = (b64) => {
+    const bin = atob(b64 || '');
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  };
   const xhrCore = (details) => {
     details = details || {};
     const id = __RK.id + ':' + (++xhrSeq);
     let aborted = false, done = false;
     const call = (name, arg) => { try { if (typeof details[name] === 'function') details[name](arg); } catch (e) { console.error(logPrefix, e); } };
+    const streaming = String(details.responseType || '').toLowerCase() === 'stream' && typeof ReadableStream !== 'undefined';
+    let streamController = null;
+    const stream = streaming ? new ReadableStream({ start(c) { streamController = c; } }) : null;
+    let head = null;
+    xhrEvents.set(id, (ev) => {
+      if (aborted) return;
+      if (ev.phase === 'headers') {
+        head = ev;
+        const state = { readyState: 2, status: ev.status, statusText: ev.statusText, finalUrl: ev.finalUrl, responseHeaders: ev.responseHeaders,
+          context: details.context, lengthComputable: ev.total > 0, loaded: 0, total: ev.total, response: stream || undefined };
+        if (streaming) call('onloadstart', state);
+        call('onreadystatechange', state);
+      } else if (ev.phase === 'progress') {
+        const state = { readyState: 3, status: head ? head.status : 0, statusText: head ? head.statusText : '', finalUrl: head ? head.finalUrl : '',
+          responseHeaders: head ? head.responseHeaders : '', context: details.context, lengthComputable: ev.total > 0,
+          loaded: ev.loaded, total: ev.total, done: ev.loaded, totalSize: ev.total };
+        call('onreadystatechange', state);
+        call('onprogress', state);
+      } else if (ev.phase === 'chunk' && streamController) {
+        try { streamController.enqueue(b64ToBytes(ev.base64)); } catch (_) {}
+      }
+    });
     const promise = (async () => {
       const url = new URL(String(details.url), location.href).href;
       const body = await serializeBody(details.data);
       const headers = Object.assign({}, details.headers || {});
       if (body.contentType && !Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) headers['Content-Type'] = body.contentType;
-      call('onloadstart', { readyState: 1, status: 0, finalUrl: url, context: details.context });
-      const raw = await post('xhr', {
-        id, url, method: String(details.method || 'GET').toUpperCase(), headers, body: body.body === undefined ? null : body.body,
-        bodyBase64: body.base64 || null, timeout: details.timeout || 0, anonymous: !!details.anonymous,
-        user: details.user || null, password: details.password || null, overrideMimeType: details.overrideMimeType || null,
-        redirect: details.redirect || 'follow', binary: ['arraybuffer', 'blob', 'stream'].includes(String(details.responseType || '').toLowerCase()),
-      });
+      if (!streaming) call('onloadstart', { readyState: 1, status: 0, finalUrl: url, context: details.context });
+      let raw;
+      try {
+        raw = await post('xhr', {
+          id, url, method: String(details.method || 'GET').toUpperCase(), headers, body: body.body === undefined ? null : body.body,
+          bodyBase64: body.base64 || null, timeout: details.timeout || 0, anonymous: !!details.anonymous,
+          user: details.user || null, password: details.password || null, overrideMimeType: details.overrideMimeType || null,
+          redirect: details.redirect || 'follow', binary: ['arraybuffer', 'blob', 'stream'].includes(String(details.responseType || '').toLowerCase()),
+          stream: streaming, nocache: !!details.nocache, revalidate: !!details.revalidate,
+          cookie: typeof details.cookie === 'string' ? details.cookie : null,
+        });
+      } finally {
+        xhrEvents.delete(id);
+      }
       done = true;
       if (aborted) return null;
       if (raw && raw.error) {
+        if (streamController) try { streamController.error(new Error(raw.error)); } catch (_) {}
         const err = { error: raw.error, readyState: 4, status: 0, statusText: raw.error, finalUrl: url, context: details.context };
         if (raw.error === 'timeout') call('ontimeout', err); else call('onerror', err);
         call('onloadend', err);
         throw Object.assign(new Error(raw.error), err);
       }
+      if (streamController) try { streamController.close(); } catch (_) {}
       const response = buildResponse(details, raw);
+      if (stream) Object.defineProperty(response, 'response', { value: stream, enumerable: true });
       call('onreadystatechange', response);
       call('onprogress', response);
       call('onload', response);
@@ -348,8 +414,6 @@
     setInterval(check, 400);
     if (window.onurlchange === undefined) window.onurlchange = null;
   }
-  const closeWindow = () => post('closeTab', null);
-  const focusWindow = () => post('focusTab', null);
 
   // ---- Native → script dispatch (isolated world only; the world itself is the boundary) ------
   if (privileged) Object.defineProperty(window, '__rikuganGM_' + __RK.id.replace(/-/g, ''), {
@@ -359,6 +423,14 @@
       if (event.type === 'menu') {
         const fn = menuCallbacks.get(String(event.id));
         if (fn) try { fn(event.mouseEvent || new MouseEvent('click')); } catch (e) { console.error(logPrefix, e); }
+      } else if (event.type === 'xhr') {
+        const h = xhrEvents.get(event.id);
+        if (h) h(event);
+      } else if (event.type === 'download') {
+        const h = downloadProgress.get(event.id);
+        if (h) h(event);
+      } else if (event.type === 'tabClosed') {
+        tabClosed(event.tabId);
       } else if (event.type === 'valueChanged') {
         const old = values[event.key];
         if (event.value === null || event.value === undefined) delete values[event.key]; else values[event.key] = event.value;
@@ -366,6 +438,54 @@
       }
     },
   });
+
+  // ---- GM_cookie (Tampermonkey) ----------------------------------------------------------------
+  const cookieCall = (op, details) => post(op, Object.assign({ url: location.href }, details || {}));
+  const withCallback = (p, cb, map) => {
+    if (typeof cb === 'function') p.then(r => cb(map ? map(r) : r, undefined), e => cb(undefined, String(e && e.message || e)));
+    return p;
+  };
+  const GM_cookie = {
+    list: (details, cb) => withCallback(cookieCall('cookieList', details), cb),
+    set: (details, cb) => withCallback(cookieCall('cookieSet', details), cb ? ((_, err) => cb(err)) : null),
+    delete: (details, cb) => withCallback(cookieCall('cookieDelete', details), cb ? ((_, err) => cb(err)) : null),
+  };
+
+  // ---- GM_audio (Tampermonkey): tab mute state ------------------------------------------------
+  const audioSetMute = (details) => post('audioSetMute', { isMuted: !!(details && details.isMuted) });
+  const audioGetState = () => post('audioGetState', null);
+  const audioListeners = new Set();
+  let audioTimer = null, audioLast = null;
+  const audioPoll = () => audioGetState().then((state) => {
+    if (!state) return;
+    if (audioLast) {
+      const change = {};
+      if (audioLast.isMuted !== state.isMuted) change.muted = state.isMuted ? (state.muteReason || 'user') : false;
+      if (audioLast.isAudible !== state.isAudible) change.audible = state.isAudible;
+      if (Object.keys(change).length) for (const fn of audioListeners) { try { fn(change); } catch (e) { console.error(logPrefix, e); } }
+    }
+    audioLast = state;
+  }).catch(() => {});
+  const audioAddListener = (fn) => {
+    if (typeof fn !== 'function') return;
+    audioListeners.add(fn);
+    if (!audioTimer) { audioPoll(); audioTimer = setInterval(audioPoll, 1000); }
+  };
+  const audioRemoveListener = (fn) => {
+    audioListeners.delete(fn);
+    if (!audioListeners.size && audioTimer) { clearInterval(audioTimer); audioTimer = null; audioLast = null; }
+  };
+  const GM_audio = {
+    setMute: (details, cb) => withCallback(audioSetMute(details), cb ? ((_, err) => cb(err)) : null),
+    getState: (cb) => withCallback(audioGetState(), cb),
+    addStateChangeListener: (fn, cb) => { audioAddListener(fn); if (typeof cb === 'function') cb(); },
+    removeStateChangeListener: (fn, cb) => { audioRemoveListener(fn); if (typeof cb === 'function') cb(); },
+  };
+
+  // ---- window.close / window.focus (with the matching @grant) --------------------------------
+  // Overrides only this script's isolated-world window; the page's own window is untouched.
+  if (privileged && hasGrant('window.close')) { try { window.close = () => { post('closeTab', null).catch(() => {}); }; } catch (_) {} }
+  if (privileged && hasGrant('window.focus')) { try { window.focus = () => { post('focusTab', null).catch(() => {}); }; } catch (_) {} }
 
   // ---- GM.* (promise API) --------------------------------------------------------------------
   const GM = {
@@ -401,18 +521,18 @@
     saveTab: (t) => GM_saveTab(t),
     getTabs: () => GM_getTabs(),
     cookie: {
-      list: () => Promise.reject(new Error('Unsupported API: GM.cookie')),
-      set: () => Promise.reject(new Error('Unsupported API: GM.cookie')),
-      delete: () => Promise.reject(new Error('Unsupported API: GM.cookie')),
+      list: (d) => cookieCall('cookieList', d), set: (d) => cookieCall('cookieSet', d), delete: (d) => cookieCall('cookieDelete', d),
+    },
+    audio: {
+      setMute: (d) => audioSetMute(d), getState: () => audioGetState(),
+      addStateChangeListener: async (fn) => audioAddListener(fn), removeStateChangeListener: async (fn) => audioRemoveListener(fn),
     },
   };
   GM.xmlhttpRequest = GMxhr;
   GM.getResourceURL = GM.getResourceUrl;
   Object.freeze(GM);
 
-  const GM_cookie = Object.assign(unsupported('GM_cookie'), { list: unsupported('GM_cookie.list'), set: unsupported('GM_cookie.set'), delete: unsupported('GM_cookie.delete') });
   const GM_webRequest = unsupported('GM_webRequest');
-  const GM_audio = { setMute: unsupported('GM_audio.setMute'), getState: unsupported('GM_audio.getState') };
   const unsafeWindow = window;
 
   // Page-world scripts see explicit stubs for every privileged API (shadowing the implementations
@@ -433,6 +553,9 @@
     unregisterMenuCommand: () => Promise.reject(pageWorldError('GM.unregisterMenuCommand')),
     getTab: () => Promise.reject(pageWorldError('GM.getTab')), saveTab: () => Promise.reject(pageWorldError('GM.saveTab')),
     getTabs: () => Promise.reject(pageWorldError('GM.getTabs')),
+    cookie: { list: () => Promise.reject(pageWorldError('GM.cookie')), set: () => Promise.reject(pageWorldError('GM.cookie')), delete: () => Promise.reject(pageWorldError('GM.cookie')) },
+    audio: { setMute: () => Promise.reject(pageWorldError('GM.audio')), getState: () => Promise.reject(pageWorldError('GM.audio')),
+      addStateChangeListener: () => Promise.reject(pageWorldError('GM.audio')), removeStateChangeListener: () => Promise.reject(pageWorldError('GM.audio')) },
     addValueChangeListener: () => Promise.reject(pageWorldError('GM.addValueChangeListener')),
     removeValueChangeListener: () => Promise.reject(pageWorldError('GM.removeValueChangeListener')),
   });
@@ -481,5 +604,5 @@
   };
   if (privileged) post('injected', { url: location.href, top: isTop }).catch(() => {});
   start();
-  void grantAll; void GM_cookie; void GM_webRequest; void GM_audio; void unsafeWindow; void closeWindow; void focusWindow;
+  void grantAll; void GM_cookie; void GM_webRequest; void GM_audio; void unsafeWindow;
 })();

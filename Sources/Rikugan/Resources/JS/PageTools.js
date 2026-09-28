@@ -670,14 +670,35 @@ html::-webkit-scrollbar { background: #222; }`;
     return findPaint();
   };
 
+  // ---- Tab mute (GM_audio) ----------------------------------------------------------------------------
+  // Media elements of this document stay muted while the tab is muted, including ones that start
+  // playing later; elements muted by us are restored on unmute.
+  let tabMuted = false;
+  const mutedByUs = new WeakSet();
+  const isMedia = (el) => el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO');
+  const muteElement = (el) => { if (tabMuted && !el.muted) { mutedByUs.add(el); el.muted = true; } };
+  const setMuted = (value) => {
+    tabMuted = !!value;
+    document.querySelectorAll('video, audio').forEach((el) => {
+      if (tabMuted) muteElement(el);
+      else if (mutedByUs.has(el)) { mutedByUs.delete(el); el.muted = false; }
+    });
+    return tabMuted;
+  };
+  for (const type of ['play', 'playing', 'volumechange', 'loadedmetadata']) {
+    document.addEventListener(type, (e) => { if (tabMuted && isMedia(e.target)) muteElement(e.target); }, true);
+  }
+  const audible = () => Array.from(document.querySelectorAll('video, audio')).some((m) => !m.paused && !m.ended && !m.muted && m.volume > 0);
+
   // ---- Public API (called from Swift through evaluateJavaScript in this world) ------------------------
   window.__rikuganTools = {
     applyDarkMode, applyFont, fontStatus, applyCosmetic, hideNow, startPicker, stopPicker: () => picker && picker.finish(), selectorFor,
     extractReader, startTranslation, applyTranslations, showOriginal, stopTranslation, languageSample,
     scanImages, scanMedia, videoAction, autofillInfo, fillLogin, fillForm,
     selection: () => String(window.getSelection ? window.getSelection() : ''),
-    findStart, findStep, findClear,
+    findStart, findStep, findClear, setMuted, audible,
   };
+  if (cfg.muted) setMuted(true);
 
   applyDarkMode(cfg.dark);
   if (cfg.font) applyFont(cfg.font);

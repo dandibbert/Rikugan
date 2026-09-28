@@ -203,10 +203,10 @@ final class MetadataParserTests: XCTestCase {
         let result = MetadataParser.parse(bad)
         XCTAssertTrue(result.hasErrors)
         XCTAssertEqual(result.issues.first { $0.severity == .error }?.line, 3)
-        let unknownGrant = "// ==UserScript==\n// @name x\n// @match *://*/*\n// @grant GM_cookie\n// ==/UserScript==\n"
+        let unknownGrant = "// ==UserScript==\n// @name x\n// @match *://*/*\n// @grant GM_webRequest\n// ==/UserScript==\n"
         let r2 = MetadataParser.parse(unknownGrant)
         XCTAssertFalse(r2.hasErrors)
-        XCTAssertTrue(r2.issues.contains { $0.message.contains("GM_cookie") })
+        XCTAssertTrue(r2.issues.contains { $0.message.contains("GM_webRequest") })
     }
 
     func testVersionCompare() {

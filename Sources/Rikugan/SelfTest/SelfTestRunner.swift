@@ -144,7 +144,7 @@ import WebKit
         ctx.record("测试页面加载", tab.webView?.url?.path == "/index.html")
         // Wait for every asynchronous result to be reported by the page (no fixed delay).
         let expected = ["data-cs-start", "data-cs-end", "data-messaging", "data-port", "data-storage", "data-scripting", "data-scripting-result",
-                        "data-permissions", "data-bg-storage", "data-to-content", "data-extras", "data-unsupported", "data-us", "data-gm-storage", "data-gmxhr", "data-unsafe-window"]
+                        "data-permissions", "data-bg-storage", "data-to-content", "data-extras", "data-unsupported", "data-us", "data-gm-storage", "data-gmxhr", "data-unsafe-window", "data-gm-extras"]
         _ = await ctx.waitUntil(15) { let a = await ctx.attrs(tab); return expected.allSatisfy { a[$0] != nil } }
         var snapshot = await ctx.attrs(tab)
         let styles = await ctx.eval(tab, """
@@ -179,6 +179,7 @@ import WebKit
         check("data-gmxhr", "GM_xmlhttpRequest")
         ctx.record("GM_addStyle", snapshot["gm"] == "rgb(4, 5, 6)", snapshot["gm"] ?? "")
         check("data-unsafe-window", "unsafeWindow")
+        check("data-gm-extras", "GM_cookie（含 HttpOnly）/ GM_saveTab / GM_audio", expected: "cookie,tab,audio")
         // Find in page: case-insensitive, visible text only (the hidden ad's "target" is skipped).
         let findStart = await tab.webView?.rkTools("findStart", ["TARGET"]) as? [String: Any]
         let findNext = await tab.webView?.rkTools("findStep", [true]) as? [String: Any]

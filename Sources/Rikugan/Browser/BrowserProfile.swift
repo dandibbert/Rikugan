@@ -137,6 +137,8 @@ extension Notification.Name {
     static let rikuganProfileWillChange = Notification.Name("rikugan.profileWillChange")
     static let rikuganProfileDidChange = Notification.Name("rikugan.profileDidChange")
     static let rikuganContentChanged = Notification.Name("rikugan.contentChanged")
+    /// userInfo["tabId"]: numeric ID of a tab that was just closed.
+    static let rikuganTabClosed = Notification.Name("rikugan.tabClosed")
     /// object: the host whose settings changed (nil = all).
     static let rikuganSiteSettingsChanged = Notification.Name("rikugan.siteSettingsChanged")
 }

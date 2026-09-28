@@ -26,6 +26,10 @@
 | 只用页面安全授权（`none`、`unsafeWindow`、`GM_info`、`GM_log`、`GM_addStyle`、`GM_addElement`、`window.onurlchange`） | 页面环境 | 不需要 |
 | `@inject-into page`，且声明了特权授权 | 页面环境 | **不可用**：调用时抛出明确错误；脚本详情页有橙色警告列出这些 API |
 
+### GM_cookie 的范围
+
+`GM_cookie` 可以读写 HttpOnly Cookie，因此只对两类域名开放：当前网页所在的网站，以及脚本 `@match` / `@include` / `@connect` 覆盖的域名（与 `GM_xmlhttpRequest` 的规则相同）。无痕标签页里只能访问无痕会话的 Cookie。脚本必须声明 `@grant GM_cookie` 或 `GM.cookie`，页面环境脚本不可用。
+
 ### 页面环境脚本拿不到什么
 
 - 没有消息处理器名、令牌、回调 ID 或分发函数；
