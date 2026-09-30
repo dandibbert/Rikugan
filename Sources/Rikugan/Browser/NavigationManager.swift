@@ -121,11 +121,6 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         if let host = webView.url?.host {
             let site = profile.siteSettings.settings(for: host)
             desktopMode = site.desktopMode ?? services.prefs.defaultDesktopMode
-            // Popup policy for the committed site. Written only when it changes: touching the
-            // web view's preferences re-sends them to the page, which must not happen on every load.
-            let preferences = webView.configuration.preferences
-            let popups = Self.allowsAutomaticPopups(site: site, prefs: services.prefs)
-            if preferences.javaScriptCanOpenWindowsAutomatically != popups { preferences.javaScriptCanOpenWindowsAutomatically = popups }
             if let seconds = site.autoRefreshSeconds, autoRefreshInterval == nil { autoRefreshInterval = TimeInterval(seconds) }
         }
     }
@@ -188,7 +183,11 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
 
     /// Windows opened without a user gesture: site Allow / Block, otherwise the global switch.
     /// Windows opened by a tap (target=_blank, window.open in a click handler) are always allowed
-    /// unless the site is set to Block.
+    /// unless the site is set to Block. WebKit's setting is applied when the tab's web view is
+    /// created (the global switch and the site the tab opens with); changing the live web view's
+    /// preferences on navigation stalled loads in testing, so a later change of the switch or a
+    /// different site takes effect for web views created after it. Site Block is also enforced
+    /// in createWebViewWith for every window.
     static func allowsAutomaticPopups(site: SiteSettings, prefs: Preferences) -> Bool {
         switch site.popups {
         case .allow?: return true
