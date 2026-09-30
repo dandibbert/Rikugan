@@ -216,6 +216,49 @@ import QuickLook
         return item
     }
 
+    /// Fetches a resource the page shows (images for the gallery / save / copy) with the page's
+    /// context: blob: and data: URLs are read inside the page, http(s) with the tab's cookies for
+    /// that URL and the page as Referer, through a session that stores nothing.
+    static func pageResource(_ url: URL, tab: BrowserTab?) async throws -> Data {
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "blob" || scheme == "data" {
+            guard let webView = tab?.webView, let base64 = await webView.rkTools("readResource", [url.absoluteString]) as? String,
+                  let data = Data(base64Encoded: base64) else { throw RikuganError("无法从页面读取该资源") }
+            return data
+        }
+        guard scheme == "http" || scheme == "https" else { throw RikuganError("不支持的地址") }
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        if let tab {
+            if let referer = tab.webView?.url?.absoluteString { request.setValue(referer, forHTTPHeaderField: "Referer") }
+            if let cookie = await cookieHeader(for: url, tab: tab) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+            if let agent = tab.webView?.customUserAgent, !agent.isEmpty { request.setValue(agent, forHTTPHeaderField: "User-Agent") }
+        }
+        let (data, response) = try await resourceSession.data(for: request, delegate: CookieRedirectGuard())
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RikuganError("HTTP \(http.statusCode)") }
+        return data
+    }
+
+    /// Content length from a HEAD request made with the page's context (nil if unknown).
+    static func pageResourceLength(_ url: URL, tab: BrowserTab?) async -> Int64? {
+        var request = URLRequest(url: url, timeoutInterval: 8)
+        request.httpMethod = "HEAD"
+        if let tab {
+            if let referer = tab.webView?.url?.absoluteString { request.setValue(referer, forHTTPHeaderField: "Referer") }
+            if let cookie = await cookieHeader(for: url, tab: tab) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        }
+        guard let (_, response) = try? await resourceSession.data(for: request, delegate: CookieRedirectGuard()),
+              response.expectedContentLength > 0 else { return nil }
+        return response.expectedContentLength
+    }
+
+    private static let resourceSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
+
     static func cookieHeader(for url: URL, tab: BrowserTab) async -> String? {
         let store = tab.isPrivate ? tab.profile.privateDataStore() : tab.profile.dataStore
         let cookies = await store.httpCookieStore.allCookies().filter { CookieScope.cookie($0, appliesTo: url) }
@@ -481,6 +524,18 @@ extension DownloadManager: URLSessionDownloadDelegate {
     }
 }
 
+/// Drops the Cookie header chosen for the original URL when a redirect leaves that host or HTTPS.
+final class CookieRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        var next = request
+        if request.url?.host?.lowercased() != task.originalRequest?.url?.host?.lowercased() || request.url?.scheme?.lowercased() != "https" {
+            next.setValue(nil, forHTTPHeaderField: "Cookie")
+        }
+        completionHandler(next)
+    }
+}
+
 /// Minimal HLS (m3u8) downloader: picks the best variant, downloads unencrypted segments and
 /// concatenates them. DRM / encrypted streams are out of scope (spec §26).
 enum HLSDownloader {
@@ -495,7 +550,7 @@ enum HLSDownloader {
             var request = URLRequest(url: u, timeoutInterval: 60)
             if let referer { request.setValue(referer, forHTTPHeaderField: "Referer") }
             if let cookie = await cookies(u) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request, delegate: CookieRedirectGuard())
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RikuganError("HTTP \(http.statusCode)：\(u.lastPathComponent)") }
             return data
         }
@@ -508,6 +563,7 @@ enum HLSDownloader {
         }
         let playlist = M3U8.media(text, base: playlistURL)
         if let method = playlist.encryption { throw RikuganError("该视频流已加密（\(method)），不支持下载") }
+        if let feature = playlist.unsupported { throw RikuganError("该视频流使用了 \(feature)，暂不支持下载") }
         guard !playlist.segments.isEmpty else { throw RikuganError("播放列表为空或为直播流") }
         var fileName = name
         if playlist.isFMP4 { fileName = (name as NSString).deletingPathExtension + ".mp4" }

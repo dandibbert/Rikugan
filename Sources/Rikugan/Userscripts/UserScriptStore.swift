@@ -114,12 +114,18 @@ struct BuiltUserScript {
         scripts.firstIndex { $0.metadata.name == metadata.name && $0.metadata.namespace == metadata.namespace }
     }
 
-    func updateSource(_ id: UUID, source: String) throws {
+    /// Replaces the source; with `dependencies` the @require / @resource contents are replaced in
+    /// the same step (never a new source with the old or missing dependencies).
+    func updateSource(_ id: UUID, source: String, dependencies: UserscriptDependencies.Result? = nil) throws {
         let parsed = MetadataParser.parse(source)
         if let error = parsed.firstError { throw RikuganError(error) }
         guard let index = scripts.firstIndex(where: { $0.id == id }) else { return }
         scripts[index].source = source
         scripts[index].metadata = parsed.metadata
+        if let dependencies {
+            scripts[index].requireCode = dependencies.requires
+            scripts[index].resourceData = dependencies.resources
+        }
         scripts[index].updatedAt = Date()
         save()
     }
@@ -201,7 +207,12 @@ struct BuiltUserScript {
             prefix = requires
             sourceCache[cacheKey] = prefix
         }
-        let body = prefix + (prefix.isEmpty ? "" : "\n;\n") + script.source + "\n//# sourceURL=userscript-\(meta.name.replacingOccurrences(of: " ", with: "_")).user.js"
+        // A script whose @require code is missing does not run half-initialised: it reports the
+        // missing dependency (console + Diagnostics) instead.
+        let missing = meta.requires.filter { script.requireCode[$0] == nil }
+        let body = missing.isEmpty
+            ? prefix + (prefix.isEmpty ? "" : "\n;\n") + script.source + "\n//# sourceURL=userscript-\(meta.name.replacingOccurrences(of: " ", with: "_")).user.js"
+            : "throw new Error(\("Rikugan: @require not available, script not run: \(missing.joined(separator: ", "))".jsLiteral));"
         var runtime = JSResource.load("UserscriptRuntime")
         runtime = runtime.replacingOccurrences(of: "/*__RK_CONFIG__*/null", with: JSONText.encode(config))
         guard let range = runtime.range(of: "/*__RK_BODY__*/") else { return runtime }
@@ -249,7 +260,7 @@ enum UserscriptDependencies {
         var result = Result()
         guard meta.requires.count <= 30, meta.resources.count <= 30 else { throw RikuganError("@require / @resource 数量过多") }
         for url in meta.requires {
-            guard let target = URL(string: url) else { continue }
+            guard let target = URL(string: url), target.scheme != nil else { throw RikuganError("@require 网址无效：\(url)") }
             let (data, response) = try await URLSession.shared.data(from: target)
             guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else {
                 throw RikuganError("下载 @require 失败：\(url)")
@@ -257,8 +268,11 @@ enum UserscriptDependencies {
             result.requires[url] = String(decoding: data, as: UTF8.self)
         }
         for resource in meta.resources {
-            guard let target = URL(string: resource.url) else { continue }
+            guard let target = URL(string: resource.url), target.scheme != nil else { throw RikuganError("@resource 网址无效：\(resource.name)") }
             let (data, response) = try await URLSession.shared.data(from: target)
+            guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else {
+                throw RikuganError("下载 @resource 失败：\(resource.name)")
+            }
             guard data.count < 20_000_000 else { throw RikuganError("@resource 过大：\(resource.name)") }
             let mime = (response as? HTTPURLResponse)?.mimeType ?? MIME.type(forExtension: target.pathExtension)
             result.resources[resource.name] = .init(mime: mime, base64: data.base64EncodedString())

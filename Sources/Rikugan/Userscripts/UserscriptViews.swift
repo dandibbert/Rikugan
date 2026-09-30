@@ -232,6 +232,7 @@ struct ScriptEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var source = ""
     @State private var error: String?
+    @State private var saving = false
 
     private var diagnostics: MetadataParser.Result { MetadataParser.parse(source) }
 
@@ -260,7 +261,9 @@ struct ScriptEditorSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.disabled(diagnostics.hasErrors) }
+                ToolbarItem(placement: .confirmationAction) {
+                    if saving { ProgressView() } else { Button("保存") { save() }.disabled(diagnostics.hasErrors) }
+                }
             }
             .alert("无法保存", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("好") {} } message: { Text(error ?? "") }
         }
@@ -268,26 +271,25 @@ struct ScriptEditorSheet: View {
         .interactiveDismissDisabled(source != target.source)
     }
 
+    /// Downloads @require / @resource first; the new source is saved together with them, or not
+    /// at all (the editor stays open with the error).
     private func save() {
-        do {
-            if let script = target.script {
-                try store.updateSource(script.id, source: source)
-            } else {
-                try store.install(source: source, sourceURL: nil, requires: [:], resources: [:])
-            }
-            Task {
-                // Fetch any newly-added dependencies in the background.
-                let meta = MetadataParser.parse(source).metadata
-                if let deps = try? await UserscriptDependencies.fetch(for: meta),
-                   var script = store.scripts.first(where: { $0.metadata.name == meta.name && $0.metadata.namespace == meta.namespace }) {
-                    script.requireCode = deps.requires
-                    script.resourceData = deps.resources
-                    store.update(script)
+        let text = source
+        saving = true
+        Task {
+            defer { saving = false }
+            do {
+                let meta = MetadataParser.parse(text).metadata
+                let deps = try await UserscriptDependencies.fetch(for: meta)
+                if let script = target.script {
+                    try store.updateSource(script.id, source: text, dependencies: deps)
+                } else {
+                    try store.install(source: text, sourceURL: nil, requires: deps.requires, resources: deps.resources)
                 }
+                dismiss()
+            } catch {
+                self.error = "脚本未保存：\(error.localizedDescription)"
             }
-            dismiss()
-        } catch {
-            self.error = error.localizedDescription
         }
     }
 }

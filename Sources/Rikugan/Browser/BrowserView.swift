@@ -414,6 +414,12 @@ struct FindBarContent: View {
             Button("完成") { close() }.fontWeight(.semibold)
         }
         .onAppear { focused = true }
+        .onChange(of: tab.loadsFinished) { _, _ in
+            // Same query on the page that replaced the old one.
+            guard !query.isEmpty else { return }
+            search?.cancel()
+            search = Task { apply(await tab.webView?.rkTools("findStart", [query])) }
+        }
         .onChange(of: query) { _, text in
             search?.cancel()
             search = Task {

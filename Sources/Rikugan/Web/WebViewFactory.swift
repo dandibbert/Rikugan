@@ -27,7 +27,7 @@ import UIKit
             configuration.allowsAirPlayForMediaPlayback = true
             configuration.mediaTypesRequiringUserActionForPlayback = .audio
             configuration.preferences.isFraudulentWebsiteWarningEnabled = true
-            configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+            configuration.preferences.javaScriptCanOpenWindowsAutomatically = BrowserTab.allowsAutomaticPopups(site: tab.profile.siteSettings.settings(for: tab.url?.host), prefs: tab.services.prefs)
             configuration.preferences.isElementFullscreenEnabled = true
             configuration.defaultWebpagePreferences.preferredContentMode = tab.desktopMode ? .desktop : .mobile
             configuration.dataDetectorTypes = []
@@ -104,8 +104,11 @@ import UIKit
             "console": prefs.consoleCaptureEnabled,
             "geolocation": prefs.geolocationShim,
             "notifications": true,
-            "notificationPermission": notificationPermission(site),
-            "clipboardGate": site.permissions["clipboard"] == .block,
+            "notificationPermission": notificationPermission(site, session: tab.sessionPermission("notifications", host: host)),
+            // Always gated: each frame's read is decided natively for that frame's origin. This is
+            // a page-world shim (a page can reach the original API through a fresh frame), so it
+            // enforces the user's choice for cooperative pages, not a security boundary.
+            "clipboardGate": true,
         ]
         controller.addUserScript(WKUserScript(source: JSResource.fill("PageHooks", marker: "__RK_HOOKS_CONFIG__", config: hooks),
                                               injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
@@ -142,7 +145,8 @@ import UIKit
         tab.markInjected(for: url)
     }
 
-    static func notificationPermission(_ site: SiteSettings) -> String {
+    static func notificationPermission(_ site: SiteSettings, session: Bool? = nil) -> String {
+        if let session { return session ? "granted" : "denied" }
         switch site.permissions["notifications"] {
         case .allow?: return "granted"
         case .block?: return "denied"

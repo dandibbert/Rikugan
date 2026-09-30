@@ -219,6 +219,16 @@ struct PendingExtensionInstall: Identifiable {
                 throw RikuganError("content_scripts 中的匹配规则无效：\(pattern)")
             }
         }
+        // Like Chrome, a manifest naming content script files that are not in the package is refused.
+        for script in manifest.contentScripts {
+            for file in script.js + script.css {
+                let path = file.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                guard !path.split(separator: "/").contains(".."),
+                      FileManager.default.fileExists(atPath: staging.appendingPathComponent(path).path) else {
+                    throw RikuganError("content_scripts 引用的文件不存在：\(file)")
+                }
+            }
+        }
         if let sw = manifest.serviceWorker, !FileManager.default.fileExists(atPath: staging.appendingPathComponent(sw).path) {
             throw RikuganError("background.service_worker 指向的文件不存在：\(sw)")
         }

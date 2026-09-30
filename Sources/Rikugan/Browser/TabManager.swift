@@ -65,7 +65,8 @@ import UIKit
     func newTab(url: URL? = nil, background: Bool = false, isPrivate: Bool? = nil, opener: BrowserTab? = nil,
                 configuration: WKWebViewConfiguration? = nil, insertAfterOpener: Bool = true) -> BrowserTab {
         let privateTab = isPrivate ?? isPrivateMode
-        let snapshot = TabSnapshot(url: "", title: "新标签页", groupID: privateTab ? nil : currentGroupID)
+        let snapshot = TabSnapshot(url: "", title: "新标签页", groupID: privateTab ? nil : currentGroupID,
+                                   desktopMode: AppServices.shared.prefs.defaultDesktopMode)
         let tab = BrowserTab(snapshot: snapshot, profile: profile, isPrivate: privateTab, configuration: configuration)
         tab.manager = self
         tab.opener = opener
@@ -74,7 +75,12 @@ import UIKit
         } else {
             tabs.append(tab)
         }
-        if let url { tab.load(url) }
+        if let url {
+            tab.load(url)
+        } else if configuration == nil, let home = Self.customNewTabURL(AppServices.shared.prefs) {
+            // "New tab: custom URL" applies to every new tab, not only the Home button.
+            tab.load(home)
+        }
         if !background {
             if privateTab != isPrivateMode { isPrivateMode = privateTab }
             select(tab)
@@ -85,6 +91,12 @@ import UIKit
         profile.extensions.tabCreated(tab)
         scheduleSave()
         return tab
+    }
+
+    static func customNewTabURL(_ prefs: Preferences) -> URL? {
+        guard prefs.homepageMode == .custom, let url = URL(string: prefs.homepageURL.trimmingCharacters(in: .whitespaces)),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        return url
     }
 
     func select(_ tab: BrowserTab) {

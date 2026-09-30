@@ -614,10 +614,12 @@ html::-webkit-scrollbar { background: #222; }`;
   }, true);
 
   // ---- Find in page ----------------------------------------------------------------------------------
-  // Case-insensitive text search over visible text. Matches are painted with the CSS Custom
-  // Highlight API (no DOM changes, so page scripts and layout are untouched); without it the
-  // current match is shown as the selection.
+  // Case-insensitive text search over visible text of this document, including matches that span
+  // inline elements ("hel<b>lo</b>"); text in form fields and in frames is not searched. Matches
+  // are painted with the CSS Custom Highlight API (no DOM changes, so page scripts and layout are
+  // untouched); without it the current match is shown as the selection, which Done clears again.
   let found = { ranges: [], index: -1 };
+  let findSelection = null;
   const hasHighlights = () => !!(window.CSS && CSS.highlights && window.Highlight);
   const findPaint = () => {
     const current = found.ranges[found.index];
@@ -626,6 +628,7 @@ html::-webkit-scrollbar { background: #222; }`;
       if (current) CSS.highlights.set('rikugan-find-current', new Highlight(current)); else CSS.highlights.delete('rikugan-find-current');
     } else if (current) {
       const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(current);
+      findSelection = current;
     }
     if (current) {
       const rect = current.getBoundingClientRect();
@@ -635,6 +638,16 @@ html::-webkit-scrollbar { background: #222; }`;
   };
   const findClear = () => {
     if (hasHighlights()) { CSS.highlights.delete('rikugan-find'); CSS.highlights.delete('rikugan-find-current'); }
+    if (findSelection) {
+      // Only undo a selection this search made; one the user made since is left alone.
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount === 1) {
+        const r = sel.getRangeAt(0);
+        if (r.startContainer === findSelection.startContainer && r.startOffset === findSelection.startOffset &&
+            r.endContainer === findSelection.endContainer && r.endOffset === findSelection.endOffset) sel.removeAllRanges();
+      }
+      findSelection = null;
+    }
     found = { ranges: [], index: -1 };
     return { count: 0, index: -1 };
   };
@@ -652,13 +665,40 @@ html::-webkit-scrollbar { background: #222; }`;
         return parent.getClientRects().length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
-    for (let node = walker.nextNode(); node && found.ranges.length < 2000; node = walker.nextNode()) {
-      const text = node.nodeValue.toLocaleLowerCase();
-      for (let at = text.indexOf(q); at !== -1 && found.ranges.length < 2000; at = text.indexOf(q, at + q.length)) {
-        const range = document.createRange();
-        range.setStart(node, at); range.setEnd(node, at + q.length);
-        found.ranges.push(range);
+    // Concatenate the text of consecutive nodes in the same block so a match can span inline
+    // elements; a separator between blocks keeps matches from joining unrelated paragraphs.
+    const blocks = new Map();
+    const blockOf = (el) => {
+      if (blocks.has(el)) return blocks.get(el);
+      let result = document.body;
+      if (el && el !== document.body) {
+        const d = getComputedStyle(el).display;
+        result = (d !== 'inline' && d !== 'contents') ? el : blockOf(el.parentElement);
       }
+      blocks.set(el, result);
+      return result;
+    };
+    const nodes = [], starts = [];
+    let text = '', lastBlock = null;
+    for (let node = walker.nextNode(); node && nodes.length < 20000; node = walker.nextNode()) {
+      const block = blockOf(node.parentElement);
+      if (lastBlock && block !== lastBlock) text += '\n';
+      lastBlock = block;
+      nodes.push(node); starts.push(text.length);
+      text += node.nodeValue.toLocaleLowerCase();
+    }
+    // Position in `text` → (node, offset). Lowercasing can change length for a few scripts; the
+    // offset is clamped to the node so a range is always valid.
+    const locate = (pos, isEnd) => {
+      let lo = 0, hi = nodes.length - 1;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] < pos || (!isEnd && starts[mid] === pos)) lo = mid; else hi = mid - 1; }
+      return { node: nodes[lo], offset: Math.min(nodes[lo].nodeValue.length, Math.max(0, pos - starts[lo])) };
+    };
+    for (let at = text.indexOf(q); at !== -1 && found.ranges.length < 2000; at = text.indexOf(q, at + q.length)) {
+      const s = locate(at, false), e = locate(at + q.length, true);
+      const range = document.createRange();
+      try { range.setStart(s.node, s.offset); range.setEnd(e.node, e.offset); } catch (_) { continue; }
+      found.ranges.push(range);
     }
     // Start at the first match below the current scroll position, like Safari.
     found.index = found.ranges.length ? Math.max(0, found.ranges.findIndex((r) => r.getBoundingClientRect().top >= 0)) : -1;
@@ -688,6 +728,16 @@ html::-webkit-scrollbar { background: #222; }`;
   for (const type of ['play', 'playing', 'volumechange', 'loadedmetadata']) {
     document.addEventListener(type, (e) => { if (tabMuted && isMedia(e.target)) muteElement(e.target); }, true);
   }
+  // blob:/data: resources only exist inside this document: read them here (size-capped) as base64.
+  const readResource = async (url) => {
+    if (!/^(blob:|data:)/.test(String(url))) return null;
+    const blob = await (await fetch(url)).blob();
+    if (blob.size > 50 * 1024 * 1024) return null;
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(binary);
+  };
   const audible = () => Array.from(document.querySelectorAll('video, audio')).some((m) => !m.paused && !m.ended && !m.muted && m.volume > 0);
 
   // ---- Public API (called from Swift through evaluateJavaScript in this world) ------------------------
@@ -696,7 +746,7 @@ html::-webkit-scrollbar { background: #222; }`;
     extractReader, startTranslation, applyTranslations, showOriginal, stopTranslation, languageSample,
     scanImages, scanMedia, videoAction, autofillInfo, fillLogin, fillForm,
     selection: () => String(window.getSelection ? window.getSelection() : ''),
-    findStart, findStep, findClear, setMuted, audible,
+    findStart, findStep, findClear, setMuted, audible, readResource,
   };
   if (cfg.muted) setMuted(true);
 

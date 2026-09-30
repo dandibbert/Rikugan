@@ -24,10 +24,13 @@
   const handler = privileged && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers[__RK.handler];
   const postRaw = handler ? handler.postMessage.bind(handler) : null;
   const pageWorldError = (name) => new Error('Rikugan: ' + name + ' is not available to page-world userscripts (the page could forge any privileged call made from there). Use @inject-into content or remove @inject-into page.');
+  // Identifies this frame's copy of the script (value-change broadcasts skip only the frame
+  // that made the change, not every frame of the tab).
+  const frameToken = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now();
   const post = (op, args) => {
     if (!privileged) return Promise.reject(pageWorldError('GM ' + op));
     if (!postRaw) return Promise.reject(new Error('Rikugan bridge unavailable'));
-    return postRaw({ ch: 'gm', sid: __RK.id, op, args: args === undefined ? null : args });
+    return postRaw({ ch: 'gm', sid: __RK.id, op, args: args === undefined ? null : args, ft: frameToken });
   };
   const logPrefix = '[' + __RK.name + ']';
   const unsupported = (name) => function () {
@@ -57,22 +60,32 @@
     const v = decodeValue(values[key]);
     return v === undefined ? defaultValue : v;
   };
-  const GM_setValue = (key, value) => {
+  // Keys written by this copy since injection: the initial native snapshot must not overwrite them.
+  const locallyWritten = new Set();
+  // Returns the native write's promise: GM.setValue / GM.deleteValue resolve once the value is
+  // stored (and reject if it was not); the synchronous GM_* APIs only log a failure.
+  const setValueInternal = (key, value) => {
     key = String(key);
     let text;
     try { text = JSON.stringify(value === undefined ? null : value); } catch (e) { throw new Error('GM_setValue: value is not serialisable: ' + e.message); }
     const old = values[key];
     values[key] = text;
-    post('setValue', { key, value: text }).catch(e => console.error(logPrefix, 'GM_setValue failed', e));
+    locallyWritten.add(key);
+    const p = post('setValue', { key, value: text });
     if (old !== text) fireChange(key, old, text, false);
+    return p;
   };
-  const GM_deleteValue = (key) => {
+  const deleteValueInternal = (key) => {
     key = String(key);
     const old = values[key];
     delete values[key];
-    post('deleteValue', { key }).catch(e => console.error(logPrefix, e));
+    locallyWritten.add(key);
+    const p = post('deleteValue', { key });
     if (old !== undefined) fireChange(key, old, undefined, false);
+    return p;
   };
+  const GM_setValue = (key, value) => { setValueInternal(key, value).catch(e => console.error(logPrefix, 'GM_setValue failed', e)); };
+  const GM_deleteValue = (key) => { deleteValueInternal(key).catch(e => console.error(logPrefix, 'GM_deleteValue failed', e)); };
   const GM_listValues = () => Object.keys(values);
   const GM_getValues = (keys) => {
     const out = {};
@@ -88,8 +101,8 @@
   // Refresh the cache with the authoritative native store (values may have changed since injection).
   const ready = post('getAll', null).then(all => {
     if (!all || typeof all !== 'object') return;
-    for (const key of Object.keys(values)) if (!(key in all)) delete values[key];
-    for (const key of Object.keys(all)) values[key] = all[key];
+    for (const key of Object.keys(values)) if (!(key in all) && !locallyWritten.has(key)) delete values[key];
+    for (const key of Object.keys(all)) if (!locallyWritten.has(key)) values[key] = all[key];
   }).catch(() => {});
 
   // ---- Styles / DOM -------------------------------------------------------------------------
@@ -497,12 +510,12 @@
     info: GM_info,
     log: GM_log,
     getValue: async (k, d) => { await ready; return GM_getValue(k, d); },
-    setValue: async (k, v) => GM_setValue(k, v),
-    deleteValue: async (k) => GM_deleteValue(k),
+    setValue: async (k, v) => { await setValueInternal(k, v); },
+    deleteValue: async (k) => { await deleteValueInternal(k); },
     listValues: async () => { await ready; return GM_listValues(); },
     getValues: async (k) => { await ready; return GM_getValues(k); },
-    setValues: async (o) => GM_setValues(o),
-    deleteValues: async (k) => GM_deleteValues(k),
+    setValues: async (o) => { await Promise.all(Object.keys(o || {}).map(k => setValueInternal(k, o[k]))); },
+    deleteValues: async (k) => { await Promise.all((k || []).map(key => deleteValueInternal(key))); },
     addValueChangeListener: async (k, cb) => GM_addValueChangeListener(k, cb),
     removeValueChangeListener: async (id) => GM_removeValueChangeListener(id),
     addStyle: async (css) => GM_addStyle(css),
@@ -513,8 +526,11 @@
     download: (d, n) => new Promise((resolve, reject) => {
       const details = typeof d === 'string' ? { url: d, name: n } : Object.assign({}, d);
       const onload = details.onload, onerror = details.onerror;
+      const ontimeout = details.ontimeout;
       details.onload = (r) => { if (onload) onload(r); resolve(r); };
       details.onerror = (e) => { if (onerror) onerror(e); reject(e); };
+      // Every end state settles the promise (a timeout or abort must not leave it pending).
+      details.ontimeout = (e) => { if (ontimeout) ontimeout(e); reject(Object.assign({ error: 'timeout' }, e || {})); };
       GM_download(details);
     }),
     xmlHttpRequest: GMxhr,
@@ -607,7 +623,13 @@
         else setTimeout(__rk_run, 0);
     }
   };
-  if (privileged) post('injected', { url: location.href, top: isTop }).catch(() => {});
+  if (privileged) {
+    post('injected', { url: location.href, top: isTop }).catch(() => {});
+    // Value-change delivery is per frame: drop this frame when it goes away, re-register if it
+    // comes back from the back/forward cache.
+    window.addEventListener('pagehide', () => { post('frameGone', null).catch(() => {}); });
+    window.addEventListener('pageshow', (e) => { if (e.persisted) post('injected', { url: location.href, top: isTop }).catch(() => {}); });
+  }
   start();
   void grantAll; void GM_cookie; void GM_webRequest; void GM_audio; void unsafeWindow;
 })();

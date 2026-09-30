@@ -134,14 +134,18 @@ import CryptoKit
 
     func updateSubscriptions(only ids: Set<String>? = nil) async {
         var errors: [String] = []
-        for index in subscriptions.indices where subscriptions[index].enabled && (ids?.contains(subscriptions[index].id) ?? true) {
-            let item = subscriptions[index]
+        // Work on a snapshot keyed by id: the list can change (e.g. an entry deleted) while a
+        // download is in flight, so indices are looked up again after every await.
+        let targets = subscriptions.filter { $0.enabled && (ids?.contains($0.id) ?? true) }
+        for item in targets {
             guard let url = URL(string: item.url) else { continue }
             do {
                 var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
                 request.setValue("Rikugan/1.0", forHTTPHeaderField: "User-Agent")
                 let (data, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RikuganError("HTTP \(http.statusCode)") }
+                // Removed or re-pointed while downloading: discard the result.
+                guard let index = subscriptions.firstIndex(where: { $0.id == item.id }), subscriptions[index].url == item.url else { continue }
                 try data.write(to: cacheURL(item.id), options: .atomic)
                 subscriptions[index].lastUpdated = Date()
             } catch {

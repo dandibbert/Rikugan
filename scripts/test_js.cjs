@@ -406,6 +406,29 @@ test('browsingData convenience methods map to remove()', async () => {
   await assert.rejects(w.chrome.browsingData.removePasswords({}), /Unsupported API/);
 });
 
+test('no silent success: filters, nested unsupported members, external connect', async () => {
+  const calls = [];
+  const w = runChrome('background', async (msg) => { calls.push(msg); return null; });
+  // Event filters are applied, unknown filter keys refused.
+  const seen = [];
+  w.chrome.webNavigation.onCompleted.addListener((d) => seen.push(d.url), { url: [{ hostSuffix: 'example.com' }] });
+  w.__rikuganChrome.dispatch('webNavigation.onCompleted', [{ url: 'https://a.example.com/x', tabId: 1, frameId: 0 }]);
+  w.__rikuganChrome.dispatch('webNavigation.onCompleted', [{ url: 'https://other.test/', tabId: 1, frameId: 0 }]);
+  assert.deepStrictEqual(seen, ['https://a.example.com/x']);
+  assert.throws(() => w.chrome.webNavigation.onCompleted.addListener(() => {}, { tabId: 3 }), /not supported/);
+  // Nested members of unsupported namespaces reject instead of throwing TypeError.
+  await assert.rejects(w.chrome.privacy.network.networkPredictionEnabled.set({ value: false }), /Unsupported API/);
+  // Connecting to another extension fails visibly.
+  const port = w.chrome.runtime.connect('ponmlkjihgfedcbaponmlkjihgfedcba', { name: 'x' });
+  const error = await new Promise((resolve) => port.onDisconnect.addListener(() => resolve(w.chrome.runtime.lastError)));
+  assert.match(error.message, /Receiving end does not exist/);
+  // Unimplemented / native-backed methods.
+  await assert.rejects(w.chrome.runtime.requestUpdateCheck(), /Unsupported API/);
+  await w.chrome.notifications.getPermissionLevel();
+  assert.ok(calls.some((m) => m.api === 'notifications.getPermissionLevel'));
+  await assert.rejects(w.chrome.storage.session.setAccessLevel({ accessLevel: 'bogus' }), /Invalid accessLevel/);
+});
+
 // ---- Compatibility matrix is verified against the implementation -------------------------------------
 test('chrome-api-matrix.json matches the JS shim and the native bridge', () => {
   const matrix = JSON.parse(read('chrome-api-matrix.json')).namespaces;

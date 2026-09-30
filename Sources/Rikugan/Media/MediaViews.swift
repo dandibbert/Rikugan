@@ -74,11 +74,7 @@ struct MediaSnifferView: View {
                              size: Int64(dict["size"] as? Int ?? 0))
         }
         for item in all where item.size <= 0 && item.kind != "hls" && sizes[item.url] == nil {
-            var request = URLRequest(url: item.url, timeoutInterval: 8)
-            request.httpMethod = "HEAD"
-            if let (_, response) = try? await URLSession.shared.data(for: request), response.expectedContentLength > 0 {
-                sizes[item.url] = response.expectedContentLength
-            }
+            if let length = await DownloadManager.pageResourceLength(item.url, tab: tab) { sizes[item.url] = length }
         }
     }
 
@@ -121,10 +117,7 @@ struct ImageGalleryView: View {
                 LazyVGrid(columns: columns, spacing: 4) {
                     ForEach(images) { image in
                         ZStack(alignment: .topTrailing) {
-                            AsyncImage(url: image.url) { phase in
-                                if let img = phase.image { img.resizable().scaledToFill() }
-                                else { Color(.secondarySystemBackground) }
-                            }
+                            PageImageView(url: image.url, tab: tab) { img in img.resizable().scaledToFill() } placeholder: { _ in Color(.secondarySystemBackground) }
                             .frame(minWidth: 0, maxWidth: .infinity).frame(height: 110).clipped()
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -164,7 +157,7 @@ struct ImageGalleryView: View {
                 }
             }
             .task { await scan() }
-            .sheet(item: $preview) { image in ImagePreview(image: image) { preview = nil; tab.manager?.newTab(url: image.url, isPrivate: tab.isPrivate); dismiss() } }
+            .sheet(item: $preview) { image in ImagePreview(image: image, tab: tab) { preview = nil; tab.manager?.newTab(url: image.url, isPrivate: tab.isPrivate); dismiss() } }
         }
     }
 
@@ -183,19 +176,24 @@ struct ImageGalleryView: View {
     private func save(_ list: [PageImage]) async {
         saving = true
         defer { saving = false }
-        let saved = await Self.saveToPhotos(list.map(\.url))
-        if saved >= 0 { ToastCenter.shared.show("已存储 \(saved) 张图片", symbol: "photo") }
+        let saved = await Self.saveToPhotos(list.map(\.url), tab: tab)
+        if saved >= 0 {
+            let failed = list.count - saved
+            ToastCenter.shared.show(failed > 0 ? "已存储 \(saved) 张，\(failed) 张无法获取" : "已存储 \(saved) 张图片",
+                                    symbol: failed > 0 ? "exclamationmark.triangle" : "photo")
+        }
         selecting = false
         selection.removeAll()
     }
 
     /// Returns the number saved, or -1 without photo-library permission (a toast explains it).
-    static func saveToPhotos(_ urls: [URL]) async -> Int {
+    /// Images are fetched with the page's context (see `DownloadManager.pageResource`).
+    static func saveToPhotos(_ urls: [URL], tab: BrowserTab?) async -> Int {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else { ToastCenter.shared.show("没有相册写入权限", symbol: "exclamationmark.triangle"); return -1 }
         var saved = 0
         for url in urls {
-            guard let data = try? await URLSession.shared.data(from: url).0 else { continue }
+            guard let data = try? await DownloadManager.pageResource(url, tab: tab) else { continue }
             let ok: Bool = await withCheckedContinuation { continuation in
                 PHPhotoLibrary.shared().performChanges({
                     PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
@@ -210,13 +208,14 @@ struct ImageGalleryView: View {
 /// Full-size image with the same actions as the thumbnails (long press, or the … button).
 struct ImagePreview: View {
     let image: ImageGalleryView.PageImage
+    var tab: BrowserTab?
     var openInTab: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var scale: CGFloat = 1
     @State private var baseScale: CGFloat = 1
 
     @ViewBuilder private var actions: some View {
-        Button { Task { if await ImageGalleryView.saveToPhotos([image.url]) > 0 { ToastCenter.shared.show("已存储到相册", symbol: "photo") } } } label: {
+        Button { Task { if await ImageGalleryView.saveToPhotos([image.url], tab: tab) > 0 { ToastCenter.shared.show("已存储到相册", symbol: "photo") } } } label: {
             Label("存储到相册", systemImage: "square.and.arrow.down")
         }
         Button { Task { await copyImage() } } label: { Label("拷贝图片", systemImage: "doc.on.doc") }
@@ -227,8 +226,7 @@ struct ImagePreview: View {
 
     var body: some View {
         NavigationStack {
-            AsyncImage(url: image.url) { phase in
-                if let img = phase.image {
+            PageImageView(url: image.url, tab: tab) { img in
                     img.resizable().scaledToFit()
                         .scaleEffect(scale)
                         .gesture(MagnificationGesture()
@@ -236,11 +234,9 @@ struct ImagePreview: View {
                             .onEnded { _ in baseScale = scale })
                         .onTapGesture(count: 2) { withAnimation { scale = scale > 1 ? 1 : 2.5; baseScale = scale } }
                         .contextMenu { actions }
-                } else if phase.error != nil {
-                    Label("图片无法加载", systemImage: "exclamationmark.triangle").foregroundStyle(.white)
-                } else {
-                    ProgressView().tint(.white)
-                }
+            } placeholder: { failed in
+                if failed { Label("图片无法加载", systemImage: "exclamationmark.triangle").foregroundStyle(.white) }
+                else { ProgressView().tint(.white) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black)
@@ -256,10 +252,33 @@ struct ImagePreview: View {
     }
 
     private func copyImage() async {
-        guard let data = try? await URLSession.shared.data(from: image.url).0, let uiImage = UIImage(data: data) else {
+        guard let data = try? await DownloadManager.pageResource(image.url, tab: tab), let uiImage = UIImage(data: data) else {
             ToastCenter.shared.show("无法拷贝图片", symbol: "exclamationmark.triangle"); return
         }
         UIPasteboard.general.image = uiImage
         ToastCenter.shared.show("已拷贝图片", symbol: "doc.on.doc")
+    }
+}
+
+/// Loads an image with the page's context (cookies / Referer / blob: inside the page) instead of
+/// AsyncImage's shared session, which has neither and would store responses globally.
+struct PageImageView<Content: View, Placeholder: View>: View {
+    let url: URL
+    let tab: BrowserTab?
+    @ViewBuilder var content: (Image) -> Content
+    @ViewBuilder var placeholder: (_ failed: Bool) -> Placeholder
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image { content(Image(uiImage: image)) } else { placeholder(failed) }
+        }
+        .task(id: url) {
+            image = nil
+            failed = false
+            if let data = try? await DownloadManager.pageResource(url, tab: tab), let decoded = UIImage(data: data) { image = decoded }
+            else if !Task.isCancelled { failed = true }
+        }
     }
 }

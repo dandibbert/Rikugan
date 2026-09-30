@@ -91,7 +91,6 @@ enum ManualTestChecklist {
         ManualTestSection(id: "importexport", title: "导入与导出", items: [
             ManualTestItem(id: "ie.export", title: "导出全部数据归档", steps: "导入与导出 → 导出，保存到“文件”。"),
             ManualTestItem(id: "ie.import", title: "在全新安装上导入归档", steps: "删除 App 重装（或使用另一身份）后导入，检查书签 / 脚本 / 扩展 / 设置。"),
-            ManualTestItem(id: "ie.bookmarks", title: "导入 HTML 书签", steps: "导入浏览器导出的书签 HTML。"),
         ]),
         ManualTestSection(id: "system", title: "系统集成（仅真机）", items: [
             ManualTestItem(id: "sys.share", title: "分享扩展：从其他 App 分享网址到 Rikugan", steps: "在 Safari / 其他 App 中分享链接到 Rikugan。", realDeviceOnly: true),

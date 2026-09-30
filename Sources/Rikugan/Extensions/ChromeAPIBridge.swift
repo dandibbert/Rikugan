@@ -167,6 +167,16 @@ import UserNotifications
             throw RikuganError("Invalid storage area")
         case let name where name.hasPrefix("storage.") && !(ext.has("storage") || ext.has("unlimitedStorage")):
             throw RikuganError("Permission 'storage' is required to use chrome.storage")
+        case "storage.setAccessLevel":
+            guard caller.ctx != "content" else { throw RikuganError("Access to storage.session.setAccessLevel is not allowed from content scripts") }
+            guard argsDict["area"] as? String == "session" else { throw RikuganError("setAccessLevel is only available on storage.session") }
+            if argsDict["accessLevel"] as? String == "TRUSTED_AND_UNTRUSTED_CONTEXTS" { runtime.sessionStorageOpenToContentScripts.insert(ext.id) }
+            else { runtime.sessionStorageOpenToContentScripts.remove(ext.id) }
+            return nil
+        // storage.session is for trusted contexts unless the extension opened it (Chrome's default).
+        case let name where name.hasPrefix("storage.") && caller.ctx == "content" && argsDict["area"] as? String == "session"
+            && !runtime.sessionStorageOpenToContentScripts.contains(ext.id):
+            throw RikuganError("Access to storage is not allowed from this context.")
         case "storage.get":
             let area = argsDict["area"] as? String ?? "local"
             try requireStorage(ext)
@@ -457,6 +467,10 @@ import UserNotifications
             let existed = notifications.removeValue(forKey: ext.id + ":" + id) != nil
             if existed { runtime.dispatch(ext, "notifications.onClosed", [id, false]) }
             return existed
+        case "notifications.getPermissionLevel":
+            // The real system authorization for Rikugan's notifications.
+            let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            return status == .authorized || status == .provisional || status == .ephemeral ? "granted" : "denied"
         case "notifications.getAll":
             var result: [String: Bool] = [:]
             for key in notifications.keys where key.hasPrefix(ext.id + ":") { result[String(key.dropFirst(ext.id.count + 1))] = true }
@@ -921,26 +935,38 @@ import UserNotifications
     // MARK: action
 
     private func actionAPI(_ method: String, ext: LoadedExtension, details: [String: Any], arg0: Any?, caller: Caller) async throws -> Any? {
-        let tabID = details["tabId"] as? Int
-        func mutate(_ change: (inout ActionState) -> Void) {
-            if let tabID { var s = ext.tabActions[tabID] ?? ActionState(); s.badgeText = ext.tabActions[tabID]?.badgeText ?? ""; change(&s); ext.tabActions[tabID] = s }
-            else { change(&ext.action) }
+        // enable / disable / isEnabled take a bare tabId; the others a details object.
+        let tabID = ["enable", "disable", "isEnabled"].contains(method) ? (arg0 as? Int) : (details["tabId"] as? Int)
+        if let tabID, TabRegistry.shared.tab(tabID) == nil { throw RikuganError("No tab with id: \(tabID).") }
+        /// Sets one field globally, or for the tab only (nil value on a tab = back to the global value).
+        func set<T>(_ global: WritableKeyPath<ActionState, T>, _ perTab: WritableKeyPath<ActionOverride, T?>, _ value: T?, default fallback: T) {
+            if let tabID { ext.tabActions[tabID, default: ActionOverride()][keyPath: perTab] = value }
+            else { ext.action[keyPath: global] = value ?? fallback }
             runtime.objectWillChange.send()
         }
-        let state = ext.actionState(for: tabID ?? TabRegistry.shared.focusedWindow?.activeTab?.numericID)
+        // Getters without a tabId return the global value, like Chrome.
+        let state = tabID.map { ext.actionState(for: $0) } ?? ext.action
         switch method {
-        case "setBadgeText": mutate { $0.badgeText = details["text"] as? String ?? "" }; return nil
+        case "setBadgeText": set(\.badgeText, \.badgeText, details["text"] as? String, default: ""); return nil
         case "getBadgeText": return state.badgeText
-        case "setBadgeBackgroundColor": mutate { $0.badgeColor = Self.color(details["color"]) ?? .systemRed }; return nil
+        case "setBadgeBackgroundColor": set(\.badgeColor, \.badgeColor, Self.color(details["color"]), default: .systemRed); return nil
         case "getBadgeBackgroundColor": return Self.rgba(state.badgeColor)
-        case "setBadgeTextColor": mutate { $0.badgeTextColor = Self.color(details["color"]) ?? .white }; return nil
+        case "setBadgeTextColor": set(\.badgeTextColor, \.badgeTextColor, Self.color(details["color"]), default: .white); return nil
         case "getBadgeTextColor": return Self.rgba(state.badgeTextColor)
-        case "setTitle": mutate { $0.title = details["title"] as? String }; return nil
+        case "setTitle":
+            let title = details["title"] as? String
+            if let tabID { ext.tabActions[tabID, default: ActionOverride()].title = title } else { ext.action.title = title }
+            runtime.objectWillChange.send()
+            return nil
         case "getTitle": return state.title ?? ext.displayName
-        case "setPopup": mutate { $0.popup = details["popup"] as? String ?? "" }; return nil
-        case "getPopup": return state.popup.map { ext.baseURL + $0 } ?? ""
-        case "enable": mutate { $0.enabled = true }; return nil
-        case "disable": mutate { $0.enabled = false }; return nil
+        case "setPopup":
+            let popup = details["popup"] as? String ?? ""
+            if let tabID { ext.tabActions[tabID, default: ActionOverride()].popup = popup } else { ext.action.popup = popup }
+            runtime.objectWillChange.send()
+            return nil
+        case "getPopup": return state.popup.map { $0.isEmpty ? "" : ext.baseURL + $0 } ?? ""
+        case "enable": set(\.enabled, \.enabled, true, default: true); return nil
+        case "disable": set(\.enabled, \.enabled, false, default: true); return nil
         case "isEnabled": return state.enabled
         case "setIcon":
             var image: UIImage?
@@ -951,7 +977,8 @@ import UserNotifications
                     dict.sorted { (Int($0.key) ?? 0) > (Int($1.key) ?? 0) }.first?.value })
                 if let path { image = ext.loadIcon(path: path) }
             }
-            mutate { $0.icon = image }
+            if let tabID { ext.tabActions[tabID, default: ActionOverride()].icon = image } else { ext.action.icon = image }
+            runtime.objectWillChange.send()
             return nil
         case "openPopup":
             // Programmatic: never grants activeTab (only the user's click on the action does).

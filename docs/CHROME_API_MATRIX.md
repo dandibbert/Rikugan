@@ -8,7 +8,7 @@
 
 | 命名空间 | 级别 | 已实现 / 方法数 | 说明 |
 |---|---|---|---|
-| `chrome.runtime` | ✅ Supported | 18/22 | Messaging, ports, lifecycle events and manifest/URL helpers work in content scripts, popup, options and the background runtime. |
+| `chrome.runtime` | ✅ Supported | 17/22 | Messaging, ports, lifecycle events and manifest/URL helpers work in content scripts, popup, options and the background runtime. |
 | `chrome.storage` | ✅ Supported | 17/17 | Per-extension native storage (not page localStorage). |
 | `chrome.scripting` | ✅ Supported | 7/7 | Runs in the extension's isolated WKContentWorld or the page world (MAIN). |
 | `chrome.tabs` | 🟡 Partial | 31/35 | Core tab control works; tab moving, discarding, zoom and groups are not available. |
@@ -53,7 +53,7 @@
 | `chrome.tts` | 🟡 Partial | 7/7 | System speech synthesis (AVSpeechSynthesizer). |
 | `chrome.userScripts` | ⛔ Unsupported | — | Use Rikugan's built-in userscript manager |
 
-方法合计：✅ 170 · 🟡 77 · ⛔ 52
+方法合计：✅ 171 · 🟡 75 · ⛔ 53
 
 ## chrome.runtime — ✅ Supported
 
@@ -74,7 +74,7 @@ Messaging, ports, lifecycle events and manifest/URL helpers work in content scri
 | `getURL` | ✅ Supported | JS shim |  |
 | `openOptionsPage` | ✅ Supported | 原生桥 |  |
 | `reload` | ✅ Supported | 原生桥 |  |
-| `requestUpdateCheck` | 🟡 Partial | JS shim | Always resolves {status: 'no_update'}; updates are checked from the extension manager |
+| `requestUpdateCheck` | ⛔ Unsupported | — | Updates are checked from the extension manager; the extension cannot trigger or observe them |
 | `restart` | ⛔ Unsupported | — | Chrome OS only |
 | `sendMessage` | ✅ Supported | 原生桥 | Queued until the background runtime is ready; explicit error if it fails to start |
 | `sendNativeMessage` | ⛔ Unsupported | — | No native messaging hosts on iOS |
@@ -109,7 +109,7 @@ Per-extension native storage (not page localStorage).
 | `session.get` | ✅ Supported | 原生桥 | In memory |
 | `session.remove` | ✅ Supported | 原生桥 |  |
 | `session.set` | ✅ Supported | 原生桥 | In memory |
-| `session.setAccessLevel` | 🟡 Partial | JS shim | Accepted; session storage is always visible to content scripts |
+| `session.setAccessLevel` | ✅ Supported | 原生桥 | Content scripts cannot use storage.session until TRUSTED_AND_UNTRUSTED_CONTEXTS is set (Chrome's default) |
 | `sync.clear` | 🟡 Partial | 原生桥 | Local only |
 | `sync.get` | 🟡 Partial | 原生桥 | Local only |
 | `sync.remove` | 🟡 Partial | 原生桥 | Local only |
@@ -395,7 +395,7 @@ In-app banner, local notification when the app is in the background.
 | `clear` | ✅ Supported | 原生桥 |  |
 | `create` | 🟡 Partial | 原生桥 |  |
 | `getAll` | ✅ Supported | 原生桥 |  |
-| `getPermissionLevel` | ✅ Supported | JS shim |  |
+| `getPermissionLevel` | ✅ Supported | 原生桥 | Reflects the system notification authorization |
 | `update` | 🟡 Partial | 原生桥 |  |
 | `onButtonClicked` | 🟡 Partial | JS shim | Never fires |
 | `onClicked` | ✅ Supported | JS shim |  |

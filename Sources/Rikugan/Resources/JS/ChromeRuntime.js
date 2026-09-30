@@ -58,6 +58,10 @@
     constructor(name) { this._name = name; this._listeners = []; }
     addListener(fn, filter) {
       if (typeof fn !== 'function') throw new TypeError('Listener must be a function');
+      if (filter !== undefined && filter !== null) {
+        const keys = Object.keys(filter);
+        if (keys.some((k) => k !== 'url')) throw new TypeError(this._name + ': event filter keys ' + keys.join(', ') + ' are not supported in Rikugan');
+      }
       if (!this.hasListener(fn)) this._listeners.push({ fn, filter });
       if (!RkEvent.subscribed.has(this._name)) { RkEvent.subscribed.add(this._name); bridge('events.subscribe', { event: this._name }).catch(() => {}); }
     }
@@ -70,9 +74,35 @@
     _dispatch(args) {
       const results = [];
       for (const l of this._listeners.slice()) {
+        if (l.filter && !RkEvent.matchesFilter(l.filter, args && args[0])) continue;
         try { results.push(l.fn.apply(null, args)); } catch (e) { console.error('[' + this._name + ']', e); }
       }
       return results;
+    }
+    // Event filters: `{ url: [UrlFilter, ...] }` (webNavigation) — any filter in the list matches.
+    // Other filter keys are not understood and are rejected at registration, not ignored.
+    static matchesFilter(filter, details) {
+      const list = filter && filter.url;
+      if (!Array.isArray(list) || !list.length) return true;
+      let u;
+      try { u = new URL(details && details.url); } catch (_) { return false; }
+      return list.some((f) => RkEvent.matchesUrlFilter(f || {}, u));
+    }
+    static matchesUrlFilter(f, u) {
+      const host = u.hostname, path = u.pathname, query = u.search.replace(/^\?/, ''), full = u.href;
+      const noFrag = full.split('#')[0];
+      const checks = {
+        hostContains: (v) => ('.' + host).includes(v), hostEquals: (v) => host === v, hostPrefix: (v) => host.startsWith(v),
+        hostSuffix: (v) => host.endsWith(v) || ('.' + host).endsWith(v),
+        pathContains: (v) => path.includes(v), pathEquals: (v) => path === v, pathPrefix: (v) => path.startsWith(v), pathSuffix: (v) => path.endsWith(v),
+        queryContains: (v) => query.includes(v), queryEquals: (v) => query === v, queryPrefix: (v) => query.startsWith(v), querySuffix: (v) => query.endsWith(v),
+        urlContains: (v) => noFrag.includes(v), urlEquals: (v) => noFrag === v, urlPrefix: (v) => noFrag.startsWith(v), urlSuffix: (v) => noFrag.endsWith(v),
+        urlMatches: (v) => new RegExp(v).test(noFrag), originAndPathMatches: (v) => new RegExp(v).test(u.origin + path),
+        schemes: (v) => v.includes(u.protocol.replace(/:$/, '')),
+        ports: (v) => { const port = Number(u.port || (u.protocol === 'https:' ? 443 : u.protocol === 'http:' ? 80 : 0));
+          return v.some((p) => Array.isArray(p) ? port >= p[0] && port <= p[1] : port === p); },
+      };
+      return Object.keys(f).every((k) => checks[k] ? checks[k](f[k]) : false);
     }
   }
   RkEvent.subscribed = new Set();
@@ -86,13 +116,24 @@
     const warn = unsupportedFn(name + '.addListener');
     return { __rikuganUnsupported: true, addListener() { warn().catch(() => {}); }, removeListener() {}, hasListener: () => false, hasListeners: () => false };
   };
+  // An unknown member is callable (rejects as Unsupported) and also usable as a namespace, so
+  // chrome.privacy.network.networkPredictionEnabled.set(...) reports Unsupported instead of
+  // throwing a TypeError on undefined.
+  const unsupportedMember = (path) => new Proxy(unsupportedFn(path), {
+    get(t, prop) {
+      if (prop in t || typeof prop === 'symbol' || prop === 'then' || prop === 'toJSON') return t[prop];
+      if (/^on[A-Z]/.test(prop)) return unsupportedEvent(path + '.' + prop);
+      if (/^[A-Z_0-9]+$/.test(prop)) return undefined;
+      return unsupportedMember(path + '.' + prop);
+    },
+  });
   const guarded = (ns, target) => new Proxy(target, {
     get(t, prop) {
       if (prop in t || typeof prop === 'symbol' || prop === 'then' || prop === 'toJSON') return t[prop];
       if (ns === '') return unsupportedNamespace(prop);
       if (/^on[A-Z]/.test(prop)) { const e = unsupportedEvent(ns + '.' + prop); t[prop] = e; return e; }
       if (/^[A-Z_0-9]+$/.test(prop)) return undefined;
-      return unsupportedFn(ns + '.' + prop);
+      return unsupportedMember(ns + '.' + prop);
     },
   });
   const unsupportedNamespace = (ns) => guarded(ns, {});
@@ -185,7 +226,11 @@
       clear: api(async () => { await bridge('storage.clear', { area }); }),
       getBytesInUse: api(async (keys) => bridge('storage.getBytesInUse', { area, keys: typeof keys === 'string' ? [keys] : (keys || null) })),
       getKeys: api(async () => bridge('storage.getKeys', { area })),
-      setAccessLevel: api(async () => undefined),
+      setAccessLevel: area === 'session' ? api(async (options) => {
+        const level = options && options.accessLevel;
+        if (level !== 'TRUSTED_CONTEXTS' && level !== 'TRUSTED_AND_UNTRUSTED_CONTEXTS') throw new Error('Invalid accessLevel');
+        await bridge('storage.setAccessLevel', { area, accessLevel: level });
+      }) : unsupportedFn('storage.' + area + '.setAccessLevel'),
       onChanged: ev('storage.' + area + '.onChanged'),
       QUOTA_BYTES: area === 'sync' ? 102400 : area === 'session' ? 10485760 : 10485760,
     };
@@ -244,7 +289,18 @@
     }),
     connect: (...args) => {
       let info = args[0];
-      if (typeof args[0] === 'string') info = args[1];
+      if (typeof args[0] === 'string') {
+        info = args[1];
+        if (args[0] !== cfg.extId) {
+          // Other extensions / web pages are not reachable: a port that disconnects at once.
+          const port = new Port(uuid(), info && info.name);
+          port._connected = false;
+          portsById.delete(port._id);
+          setTimeout(() => withLastError(new Error('Could not establish connection. Receiving end does not exist.'),
+            () => port.onDisconnect._dispatch([port])), 0);
+          return port;
+        }
+      }
       return connect({ target: 'extension' }, info || {});
     },
     onMessage,
@@ -267,7 +323,7 @@
       openOptionsPage: call('runtime.openOptionsPage'),
       setUninstallURL: api(async () => undefined),
       reload: () => { bridge('runtime.reload', {}).catch(() => {}); },
-      requestUpdateCheck: api(async () => ({ status: 'no_update' })),
+      requestUpdateCheck: unsupportedFn('runtime.requestUpdateCheck'),
       getPlatformInfo: api(async () => ({ os: 'ios', arch: 'arm64', nacl_arch: 'arm' })),
       getBackgroundPage: unsupportedFn('runtime.getBackgroundPage'),
       getContexts: call('runtime.getContexts'),
@@ -468,7 +524,7 @@
         return bridge('notifications.create', { args: [id || uuid(), args[0] || {}] });
       }),
       update: call('notifications.update'), clear: call('notifications.clear'), getAll: call('notifications.getAll'),
-      getPermissionLevel: api(async () => 'granted'),
+      getPermissionLevel: call('notifications.getPermissionLevel'),
       onClicked: ev('notifications.onClicked'), onClosed: ev('notifications.onClosed'), onButtonClicked: ev('notifications.onButtonClicked'),
       onPermissionLevelChanged: ev('notifications.onPermissionLevelChanged'), onShowSettings: ev('notifications.onShowSettings'),
       TemplateType: { BASIC: 'basic', IMAGE: 'image', LIST: 'list', PROGRESS: 'progress' },

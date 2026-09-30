@@ -36,6 +36,18 @@ struct ActionState {
     var enabled = true
 }
 
+/// Tab-specific action settings: nil means "not set for this tab" (the global value applies);
+/// an empty badge text or `enabled == false` are real overrides.
+struct ActionOverride {
+    var title: String?
+    var popup: String?
+    var badgeText: String?
+    var badgeColor: UIColor?
+    var badgeTextColor: UIColor?
+    var icon: UIImage?
+    var enabled: Bool?
+}
+
 struct ExtensionMenuItem: Hashable {
     var id: String
     var title: String
@@ -66,12 +78,37 @@ struct ExtensionAlarm {
     var id: String { record.id }
     var background: BackgroundHost?
     @Published var action = ActionState()
-    var tabActions: [Int: ActionState] = [:]
+    var tabActions: [Int: ActionOverride] = [:]
     @Published var menuItems: [ExtensionMenuItem] = []
     var alarms: [String: ExtensionAlarm] = [:]
     var sessionStorage: [String: String] = [:]
     var sessionRules: [[String: Any]] = []
     var activeTabGrants: Set<Int> = []
+    /// Origin each activeTab grant was made for: like Chrome, the grant survives reloads and
+    /// same-origin navigations of the tab and ends when the tab leaves that origin or closes.
+    var activeTabGrantOrigins: [Int: String] = [:]
+
+    func grantActiveTab(_ tab: BrowserTab) {
+        guard !tab.isPrivate else { return }
+        activeTabGrants.insert(tab.numericID)
+        activeTabGrantOrigins[tab.numericID] = tab.webView?.url.map(Self.origin) ?? ""
+    }
+
+    /// Called when a tab commits a new document: grants for another origin end.
+    func tabCommitted(_ tabID: Int, url: URL) {
+        if let origin = activeTabGrantOrigins[tabID], !origin.isEmpty, origin == Self.origin(url) { return }
+        activeTabGrants.remove(tabID)
+        activeTabGrantOrigins[tabID] = nil
+    }
+
+    func revokeActiveTab(_ tabID: Int) {
+        activeTabGrants.remove(tabID)
+        activeTabGrantOrigins[tabID] = nil
+    }
+
+    static func origin(_ url: URL) -> String {
+        "\(url.scheme?.lowercased() ?? "")://\(url.host?.lowercased() ?? "")\(url.port.map { ":\($0)" } ?? "")"
+    }
     var contentFrames: [Int: [FrameRecord]] = [:]
     private var fileCache: [String: String] = [:]
     lazy var icon: UIImage? = loadIcon()
@@ -127,10 +164,13 @@ struct ExtensionAlarm {
     func actionState(for tabID: Int?) -> ActionState {
         guard let tabID, let override = tabActions[tabID] else { return action }
         var merged = action
-        if override.title != nil { merged.title = override.title }
-        if override.popup != nil { merged.popup = override.popup }
-        if !override.badgeText.isEmpty { merged.badgeText = override.badgeText }
-        if override.icon != nil { merged.icon = override.icon }
+        if let title = override.title { merged.title = title }
+        if let popup = override.popup { merged.popup = popup }
+        if let text = override.badgeText { merged.badgeText = text }
+        if let color = override.badgeColor { merged.badgeColor = color }
+        if let color = override.badgeTextColor { merged.badgeTextColor = color }
+        if let icon = override.icon { merged.icon = icon }
+        if let enabled = override.enabled { merged.enabled = enabled }
         return merged
     }
 

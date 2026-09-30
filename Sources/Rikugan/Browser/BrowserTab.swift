@@ -56,6 +56,9 @@ enum TranslationState: Equatable {
     /// Find in page: shown in place of the address bar while active.
     @Published var findActive = false
     @Published var findResult: (count: Int, index: Int) = (0, -1)
+    /// Bumped when a main-frame load finishes, so an open find bar searches the new document.
+    @Published private(set) var loadsFinished = 0
+    func noteLoadFinished() { loadsFinished += 1 }
     @Published private(set) var progress: Double = 0
     @Published private(set) var isLoading = false
     @Published private(set) var canGoBack = false
@@ -69,6 +72,14 @@ enum TranslationState: Equatable {
     @Published var translation: TranslationState = .idle
     @Published var loadError: String?
     @Published var injectedScripts: Set<UUID> = []
+    /// Frames (by per-document token) each userscript runs in, so GM value changes reach every
+    /// frame of every tab running the script, not only main frames.
+    var scriptFrames: [UUID: [String: WKFrameInfo]] = [:]
+    /// Site permission answers that are not stored in site settings: "allow once", and every
+    /// answer in a private tab. Keyed "<permission>|<host>"; they live as long as the tab.
+    var sessionPermissions: [String: Bool] = [:]
+    func sessionPermission(_ key: String, host: String) -> Bool? { sessionPermissions[key + "|" + host.lowercased()] }
+    func setSessionPermission(_ key: String, host: String, _ value: Bool) { sessionPermissions[key + "|" + host.lowercased()] = value }
     @Published var autoRefreshInterval: TimeInterval? { didSet { scheduleAutoRefresh() } }
     @Published var storeInstallCandidate: WebStoreItem?
     @Published var hasSecureContent = true
@@ -97,7 +108,10 @@ enum TranslationState: Equatable {
     var translationGeneration = 0
     var translationTarget: String?
 
-    var isHome: Bool { url == nil && webView?.url == nil }
+    /// Set by `goHome` on a tab that already has a web view: it then holds an empty document
+    /// (about:blank), which must not count as a page.
+    @Published private(set) var showsHome = false
+    var isHome: Bool { showsHome || (url == nil && webView?.url == nil) }
     var host: String? { url?.host?.lowercased() }
     var services: AppServices { AppServices.shared }
     var siteSettings: SiteSettings { profile.siteSettings.settings(for: host) }
@@ -261,7 +275,7 @@ enum TranslationState: Equatable {
             webView.observe(\.url, options: [.new]) { [weak self] wv, _ in
                 Task { @MainActor in
                     guard let self else { return }
-                    if let u = wv.url { self.url = u }
+                    if let u = wv.url, !(self.showsHome && u.absoluteString == "about:blank") { self.url = u; self.showsHome = false }
                     // Both web stores are single-page apps: opening a listing from the store's home
                     // changes the URL without a new document, so the install bar follows the URL.
                     let candidate = WebStoreItem.detect(url: wv.url)
@@ -306,6 +320,7 @@ enum TranslationState: Equatable {
             webView.load(URLRequest(url: target))
         }
         url = target
+        showsHome = false
     }
 
     func loadInput(_ text: String) {
@@ -336,6 +351,7 @@ enum TranslationState: Equatable {
         } else if let webView {
             webView.loadHTMLString("", baseURL: nil)
             url = nil
+            showsHome = true
             title = "起始页"
         }
     }
@@ -449,6 +465,7 @@ enum TranslationState: Equatable {
         frames.removeAll()
         frameRecords.removeAll()
         injectedScripts.removeAll()
+        scriptFrames.removeAll()
         storeInstallCandidate = WebStoreItem.detect(url: webView?.url)
     }
 

@@ -91,6 +91,13 @@ import Combine
 
     /// Handles `rikugan://open?url=`, `rikugan://search?q=`, http(s) URLs and files opened with the app.
     func handleIncoming(_ url: URL) {
+        // Share-extension items carry an ID and may arrive twice (URL scheme and App Group inbox):
+        // each ID is handled once and removed from the inbox.
+        if url.scheme == "rikugan", let shareID = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "shareID" })?.value {
+            guard handledShareIDs.insert(shareID).inserted else { return }
+            removeFromShareInbox([shareID])
+        }
         if url.isFileURL {
             pendingOpen.append(PendingOpen(kind: .importFile(url)))
             return
@@ -112,13 +119,38 @@ import Combine
         pendingOpen.append(PendingOpen(kind: .url(url)))
     }
 
-    /// Picks up items left in the App Group container by the share extension.
+    static let appGroup = "group.com.dandibbert.Rikugan"
+    private var handledShareIDs = Set<String>()
+
+    /// Picks up items the share extension left in the App Group inbox, oldest first. Items stay
+    /// until the app has handled them (no expiry: a share is not dropped because the app was
+    /// opened late).
     func consumeSharedPendingItems() {
-        guard let defaults = UserDefaults(suiteName: "group.com.dandibbert.Rikugan"),
-              let value = defaults.string(forKey: "pendingShare"), let url = URL(string: value) else { return }
-        let date = defaults.double(forKey: "pendingShareDate")
-        defaults.removeObject(forKey: "pendingShare")
-        if Date().timeIntervalSince1970 - date < 120 { handleIncoming(url) }
+        guard FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) != nil,
+              let defaults = UserDefaults(suiteName: Self.appGroup) else { return }
+        // Items from the single-slot format of earlier builds.
+        if let legacy = defaults.string(forKey: "pendingShare") {
+            defaults.removeObject(forKey: "pendingShare")
+            if let url = URL(string: legacy) { handleIncoming(url) }
+        }
+        let inbox = defaults.array(forKey: "pendingShares") as? [[String: Any]] ?? []
+        for entry in inbox {
+            guard let raw = entry["url"] as? String, let url = URL(string: raw) else { continue }
+            handleIncoming(url) // de-duplicates by shareID and removes the entry
+        }
+        // Entries without a usable URL / ID are dropped rather than retried forever.
+        let remaining = (defaults.array(forKey: "pendingShares") as? [[String: Any]] ?? []).filter { entry in
+            guard let id = entry["id"] as? String, let raw = entry["url"] as? String, URL(string: raw) != nil else { return false }
+            return !handledShareIDs.contains(id)
+        }
+        defaults.set(remaining, forKey: "pendingShares")
+    }
+
+    private func removeFromShareInbox(_ ids: Set<String>) {
+        guard FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) != nil,
+              let defaults = UserDefaults(suiteName: Self.appGroup),
+              let inbox = defaults.array(forKey: "pendingShares") as? [[String: Any]] else { return }
+        defaults.set(inbox.filter { !ids.contains($0["id"] as? String ?? "") }, forKey: "pendingShares")
     }
 
     var appVersion: String {

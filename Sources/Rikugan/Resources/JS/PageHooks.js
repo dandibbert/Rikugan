@@ -132,10 +132,17 @@
         this.tag = (options && options.tag) || '';
         this.onclick = null; this.onclose = null; this.onerror = null; this.onshow = null;
         if (permission !== 'granted') { setTimeout(() => { if (this.onerror) this.onerror(new Event('error')); }, 0); return; }
+        const fail = () => { const ev = new Event('error'); if (this.onerror) this.onerror(ev); this.dispatchEvent(ev); };
         post('notify', { title: this.title, body: this.body, tag: this.tag }).then((r) => {
-          if (this.onshow) this.onshow(new Event('show'));
+          if (r !== 'shown' && r !== 'clicked') {
+            // Native refused (site or system permission): the page must not see a shown notification.
+            if (r === 'denied') permission = 'denied';
+            fail();
+            return;
+          }
+          const shown = new Event('show'); if (this.onshow) this.onshow(shown); this.dispatchEvent(shown);
           if (r === 'clicked') { const ev = new Event('click'); if (this.onclick) this.onclick(ev); this.dispatchEvent(ev); }
-        }).catch(() => {});
+        }).catch(fail);
       }
       close() { if (this.onclose) this.onclose(new Event('close')); }
       static get permission() { return permission; }

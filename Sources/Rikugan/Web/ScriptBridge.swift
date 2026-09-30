@@ -166,10 +166,14 @@ extension WKScriptMessage {
             }
         case "notificationPermission":
             let allowed = await sitePermission("notifications", title: "“\(host)” 想要向你发送通知", host: host, tab: tab, profile: profile)
-            if allowed { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
-            return allowed ? "granted" : "denied"
+            guard allowed else { return "denied" }
+            // The site answer alone is not enough: without system authorization nothing is shown.
+            let system = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
+            return system ? "granted" : "denied"
         case "notify":
-            guard profile.siteSettings.settings(for: host).permissions["notifications"] == .allow else { return "denied" }
+            guard currentPermission("notifications", host: host, tab: tab, profile: profile) == true else { return "denied" }
+            let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            guard status == .authorized || status == .provisional || status == .ephemeral else { return "denied" }
             let content = UNMutableNotificationContent()
             content.title = args["title"] as? String ?? host
             content.body = args["body"] as? String ?? ""
@@ -179,22 +183,36 @@ extension WKScriptMessage {
             ToastCenter.shared.show("\(content.title)：\(content.body)", symbol: "bell")
             return "shown"
         case "clipboardRead":
-            return profile.siteSettings.settings(for: host).permissions["clipboard"] != .block
+            // Decided for the frame that asks (its own origin), not the top-level page. Ask / unset
+            // leaves the decision to the system paste prompt.
+            return currentPermission("clipboard", host: host, tab: tab, profile: profile) != false
         default:
             throw RikuganError("Unknown page op \(op)")
         }
     }
 
-    /// Ask / Allow / Block per domain (spec §48). Private tabs never persist decisions.
-    static func sitePermission(_ key: String, title: String, host: String, tab: BrowserTab, profile: ProfileContext) async -> Bool {
+    /// Stored or session decision, nil when the user has not decided (Ask).
+    static func currentPermission(_ key: String, host: String, tab: BrowserTab, profile: ProfileContext) -> Bool? {
+        if let session = tab.sessionPermission(key, host: host) { return session }
         switch profile.siteSettings.settings(for: host).permissions[key] {
         case .allow?: return true
         case .block?: return false
-        default:
-            let answer = await Presenter.permission(title: title, message: nil, from: tab.webView)
-            if !tab.isPrivate, let answer, answer != .ask { profile.siteSettings.update(host) { $0.permissions[key] = answer } }
-            return answer == .allow || answer == .ask
+        default: return nil
         }
+    }
+
+    /// Ask / Allow / Block per domain (spec §48). "Allow once" and every answer in a private tab
+    /// are kept for the tab only (never written to site settings).
+    static func sitePermission(_ key: String, title: String, host: String, tab: BrowserTab, profile: ProfileContext) async -> Bool {
+        if let decided = currentPermission(key, host: host, tab: tab, profile: profile) { return decided }
+        guard let answer = await Presenter.permission(title: title, message: nil, from: tab.webView) else { return false }
+        let allowed = answer != .block
+        if answer == .ask || tab.isPrivate {
+            tab.setSessionPermission(key, host: host, allowed)
+        } else {
+            profile.siteSettings.update(host) { $0.permissions[key] = answer }
+        }
+        return allowed
     }
 }
 

@@ -83,23 +83,30 @@ import SwiftUI
 
     static func check(_ script: InstalledUserScript, in store: UserScriptStore, force: Bool = false) async -> Outcome {
         guard let metaURL = script.updateURL else { return .noUpdateURL }
+        func fetch(_ url: URL) async throws -> Data {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                throw RikuganError("\(url.host ?? "服务器") 返回 HTTP \(http.statusCode)")
+            }
+            return data
+        }
         do {
-            let (data, _) = try await URLSession.shared.data(from: metaURL)
-            let remote = MetadataParser.parse(String(decoding: data, as: UTF8.self)).metadata
+            // An error page is not "no update": the check fails visibly.
+            let remoteParsed = MetadataParser.parse(String(decoding: try await fetch(metaURL), as: UTF8.self))
+            if let error = remoteParsed.firstError { return .failed("更新信息无效：\(error)") }
+            let remote = remoteParsed.metadata
+            guard !remote.version.isEmpty else { return .failed("更新信息中没有 @version") }
             var updated = script
             updated.lastUpdateCheck = Date()
             store.update(updated)
             guard force || MetadataParser.compareVersions(remote.version, script.metadata.version) == .orderedDescending else { return .upToDate }
             guard let downloadURL = script.downloadURL else { return .failed("缺少 @downloadURL") }
-            let (sourceData, _) = try await URLSession.shared.data(from: downloadURL)
-            let source = String(decoding: sourceData, as: UTF8.self)
+            let source = String(decoding: try await fetch(downloadURL), as: UTF8.self)
             let parsed = MetadataParser.parse(source)
             if let error = parsed.firstError { return .failed(error) }
             let deps = try await UserscriptDependencies.fetch(for: parsed.metadata)
-            try store.updateSource(script.id, source: source)
+            try store.updateSource(script.id, source: source, dependencies: deps)
             if var fresh = store.script(script.id) {
-                fresh.requireCode = deps.requires
-                fresh.resourceData = deps.resources
                 fresh.lastUpdateCheck = Date()
                 store.update(fresh)
             }

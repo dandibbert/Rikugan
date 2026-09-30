@@ -51,7 +51,9 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
-        CODE_SIGN_ENTITLEMENTS: ""
+        # App Group shared with the share extension. The CI IPA is unsigned; whoever signs it must
+        # keep this group (and the extension's) or the share hand-off falls back to the clipboard.
+        CODE_SIGN_ENTITLEMENTS: Sources/Rikugan/Rikugan.entitlements
     dependencies:
       - target: RikuganShare
         embed: true
@@ -61,11 +63,12 @@ targets:
     platform: iOS
     sources:
       - path: Sources/ShareExtension
-        excludes: ["Info.plist"]
+        excludes: ["Info.plist", "RikuganShare.entitlements"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan.Share
         INFOPLIST_FILE: Sources/ShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/ShareExtension/RikuganShare.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
   RikuganUITests:
     type: bundle.ui-testing

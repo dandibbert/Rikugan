@@ -199,6 +199,8 @@ public enum M3U8 {
         public var segments: [Segment] = []
         public var initSegment: URL?
         public var encryption: String?
+        /// A feature the simple concatenating downloader cannot reproduce (e.g. byte ranges).
+        public var unsupported: String?
         public var isFMP4: Bool { initSegment != nil }
         public var totalDuration: Double { segments.reduce(0) { $0 + $1.duration } }
     }
@@ -228,8 +230,11 @@ public enum M3U8 {
                 let attributes = parseAttributes(String(line.dropFirst(11)))
                 let method = attributes["METHOD"] ?? "NONE"
                 if method != "NONE" { playlist.encryption = method }
+            } else if line.hasPrefix("#EXT-X-BYTERANGE") {
+                playlist.unsupported = "EXT-X-BYTERANGE"
             } else if line.hasPrefix("#EXT-X-MAP:") {
                 let attributes = parseAttributes(String(line.dropFirst(11)))
+                if attributes["BYTERANGE"] != nil { playlist.unsupported = "EXT-X-MAP BYTERANGE" }
                 if let uri = attributes["URI"] { playlist.initSegment = URL(string: uri, relativeTo: base)?.absoluteURL }
             } else if !line.isEmpty, !line.hasPrefix("#"), let url = URL(string: line, relativeTo: base)?.absoluteURL {
                 playlist.segments.append(Segment(url: url, duration: pendingDuration ?? 0))

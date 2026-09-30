@@ -14,7 +14,7 @@
         "reload": ["Supported", ""],
         "getContexts": ["Partial", "Returns background / popup / tab contexts without documentId"],
         "setUninstallURL": ["Partial", "Accepted but never opened", true],
-        "requestUpdateCheck": ["Partial", "Always resolves {status: 'no_update'}; updates are checked from the extension manager", true],
+        "requestUpdateCheck": ["Unsupported", "Updates are checked from the extension manager; the extension cannot trigger or observe them"],
         "getPlatformInfo": ["Partial", "os = 'ios', arch = 'arm64'", true],
         "getBackgroundPage": ["Unsupported", "MV3 has no background page"],
         "sendNativeMessage": ["Unsupported", "No native messaging hosts on iOS"],
@@ -39,7 +39,7 @@
         "local.getBytesInUse": ["Supported", ""], "local.getKeys": ["Supported", ""],
         "sync.get": ["Partial", "Local only"], "sync.set": ["Partial", "Local only, 100 KB quota enforced"], "sync.remove": ["Partial", "Local only"], "sync.clear": ["Partial", "Local only"],
         "session.get": ["Supported", "In memory"], "session.set": ["Supported", "In memory"], "session.remove": ["Supported", ""], "session.clear": ["Supported", ""],
-        "session.setAccessLevel": ["Partial", "Accepted; session storage is always visible to content scripts", true],
+        "session.setAccessLevel": ["Supported", "Content scripts cannot use storage.session until TRUSTED_AND_UNTRUSTED_CONTEXTS is set (Chrome's default)"],
         "managed.get": ["Partial", "Always empty"],
         "onChanged": ["Supported", "Delivered to background, extension pages and content scripts", true]
       }
@@ -199,7 +199,7 @@
     },
     "notifications": {
       "level": "Partial", "reason": "In-app banner, local notification when the app is in the background.", "differences": ["No buttons / images / progress"],
-      "methods": { "create": ["Partial", ""], "update": ["Partial", ""], "clear": ["Supported", ""], "getAll": ["Supported", ""], "getPermissionLevel": ["Supported", "", true],
+      "methods": { "create": ["Partial", ""], "update": ["Partial", ""], "clear": ["Supported", ""], "getAll": ["Supported", ""], "getPermissionLevel": ["Supported", "Reflects the system notification authorization"],
         "onClicked": ["Supported", "", true], "onClosed": ["Partial", "Only fired by clear()", true], "onButtonClicked": ["Partial", "Never fires", true] }
     },
     "windows": {

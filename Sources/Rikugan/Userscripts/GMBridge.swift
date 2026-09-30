@@ -88,6 +88,10 @@ import Combine
         switch op {
         case "injected":
             if message.frameInfo.isMainFrame { tab?.injectedScripts.insert(sid) }
+            if let token = body["ft"] as? String, !token.isEmpty { tab?.scriptFrames[sid, default: [:]][token] = message.frameInfo }
+            return nil
+        case "frameGone":
+            if let token = body["ft"] as? String { tab?.scriptFrames[sid]?.removeValue(forKey: token) }
             return nil
         case "error":
             tab?.appendConsole(level: "error", text: "[\(script.name)] " + (args["message"] as? String ?? ""))
@@ -100,13 +104,13 @@ import Combine
             guard let key = args["key"] as? String else { return nil }
             let value = args["value"] as? String
             store.setValue(value, key: key, for: sid)
-            broadcastValueChange(script: script, key: key, value: value, except: message.webView)
+            broadcastValueChange(script: script, key: key, value: value, exceptToken: body["ft"] as? String)
             return nil
         case "deleteValue":
             try requireGrant(storageWrite)
             guard let key = args["key"] as? String else { return nil }
             store.setValue(nil, key: key, for: sid)
-            broadcastValueChange(script: script, key: key, value: nil, except: message.webView)
+            broadcastValueChange(script: script, key: key, value: nil, exceptToken: body["ft"] as? String)
             return nil
         case "clipboard":
             try requireGrant("GM_setClipboard", "GM.setClipboard")
@@ -262,15 +266,19 @@ import Combine
         }
     }
 
-    private func broadcastValueChange(script: InstalledUserScript, key: String, value: String?, except origin: WKWebView?) {
+    /// Delivers a value change to every frame running the script (all tabs, all frames) except the
+    /// frame that made the change, which already applied it locally.
+    private func broadcastValueChange(script: InstalledUserScript, key: String, value: String?, exceptToken: String?) {
         guard !script.usesPageWorld else { return }
         let fn = UserScriptStore.dispatchFunctionName(script.id)
         let payload = JSONText.encode(["type": "valueChanged", "key": key, "value": value.map { $0 as Any } ?? NSNull()])
         let js = "window[\(fn.jsLiteral)] && window[\(fn.jsLiteral)](\(payload))"
         let world = Worlds.userscript(script.id)
         for tab in TabRegistry.shared.allTabs {
-            guard let webView = tab.webView, webView !== origin, tab.injectedScripts.contains(script.id) else { continue }
-            webView.rkEval(js, world: world)
+            guard let webView = tab.webView, let frames = tab.scriptFrames[script.id] else { continue }
+            for (token, frame) in frames where token != exceptToken {
+                webView.rkEval(js, frame: frame, world: world)
+            }
         }
     }
 

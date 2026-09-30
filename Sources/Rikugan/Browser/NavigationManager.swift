@@ -36,7 +36,12 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
 
         if !Self.webSchemes.contains(scheme) {
             decisionHandler(.cancel, preferences)
-            handleExternalScheme(target, site: site, userInitiated: navigationAction.navigationType == .linkActivated)
+            // The page asking to leave decides the permission, not the target (whose "host" is
+            // app-specific, e.g. youtube://watch).
+            let sourceFrame: WKFrameInfo? = navigationAction.sourceFrame
+            let sourceHost = sourceFrame.map(\.securityOrigin.host).flatMap { $0.isEmpty ? nil : $0 } ?? webView.url?.host
+            handleExternalScheme(target, site: profile.siteSettings.settings(for: sourceHost), sourceHost: sourceHost,
+                                 userInitiated: navigationAction.navigationType == .linkActivated)
             return
         }
 
@@ -54,10 +59,14 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
             return
         }
 
-        let desktop = site.desktopMode ?? desktopMode
+        // Top-level navigations take the target site's override or the global default (a tab-wide
+        // toggle is applied as a site override); sub-frames follow their page.
+        let desktop = isMainFrame ? (site.desktopMode ?? services.prefs.defaultDesktopMode) : desktopMode
         preferences.preferredContentMode = desktop ? .desktop : .mobile
         preferences.allowsContentJavaScript = site.javaScript ?? true
         if isMainFrame {
+            if desktopMode != desktop { desktopMode = desktop }
+            webView.configuration.preferences.javaScriptCanOpenWindowsAutomatically = Self.allowsAutomaticPopups(site: site, prefs: services.prefs)
             loadError = nil
             WebViewFactory.prepareContent(for: self, url: target)
             profile.extensions.webNavigation(.beforeNavigate, tab: self, url: target, frameID: 0)
@@ -119,6 +128,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         restoreFinished()
+        if findActive { noteLoadFinished() }
         guard let url = webView.url else { return }
         if !isPrivate, ["http", "https"].contains(url.scheme ?? "") { profile.history.record(url: url, title: webView.title ?? "") }
         refreshFavicon()
@@ -172,7 +182,18 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
 
     // MARK: External apps (spec §31)
 
-    func handleExternalScheme(_ target: URL, site: SiteSettings, userInitiated: Bool) {
+    /// Windows opened without a user gesture: site Allow / Block, otherwise the global switch.
+    /// Windows opened by a tap (target=_blank, window.open in a click handler) are always allowed
+    /// unless the site is set to Block.
+    static func allowsAutomaticPopups(site: SiteSettings, prefs: Preferences) -> Bool {
+        switch site.popups {
+        case .allow?: return true
+        case .block?: return false
+        default: return !prefs.blockPopups
+        }
+    }
+
+    func handleExternalScheme(_ target: URL, site: SiteSettings, sourceHost: String? = nil, userInitiated: Bool) {
         let scheme = target.scheme?.lowercased() ?? ""
         let prefs = services.prefs
         if scheme == "intent" {
@@ -193,17 +214,20 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
                 return
             }
         }
-        if ["tel", "mailto", "sms", "facetime", "facetime-audio", "maps"].contains(scheme) {
+        let decision = site.externalNavigation ?? (prefs.preventExternalAppRedirect ? .block : .ask)
+        // Phone / mail / messages / FaceTime / Maps links the user taps open directly (the system
+        // confirms calls itself) unless this site blocks external apps; a page opening them on its
+        // own goes through the same Ask / Block decision as any other app.
+        if ["tel", "mailto", "sms", "facetime", "facetime-audio", "maps"].contains(scheme), userInitiated, site.externalNavigation != .block {
             UIApplication.shared.open(target); return
         }
-        let decision = site.externalNavigation ?? (prefs.preventExternalAppRedirect ? .block : .ask)
         switch decision {
         case .allow:
             UIApplication.shared.open(target)
         case .block:
             ToastCenter.shared.show("已阻止打开外部 App（\(scheme)）", symbol: "hand.raised", actionTitle: "打开") { UIApplication.shared.open(target) }
         case .ask:
-            let pageHost = webView?.url?.host ?? "此网页"
+            let pageHost = sourceHost ?? webView?.url?.host ?? "此网页"
             Task {
                 let appName = ExternalAppNames.name(for: scheme)
                 if await Presenter.confirm(title: "\(pageHost) 想要打开 \(appName)", message: target.absoluteString.prefix(120).description,
@@ -280,22 +304,23 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         default: keys = ["camera", "microphone"]
         }
         let site = profile.siteSettings.settings(for: host)
-        let decisions = keys.map { site.permissions[$0] ?? .ask }
+        let decisions: [PermissionDecision] = keys.map { key in
+            if let session = sessionPermission(key, host: host) { return session ? .allow : .block }
+            return site.permissions[key] ?? .ask
+        }
         if decisions.contains(.block) { decisionHandler(.deny); return }
         if decisions.allSatisfy({ $0 == .allow }) { decisionHandler(.grant); return }
         let what = keys.map { $0 == "camera" ? "摄像头" : "麦克风" }.joined(separator: "和")
         Task {
             let answer = await Presenter.permission(title: "“\(host)” 想要使用你的\(what)", message: nil, from: webView)
-            switch answer {
-            case .allow?:
-                for key in keys { profile.siteSettings.update(host) { $0.permissions[key] = .allow } }
-                decisionHandler(.grant)
-            case .ask?: decisionHandler(.grant)
-            case .block?:
-                for key in keys { profile.siteSettings.update(host) { $0.permissions[key] = .block } }
-                decisionHandler(.deny)
-            case nil: decisionHandler(.deny)
+            guard let answer else { decisionHandler(.deny); return }
+            // Private tabs never write site settings: their answers last as long as the tab.
+            if answer != .ask, !isPrivate {
+                for key in keys { profile.siteSettings.update(host) { $0.permissions[key] = answer } }
+            } else if isPrivate {
+                for key in keys { setSessionPermission(key, host: host, answer != .block) }
             }
+            decisionHandler(answer == .block ? .deny : .grant)
         }
     }
 

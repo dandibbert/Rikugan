@@ -373,6 +373,9 @@ final class MiscCoreTests: XCTestCase {
         XCTAssertEqual(playlist.totalDuration, 7.5, accuracy: 0.001)
         XCTAssertNil(playlist.encryption)
         XCTAssertEqual(M3U8.media("#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"k\"\n#EXTINF:1,\na.ts", base: base).encryption, "SAMPLE-AES")
+        // Byte-range segments would be concatenated whole: reported as unsupported, not mis-downloaded.
+        XCTAssertEqual(M3U8.media("#EXTINF:1,\n#EXT-X-BYTERANGE:100@0\nall.ts", base: base).unsupported, "EXT-X-BYTERANGE")
+        XCTAssertNil(M3U8.media("#EXTINF:1,\na.ts", base: base).unsupported)
     }
 
     func testPreferencesTolerantDecoding() throws {

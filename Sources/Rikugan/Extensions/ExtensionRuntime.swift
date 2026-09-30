@@ -181,7 +181,9 @@ import Combine
             id: pending.extensionID, name: pending.displayName, version: pending.manifest.version,
             description: loadedDescription(pending), enabled: previous?.enabled ?? true,
             installedAt: previous?.installedAt ?? now, updatedAt: now, source: pending.source, storeURL: pending.storeURL ?? previous?.storeURL,
-            grantedPermissions: pending.requestedPermissions,
+            // Optional permissions the user approved stay granted if the new version still declares them.
+            grantedPermissions: Array(Set(pending.requestedPermissions +
+                (previous?.grantedPermissions.filter { pending.manifest.optionalPermissions.contains($0) } ?? []))).sorted(),
             grantedHosts: Array(Set(pending.requestedHosts + (previous?.grantedHosts.filter { h in pending.manifest.optionalHostPermissions.contains(h) } ?? []))),
             hostAccess: previous?.hostAccess ?? .granted, enabledRulesets: previous?.enabledRulesets,
             dynamicScripts: previous?.dynamicScripts ?? [], dynamicRulesJSON: previous?.dynamicRulesJSON ?? "[]")
@@ -366,15 +368,23 @@ import Combine
                 items.append(ContentScriptItem(source: shimSource(ext, ctx: "content"), time: .atDocumentStart,
                                                mainFrameOnly: !needsShimFrames, world: isolated))
             }
+            // document_idle runs at document end: Chrome injects idle scripts at some point between
+            // DOMContentLoaded and just after load, so the earliest point is within its contract.
+            // (Wrapping the code to defer it would change its top-level scope.)
+            func source(_ file: String) -> String? {
+                if let code = ext.text(file) { return code }
+                reportMissingResource(ext, file)
+                return nil
+            }
             for entry in mainEntries {
                 let world = entry.world == "MAIN" ? WKContentWorld.page : isolated
                 let time: WKUserScriptInjectionTime = entry.runAt == "document_start" ? .atDocumentStart : .atDocumentEnd
                 if !entry.css.isEmpty {
-                    let css = entry.css.compactMap { ext.text($0) }.joined(separator: "\n")
+                    let css = entry.css.compactMap { source($0) }.joined(separator: "\n")
                     items.append(ContentScriptItem(source: Self.cssInjector(css, guardJS: nil), time: .atDocumentStart, mainFrameOnly: true, world: world))
                 }
                 for file in entry.js {
-                    guard let code = ext.text(file) else { continue }
+                    guard let code = source(file) else { continue }
                     items.append(ContentScriptItem(source: code + "\n//# sourceURL=\(ext.baseURL)\(file)", time: time, mainFrameOnly: true, world: world))
                 }
             }
@@ -392,23 +402,36 @@ import Combine
                 let include = literal(entry.includeRules())
                 let exclude = literal(entry.excludeRules())
                 let globs = literal(entry.globRules())
-                let guardJS = "(function(){try{if(window.top===window)return false;}catch(e){}var h=String(location.href).split('#')[0];" +
+                // match_about_blank: about:blank / srcdoc frames are matched by the URL of the
+                // parent that created them (same origin, so readable).
+                let aboutBlank = entry.matchAboutBlank
+                    ? "if(/^about:(blank|srcdoc)$/.test(h)){try{h=String(parent.location.href).split('#')[0];}catch(e){}}" : ""
+                let guardJS = "(function(){try{if(window.top===window)return false;}catch(e){}var h=String(location.href).split('#')[0];\(aboutBlank)" +
                     "var R=function(l){return l.map(function(r){return new RegExp(r[0],r[1])})};" +
                     "var inc=R([\(include)]),exc=R([\(exclude)]),gl=R([\(globs)]),hp=R([\(literal(hostRules))]);" +
                     "var allowed=hp.some(function(r){return r.test(h)})||(\(topOrigin.jsLiteral)!==''&&location.origin===\(topOrigin.jsLiteral));" +
                     "return allowed&&inc.some(function(r){return r.test(h)})&&(gl.length===0||gl.some(function(r){return r.test(h)}))&&!exc.some(function(r){return r.test(h)});})()"
                 if !entry.css.isEmpty {
-                    let css = entry.css.compactMap { ext.text($0) }.joined(separator: "\n")
+                    let css = entry.css.compactMap { source($0) }.joined(separator: "\n")
                     items.append(ContentScriptItem(source: Self.cssInjector(css, guardJS: guardJS), time: .atDocumentStart, mainFrameOnly: false, world: world))
                 }
                 for file in entry.js {
-                    guard let code = ext.text(file) else { continue }
+                    guard let code = source(file) else { continue }
                     items.append(ContentScriptItem(source: "if (\(guardJS)) {\n\(code)\n}\n//# sourceURL=\(ext.baseURL)\(file)",
                                                    time: time, mainFrameOnly: false, world: world))
                 }
             }
         }
         return items
+    }
+
+    private var reportedMissingResources = Set<String>()
+
+    /// A content script file that is gone is reported once (install already rejects packages
+    /// whose manifest names missing files), never skipped silently.
+    private func reportMissingResource(_ ext: LoadedExtension, _ file: String) {
+        guard reportedMissingResources.insert(ext.id + "|" + file).inserted else { return }
+        recordRuntimeError(ext, "content script file missing: \(file)", context: "content_scripts")
     }
 
     static func cssInjector(_ css: String, guardJS: String?) -> String {
@@ -457,7 +480,7 @@ import Combine
     func webNavigation(_ event: NavigationEvent, tab: BrowserTab, url: URL, frameID: Int, sourceTab: BrowserTab? = nil) {
         guard !tab.isPrivate, !loaded.isEmpty else { return }
         if event == .committed {
-            for ext in loaded.values { ext.contentFrames[tab.numericID] = nil; ext.activeTabGrants.remove(tab.numericID); ext.tabActions[tab.numericID] = nil }
+            for ext in loaded.values { ext.contentFrames[tab.numericID] = nil; ext.tabCommitted(tab.numericID, url: url); ext.tabActions[tab.numericID] = nil }
         }
         var details: [String: Any] = ["tabId": tab.numericID, "url": url.absoluteString, "frameId": frameID, "parentFrameId": -1,
                                       "timeStamp": Date().timeIntervalSince1970 * 1000, "processId": -1, "documentLifecycle": "active",
@@ -491,7 +514,7 @@ import Combine
 
     /// `closing == false` means the tab's web view was suspended (content scripts are gone, the tab remains).
     func tabRemoved(_ tab: BrowserTab, closing: Bool = true) {
-        for ext in loaded.values { ext.contentFrames[tab.numericID] = nil; if closing { ext.activeTabGrants.remove(tab.numericID) } }
+        for ext in loaded.values { ext.contentFrames[tab.numericID] = nil; if closing { ext.revokeActiveTab(tab.numericID) } }
         bridge.endpointsGone(tabID: tab.numericID)
         guard closing, !tab.isPrivate, !loaded.isEmpty else { return }
         dispatchAll("tabs.onRemoved") { _ in [tab.numericID, ["windowId": tab.manager?.numericID ?? 1, "isWindowClosing": false]] }
@@ -521,7 +544,7 @@ import Combine
     func performAction(_ ext: LoadedExtension, tab: BrowserTab?) {
         let state = ext.actionState(for: tab?.numericID)
         guard state.enabled else { return }
-        if let tab, !tab.isPrivate { ext.activeTabGrants.insert(tab.numericID) }
+        if let tab { ext.grantActiveTab(tab) }
         openActionUI(ext, tab: tab, state: state)
     }
 
@@ -555,7 +578,9 @@ import Combine
 
     /// Runs content scripts on the current site after a user click when host access is "on click".
     func runOnCurrentSite(_ ext: LoadedExtension, tab: BrowserTab) {
-        ext.activeTabGrants.insert(tab.numericID)
+        // The grant is for this origin, so it survives the reload below (it used to be cleared by
+        // the reload's commit, leaving later chrome.scripting calls without access).
+        ext.grantActiveTab(tab)
         tab.markInjected(for: URL(string: "about:invalid")!)
         tab.reload()
     }
@@ -584,7 +609,7 @@ import Combine
                     var info: [String: Any] = ["menuItemId": item.id, "editable": false, "pageUrl": tab.webView?.url?.absoluteString ?? ""]
                     if let linkURL { info["linkUrl"] = linkURL.absoluteString }
                     if item.type == "checkbox" { info["wasChecked"] = item.checked; info["checked"] = !item.checked }
-                    ext.activeTabGrants.insert(tab.numericID)
+                    ext.grantActiveTab(tab)
                     Task {
                         if let selection = await tab.webView?.rkTools("selection") as? String, !selection.isEmpty { info["selectionText"] = selection }
                         self.dispatch(ext, "contextMenus.onClicked", [info, self.bridge.tabJSON(tab, for: ext)])
@@ -611,6 +636,9 @@ import Combine
     }
 
     private var storageCache: [String: [String: String]] = [:]
+    /// Extensions that called storage.session.setAccessLevel(TRUSTED_AND_UNTRUSTED_CONTEXTS);
+    /// like the session area itself this lasts until the app quits.
+    var sessionStorageOpenToContentScripts = Set<String>()
 
     func storage(_ ext: LoadedExtension, area: String) -> [String: String] {
         if area == "session" { return ext.sessionStorage }
