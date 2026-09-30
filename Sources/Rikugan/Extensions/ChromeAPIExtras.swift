@@ -345,7 +345,7 @@ extension ChromeAPIBridge {
         case "downloads.removeFile":
             try requirePermission(ext, "downloads")
             let id = arg(0) as? Int ?? -1
-            guard let item = AppServices.shared.downloads.items.first(where: { $0.numericID == id }) else { throw RikuganError("Invalid download id \(id)") }
+            guard let item = AppServices.shared.downloads.extensionVisibleItems.first(where: { $0.numericID == id }) else { throw RikuganError("Invalid download id \(id)") }
             guard item.chromeState == "complete", let file = item.fileURL else { throw RikuganError("Download must be complete") }
             try? FileManager.default.removeItem(at: file)
             runtime.dispatchAll("downloads.onChanged", permission: "downloads") { _ in [["id": id, "exists": ["previous": true, "current": false]]] }
@@ -353,7 +353,7 @@ extension ChromeAPIBridge {
         case "downloads.getFileIcon":
             try requirePermission(ext, "downloads")
             let id = arg(0) as? Int ?? -1
-            guard let item = AppServices.shared.downloads.items.first(where: { $0.numericID == id }) else { throw RikuganError("Invalid download id \(id)") }
+            guard let item = AppServices.shared.downloads.extensionVisibleItems.first(where: { $0.numericID == id }) else { throw RikuganError("Invalid download id \(id)") }
             let size = CGFloat(dict(1)["size"] as? Int ?? 32)
             return Handled(value: Self.symbolDataURL(DownloadRow.symbol(forFileName: item.fileName), size: size))
 
@@ -506,7 +506,7 @@ extension ChromeAPIBridge {
         }
         if requested.contains("downloads") {
             let manager = AppServices.shared.downloads
-            for item in manager.items where item.chromeState != "in_progress" && item.startDate >= since {
+            for item in manager.extensionVisibleItems where item.chromeState != "in_progress" && item.startDate >= since {
                 manager.remove(item, deleteFile: false)
             }
         }

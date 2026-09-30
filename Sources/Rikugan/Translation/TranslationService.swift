@@ -182,13 +182,20 @@ struct DeepLProvider: TranslationProvider {
         return declared.flatMap { $0.isEmpty ? nil : String($0.prefix(2)) }
     }
 
+    /// Page text goes only to the service the user chose. The single exception is the opt-in
+    /// switch between the two free public services; LibreTranslate / DeepL never fall back.
     func translate(_ texts: [String], from source: String?, to target: String) async throws -> [String] {
+        let chosen = provider
         do {
-            return try await provider.translate(texts, from: source, to: target)
+            let result = try await chosen.translate(texts, from: source, to: target)
+            guard result.count == texts.count else { throw RikuganError("翻译服务返回的条目数不符（\(result.count)/\(texts.count)）") }
+            return result
         } catch {
-            // Fall back to the other free provider once before failing.
-            let fallback: TranslationProvider = provider.id == "google" ? microsoft : GoogleFreeProvider()
-            return try await fallback.translate(texts, from: source, to: target)
+            guard AppServices.shared.prefs.translationFreeFallback, ["google", "microsoft"].contains(chosen.id) else { throw error }
+            let fallback: TranslationProvider = chosen.id == "google" ? microsoft : GoogleFreeProvider()
+            let result = try await fallback.translate(texts, from: source, to: target)
+            guard result.count == texts.count else { throw error }
+            return result
         }
     }
 }
@@ -199,8 +206,15 @@ struct DeepLProvider: TranslationProvider {
         guard let webView = tab.webView else { return }
         let services = AppServices.shared
         let targetLanguage = target ?? services.prefs.translationTargetLanguage
+        // A new run replaces any earlier one; results of a replaced run (or of a previous
+        // document) are dropped instead of being applied to the current page.
+        tab.translationTask?.cancel()
+        tab.translationGeneration += 1
+        let generation = tab.translationGeneration
+        tab.translationTarget = targetLanguage
         tab.translation = .translating(progress: 0)
-        Task {
+        func current() -> Bool { !Task.isCancelled && tab.translationGeneration == generation && tab.webView === webView }
+        tab.translationTask = Task {
             let sample = await webView.rkTools("languageSample") as? [String: Any]
             let source = services.translator.detectLanguage(sample: sample?["sample"] as? String ?? "", declared: sample?["lang"] as? String)
             tab.translationSourceLanguage = source
@@ -212,36 +226,55 @@ struct DeepLProvider: TranslationProvider {
                 tab.translation = .failed("没有可翻译的文本")
                 return
             }
-            var done = 0
-            var failures = 0
+            guard current() else { return }
+            var done = 0, failures = 0, succeeded = 0
+            var lastError: Error?
             for batch in raw {
+                guard current() else { return }
                 let ids = batch.compactMap { $0["id"] as? Int }
                 let texts = batch.compactMap { $0["text"] as? String }
-                guard ids.count == texts.count else { continue }
-                do {
-                    let translated = try await services.translator.translate(texts, from: source, to: targetLanguage)
-                    let payload = zip(ids, translated).map { ["id": $0.0, "text": $0.1] as [String: Any] }
-                    _ = await webView.rkTools("applyTranslations", [payload])
-                } catch {
+                if ids.count == texts.count {
+                    do {
+                        let translated = try await services.translator.translate(texts, from: source, to: targetLanguage)
+                        guard current() else { return }
+                        let payload = zip(ids, translated).map { ["id": $0.0, "text": $0.1] as [String: Any] }
+                        _ = await webView.rkTools("applyTranslations", [payload])
+                        succeeded += 1
+                    } catch {
+                        failures += 1
+                        lastError = error
+                        // Nothing worked in the first batches: the service is unavailable.
+                        if succeeded == 0, failures >= 3 { break }
+                    }
+                } else {
                     failures += 1
-                    if failures > 3 { tab.translation = .failed(error.localizedDescription); return }
                 }
                 done += 1
-                tab.translation = .translating(progress: Double(done) / Double(raw.count))
+                if current() { tab.translation = .translating(progress: Double(done) / Double(raw.count)) }
             }
-            tab.translation = .translated(showingOriginal: false)
+            guard current() else { return }
+            if succeeded == 0 {
+                tab.translation = .failed("翻译失败：\(lastError?.localizedDescription ?? "服务没有返回结果")")
+            } else {
+                tab.translation = .translated(showingOriginal: false)
+                if failures > 0 { ToastCenter.shared.show("部分内容未能翻译（\(failures)/\(raw.count) 批失败）", symbol: "exclamationmark.triangle") }
+            }
         }
     }
 
     static func translateAdditional(_ batches: [[[String: Any]]], tab: BrowserTab) {
         guard case .translated(false) = tab.translation, let webView = tab.webView else { return }
         let services = AppServices.shared
+        let generation = tab.translationGeneration
+        // Text added later is translated into the language chosen for this page, not the default.
+        let target = tab.translationTarget ?? services.prefs.translationTargetLanguage
         Task {
             for batch in batches {
                 let ids = batch.compactMap { $0["id"] as? Int }
                 let texts = batch.compactMap { $0["text"] as? String }
                 guard ids.count == texts.count,
-                      let translated = try? await services.translator.translate(texts, from: tab.translationSourceLanguage, to: services.prefs.translationTargetLanguage) else { continue }
+                      let translated = try? await services.translator.translate(texts, from: tab.translationSourceLanguage, to: target) else { continue }
+                guard tab.translationGeneration == generation, tab.webView === webView else { return }
                 _ = await webView.rkTools("applyTranslations", [zip(ids, translated).map { ["id": $0.0, "text": $0.1] as [String: Any] }])
             }
         }
@@ -256,7 +289,9 @@ struct DeepLProvider: TranslationProvider {
     }
 
     static func stop(_ tab: BrowserTab) {
-        guard let webView = tab.webView else { return }
+        tab.translationTask?.cancel()
+        tab.translationGeneration += 1
+        guard let webView = tab.webView else { tab.translation = .idle; return }
         Task {
             _ = await webView.rkTools("stopTranslation")
             tab.translation = .idle

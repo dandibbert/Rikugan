@@ -165,7 +165,7 @@ struct AutofillSettingsView: View {
     var body: some View {
         Form {
             Section { Toggle("提示保存密码", isOn: $services.prefs.autofillEnabled) } footer: {
-                Text("密码、个人信息和支付卡保存在本机钥匙串（Keychain）中，不写入 UserDefaults，查看前需要面容 ID / 密码验证。")
+                Text("密码、个人信息和支付卡保存在本机钥匙串（Keychain）中，不写入 UserDefaults，查看和填充前需要面容 ID / 密码验证（设备未设置密码时无法验证）。密码只填充到保存它的同一网站的 HTTPS 页面。")
             }
             if unlocked {
                 Section("密码") {
@@ -176,7 +176,7 @@ struct AutofillSettingsView: View {
                             Text(c.password).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                         }
                     }
-                    .onDelete { idx in idx.map { autofill.credentials[$0] }.forEach { autofill.delete($0) } }
+                    .onDelete { idx in idx.map { autofill.credentials[$0] }.forEach { c in Self.report { try autofill.delete(c) } } }
                 }
                 Section("个人信息") {
                     TextField("姓名", text: $autofill.profile.name)
@@ -190,11 +190,11 @@ struct AutofillSettingsView: View {
                     TextField("省 / 州", text: $autofill.profile.region)
                     TextField("邮编", text: $autofill.profile.postalCode)
                     TextField("国家或地区", text: $autofill.profile.country)
-                    Button("保存个人信息") { autofill.saveProfile(); ToastCenter.shared.show("已保存", symbol: "checkmark") }
+                    Button("保存个人信息") { if Self.report({ try autofill.saveProfile() }) { ToastCenter.shared.show("已保存", symbol: "checkmark") } }
                 }
                 Section("支付卡") {
                     ForEach(autofill.cards) { c in Text("\(c.nickname.isEmpty ? "卡片" : c.nickname)  \(c.masked)  \(c.expMonth)/\(c.expYear)") }
-                        .onDelete { idx in idx.map { autofill.cards[$0] }.forEach { autofill.delete($0) } }
+                        .onDelete { idx in idx.map { autofill.cards[$0] }.forEach { c in Self.report { try autofill.delete(c) } } }
                     TextField("备注名", text: $card.nickname)
                     TextField("持卡人", text: $card.cardName)
                     TextField("卡号", text: $card.cardNumber).keyboardType(.numberPad)
@@ -202,7 +202,7 @@ struct AutofillSettingsView: View {
                         TextField("月 MM", text: $card.expMonth).keyboardType(.numberPad)
                         TextField("年 YYYY", text: $card.expYear).keyboardType(.numberPad)
                     }
-                    Button("添加支付卡") { autofill.save(card); card = PaymentCard() }.disabled(card.cardNumber.count < 12)
+                    Button("添加支付卡") { if Self.report({ try autofill.save(card) }) { card = PaymentCard() } }.disabled(card.cardNumber.count < 12)
                 }
             } else {
                 Button { Task { unlocked = await Keychain.authenticate(reason: "查看保存的密码与支付信息") } } label: { Text("解锁以查看") }
@@ -213,6 +213,17 @@ struct AutofillSettingsView: View {
 }
 
 // MARK: - Profiles (spec §36)
+
+extension AutofillSettingsView {
+    /// Runs a Keychain write and shows its error; true when it succeeded.
+    @discardableResult
+    static func report(_ body: () throws -> Void) -> Bool {
+        do { try body(); return true } catch {
+            ToastCenter.shared.show("未保存：\(error.localizedDescription)", symbol: "exclamationmark.triangle")
+            return false
+        }
+    }
+}
 
 struct ProfilesView: View {
     @EnvironmentObject private var services: AppServices

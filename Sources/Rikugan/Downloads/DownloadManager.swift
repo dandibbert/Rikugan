@@ -26,6 +26,12 @@ import QuickLook
     var hlsTask: Task<Void, Never>?
     /// Chosen in the download prompt: open the Files exporter once finished.
     var exportToFiles = false
+    /// Started from a private tab: never written to the download history file and never reported
+    /// to extensions.
+    var isPrivate = false
+    /// The name came from the user / script (prompt, GM_download name, chrome.downloads filename)
+    /// and wins over the server's suggested file name.
+    var userNamedFile = false
     private var progressObservation: NSKeyValueObservation?
     private var lastSample: (date: Date, bytes: Int64) = (Date(), 0)
 
@@ -72,7 +78,7 @@ import QuickLook
         return ["id": numericID, "url": sourceURL?.absoluteString ?? "", "finalUrl": sourceURL?.absoluteString ?? "",
          "filename": fileURL?.path ?? fileName, "state": chromeState, "paused": state == .paused, "bytesReceived": received,
          "totalBytes": total, "fileSize": total, "mime": mime, "danger": "safe", "exists": fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false,
-         "startTime": ISO8601DateFormatter().string(from: startDate), "canResume": resumeData != nil, "incognito": false,
+         "startTime": ISO8601DateFormatter().string(from: startDate), "canResume": resumeData != nil, "incognito": isPrivate,
          "error": errorValue]
     }
 }
@@ -80,7 +86,15 @@ import QuickLook
 @MainActor final class DownloadManager: NSObject, ObservableObject {
     @Published private(set) var items: [DownloadItem] = []
     private var nextID = 1
-    private lazy var session: URLSession = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
+    /// No shared cookie jar or cache: the cookies of the requesting profile / private session are
+    /// attached per request (only those that apply to the URL), and nothing is stored globally.
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
+    }()
     private var taskItems: [Int: DownloadItem] = [:]
     private var wkItems: [ObjectIdentifier: DownloadItem] = [:]
     private let recordsFile = JSONFile<[Record]>(AppPaths.support.appendingPathComponent("downloads.json"))
@@ -109,7 +123,7 @@ import QuickLook
     }
 
     private func persist() {
-        let records = items.filter { $0.state == .completed }.map {
+        let records = items.filter { $0.state == .completed && !$0.isPrivate }.map {
             Record(id: $0.id, fileName: $0.fileURL?.lastPathComponent ?? $0.fileName, url: $0.sourceURL?.absoluteString, date: $0.startDate, size: $0.total)
         }
         recordsFile.save(records)
@@ -122,6 +136,7 @@ import QuickLook
     func attach(_ download: WKDownload, sourceTab: BrowserTab?, suggestedResponse: URLResponse? = nil) {
         let item = DownloadItem(numericID: allocateID(), fileName: suggestedResponse?.suggestedFilename ?? download.originalRequest?.url?.lastPathComponent ?? "download",
                                 sourceURL: download.originalRequest?.url)
+        item.isPrivate = sourceTab?.isPrivate ?? (TabRegistry.shared.tab(for: download.webView)?.isPrivate ?? false)
         item.webView = download.webView
         item.wkDownload = download
         item.mime = suggestedResponse?.mimeType ?? ""
@@ -159,18 +174,17 @@ import QuickLook
         let item = DownloadItem(numericID: allocateID(), fileName: suggestedName ?? (url.lastPathComponent.isEmpty ? (url.host ?? "download") : url.lastPathComponent),
                                 sourceURL: url)
         item.headers = headers
+        item.isPrivate = tab?.isPrivate ?? false
+        item.userNamedFile = suggestedName != nil
         items.insert(item, at: 0)
         Task {
             var request = URLRequest(url: url)
             for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
             if let tab {
                 request.setValue(tab.webView?.url?.absoluteString, forHTTPHeaderField: "Referer")
-                let store = tab.isPrivate ? tab.profile.privateDataStore() : tab.profile.dataStore
-                let cookies = await store.httpCookieStore.allCookies().filter { c in
-                    let domain = c.domain.hasPrefix(".") ? String(c.domain.dropFirst()) : c.domain
-                    return DomainTools.host(url.host ?? "", isWithin: domain)
-                }
-                for (k, v) in HTTPCookie.requestHeaderFields(with: cookies) { request.setValue(v, forHTTPHeaderField: k) }
+                // Only cookies the browser itself would send to this URL (domain / host-only, path,
+                // Secure, expiry).
+                if let header = await Self.cookieHeader(for: url, tab: tab) { request.setValue(header, forHTTPHeaderField: "Cookie") }
             }
             let task = session.downloadTask(with: request)
             item.task = task
@@ -202,8 +216,17 @@ import QuickLook
         return item
     }
 
+    static func cookieHeader(for url: URL, tab: BrowserTab) async -> String? {
+        let store = tab.isPrivate ? tab.profile.privateDataStore() : tab.profile.dataStore
+        let cookies = await store.httpCookieStore.allCookies().filter { CookieScope.cookie($0, appliesTo: url) }
+        return cookies.isEmpty ? nil : HTTPCookie.requestHeaderFields(with: cookies)["Cookie"]
+    }
+
+    /// Items extensions may see (private downloads are not reported, like other private browsing).
+    var extensionVisibleItems: [DownloadItem] { items.filter { !$0.isPrivate } }
+
     private func announce(_ item: DownloadItem) {
-        AppServices.shared.profile.extensions.downloadCreated(item)
+        if !item.isPrivate { AppServices.shared.profile.extensions.downloadCreated(item) }
         ToastCenter.shared.show("开始下载：\(item.fileName)", symbol: "arrow.down.circle", actionTitle: "查看") {
             NotificationCenter.default.post(name: .rikuganShowDownloads, object: nil)
         }
@@ -257,7 +280,7 @@ import QuickLook
         if deleteFile, let file = item.fileURL { try? FileManager.default.removeItem(at: file) }
         items.removeAll { $0.id == item.id }
         persist()
-        AppServices.shared.profile.extensions.downloadErased(item.numericID)
+        if !item.isPrivate { AppServices.shared.profile.extensions.downloadErased(item.numericID) }
     }
 
     func clearFinished() {
@@ -286,6 +309,12 @@ import QuickLook
     }
 
     fileprivate func finish(_ item: DownloadItem, file: URL) {
+        // Completed means the file is really there.
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            item.state = .failed("文件未能保存")
+            ToastCenter.shared.show("下载失败：文件未能保存（\(item.fileName)）", symbol: "exclamationmark.triangle")
+            return
+        }
         item.fileURL = file
         item.fileName = file.lastPathComponent
         let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int64) ?? item.received
@@ -295,8 +324,10 @@ import QuickLook
         item.speed = 0
         persist()
         if item.exportToFiles { item.exportToFiles = false; saveToFiles(item) }
-        AppServices.shared.profile.extensions.dispatchAll("downloads.onChanged", permission: "downloads") { _ in
-            [["id": item.numericID, "state": ["previous": "in_progress", "current": "complete"]]]
+        if !item.isPrivate {
+            AppServices.shared.profile.extensions.dispatchAll("downloads.onChanged", permission: "downloads") { _ in
+                [["id": item.numericID, "state": ["previous": "in_progress", "current": "complete"]]]
+            }
         }
         ToastCenter.shared.show("下载完成：\(item.fileName)", symbol: "checkmark.circle", actionTitle: "打开") { [weak self] in self?.open(item) }
     }
@@ -306,12 +337,19 @@ import QuickLook
     private func downloadHLS(url: URL, suggestedName: String?, from tab: BrowserTab?) -> DownloadItem {
         let base = suggestedName ?? ((url.deletingPathExtension().lastPathComponent.isEmpty ? "video" : url.deletingPathExtension().lastPathComponent) + ".ts")
         let item = DownloadItem(numericID: allocateID(), fileName: base, sourceURL: url)
+        item.isPrivate = tab?.isPrivate ?? false
+        item.userNamedFile = suggestedName != nil
         items.insert(item, at: 0)
         announce(item)
         let referer = tab?.webView?.url?.absoluteString
         item.hlsTask = Task { [weak self] in
             do {
-                let file = try await HLSDownloader.download(url: url, name: base, referer: referer) { done, total in
+                // Playlist and segments are requested with the page's cookies for each URL.
+                let cookies: (URL) async -> String? = { target in
+                    guard let tab else { return nil }
+                    return await DownloadManager.cookieHeader(for: target, tab: tab)
+                }
+                let file = try await HLSDownloader.download(url: url, name: base, referer: referer, cookies: cookies) { done, total in
                     Task { @MainActor in item.update(received: Int64(done), total: Int64(total)) }
                 }
                 self?.finish(item, file: file)
@@ -380,6 +418,16 @@ extension DownloadManager: WKDownloadDelegate {
 }
 
 extension DownloadManager: URLSessionDownloadDelegate {
+    /// The Cookie header was chosen for the original URL: drop it when a redirect leaves that host.
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                                newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        var next = request
+        if request.url?.host?.lowercased() != task.originalRequest?.url?.host?.lowercased() || request.url?.scheme?.lowercased() != "https" {
+            next.setValue(nil, forHTTPHeaderField: "Cookie")
+        }
+        completionHandler(next)
+    }
+
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
                                 totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         MainActor.assumeIsolated {
@@ -392,19 +440,31 @@ extension DownloadManager: URLSessionDownloadDelegate {
         let suggested = downloadTask.response?.suggestedFilename
         let mime = downloadTask.response?.mimeType
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try? FileManager.default.moveItem(at: location, to: temp)
+        var moveError: Error?
+        do { try FileManager.default.moveItem(at: location, to: temp) } catch { moveError = error }
         MainActor.assumeIsolated {
-            guard let item = taskItems.removeValue(forKey: downloadTask.taskIdentifier) else { return }
+            guard let item = taskItems.removeValue(forKey: downloadTask.taskIdentifier) else { try? FileManager.default.removeItem(at: temp); return }
+            if let moveError {
+                item.state = .failed("无法保存临时文件：\(moveError.localizedDescription)")
+                return
+            }
             if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 item.state = .failed("HTTP \(http.statusCode)")
                 try? FileManager.default.removeItem(at: temp)
                 return
             }
             var name = item.fileName
-            if let suggested, !suggested.isEmpty, suggested != "Unknown" { name = suggested }
+            if !item.userNamedFile, let suggested, !suggested.isEmpty, suggested != "Unknown" { name = suggested }
             if (name as NSString).pathExtension.isEmpty, let mime { name += "." + UTTypeHelper.fileExtension(forMIME: mime) }
             let file = AppPaths.uniqueFile(in: AppPaths.downloads, name: name)
-            try? FileManager.default.moveItem(at: temp, to: file)
+            do {
+                try FileManager.default.moveItem(at: temp, to: file)
+            } catch {
+                try? FileManager.default.removeItem(at: temp)
+                item.state = .failed("无法保存文件：\(error.localizedDescription)")
+                ToastCenter.shared.show("下载失败：无法保存 \(name)", symbol: "exclamationmark.triangle")
+                return
+            }
             item.mime = mime ?? ""
             finish(item, file: file)
         }
@@ -424,11 +484,18 @@ extension DownloadManager: URLSessionDownloadDelegate {
 /// Minimal HLS (m3u8) downloader: picks the best variant, downloads unencrypted segments and
 /// concatenates them. DRM / encrypted streams are out of scope (spec §26).
 enum HLSDownloader {
-    static func download(url: URL, name: String, referer: String?, progress: @escaping (Int, Int) -> Void) async throws -> URL {
+    static func download(url: URL, name: String, referer: String?, cookies: @escaping (URL) async -> String? = { _ in nil },
+                         progress: @escaping (Int, Int) -> Void) async throws -> URL {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        let session = URLSession(configuration: configuration)
+        defer { session.finishTasksAndInvalidate() }
         func fetch(_ u: URL) async throws -> Data {
             var request = URLRequest(url: u, timeoutInterval: 60)
             if let referer { request.setValue(referer, forHTTPHeaderField: "Referer") }
-            let (data, response) = try await URLSession.shared.data(for: request)
+            if let cookie = await cookies(u) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+            let (data, response) = try await session.data(for: request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RikuganError("HTTP \(http.statusCode)：\(u.lastPathComponent)") }
             return data
         }

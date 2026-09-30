@@ -4,7 +4,8 @@ import Foundation
 /// expression subset accepted by WebKit content rule lists.
 public enum ABPPattern {
     public static let domainAnchor = "^[a-z][a-z0-9.+-]*://([a-z0-9.-]+\\.)?"
-    public static let separator = "[/:?&=]"
+    /// ABP separator: any character except a letter, digit, `_`, `-`, `.` or `%`.
+    public static let separator = "[^a-zA-Z0-9_.%-]"
 
     public static func regex(_ pattern: String) -> String? {
         var text = pattern
@@ -22,7 +23,10 @@ public enum ABPPattern {
             switch c {
             case "*": body += ".*"
             case "^":
-                body += index == chars.count - 1 && suffix.isEmpty ? separator + "?" : separator
+                // A trailing `^` also matches the end of the address — "a separator (and anything
+                // after it) or nothing". It must never match a letter/digit, so
+                // `||ads.example.com^` does not match ads.example.com.evil.test or ads.example.company.
+                body += index == chars.count - 1 && suffix.isEmpty ? "(" + separator + ".*)?$" : separator
             case ".", "?", "+", "(", ")", "[", "]", "{", "}", "$", "|", "\\": body += "\\" + String(c)
             default: body.append(c)
             }

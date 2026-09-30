@@ -382,13 +382,7 @@ import Combine
         }
     }
 
-    static func cookie(_ cookie: HTTPCookie, appliesTo url: URL) -> Bool {
-        let domain = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
-        let host = url.host?.lowercased() ?? ""
-        let domainOK = cookie.domain.hasPrefix(".") ? DomainTools.host(host, isWithin: domain.lowercased()) || host == domain.lowercased() : host == domain.lowercased()
-        let path = url.path.isEmpty ? "/" : url.path
-        return domainOK && path.hasPrefix(cookie.path) && (!cookie.isSecure || url.scheme == "https") && (cookie.expiresDate.map { $0 > Date() } ?? true)
-    }
+    static func cookie(_ cookie: HTTPCookie, appliesTo url: URL) -> Bool { CookieScope.cookie(cookie, appliesTo: url) }
 
     // MARK: GM_download
 
@@ -456,9 +450,18 @@ import Combine
             }
         case "cookieSet":
             guard let name = details["name"] as? String, !name.isEmpty else { throw RikuganError("GM_cookie.set: name is required") }
+            // Domain must domain-match the checked URL and not be a public suffix (checked once, here).
+            let setURL = (details["url"] as? String).flatMap(URL.init(string:)) ?? pageURL ?? url
+            guard connectAllowed(setURL, script: script, pageURL: pageURL),
+                  let domain = CookieScope.domain(requested: domainArg, for: setURL) else {
+                throw RikuganError("GM_cookie.set: the cookie domain must match the url and be reachable by this script")
+            }
+            if details["secure"] as? Bool == true, setURL.scheme?.lowercased() != "https" {
+                throw RikuganError("GM_cookie.set: a secure cookie requires an https url")
+            }
             var properties: [HTTPCookiePropertyKey: Any] = [
                 .name: name, .value: details["value"] as? String ?? "", .path: details["path"] as? String ?? "/",
-                .domain: domainArg ?? url.host ?? "",
+                .domain: domain,
             ]
             if details["secure"] as? Bool == true { properties[.secure] = "TRUE" }
             if details["httpOnly"] as? Bool == true { properties[HTTPCookiePropertyKey("HttpOnly")] = "TRUE" }

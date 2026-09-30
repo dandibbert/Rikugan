@@ -303,24 +303,53 @@ struct PaymentCard: Codable, Identifiable, Hashable {
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
-    private func write<T: Encodable>(_ value: T, _ account: String) {
-        guard let data = try? JSONEncoder().encode(value) else { return }
-        try? Keychain.set(data, account: account)
+    private func write<T: Encodable>(_ value: T, _ account: String) throws {
+        try Keychain.set(try JSONEncoder().encode(value), account: account)
+    }
+
+    /// Passwords belong to the exact host they were saved on ("www." ignored). A shared
+    /// registrable domain is not enough: a.github.io and b.github.io are different owners, and a
+    /// hand-written public-suffix list cannot know every such platform.
+    static func sameSite(_ a: String, _ b: String) -> Bool {
+        func normalized(_ host: String) -> String {
+            let h = host.lowercased()
+            return h.hasPrefix("www.") ? String(h.dropFirst(4)) : h
+        }
+        return normalized(a) == normalized(b)
     }
 
     func credentials(for host: String) -> [SavedCredential] {
-        let domain = DomainTools.registrableDomain(host)
-        return credentials.filter { DomainTools.registrableDomain($0.host) == domain }
+        credentials.filter { Self.sameSite($0.host, host) }
     }
 
-    func save(_ credential: SavedCredential) {
-        credentials.removeAll { $0.host == credential.host && $0.username == credential.username }
-        credentials.insert(credential, at: 0)
-        write(credentials, "credentials")
+    // Each change is written to the Keychain first and only then applied in memory, so a failed
+    // write neither loses data nor shows a success message.
+    func save(_ credential: SavedCredential) throws {
+        var next = credentials
+        next.removeAll { $0.host == credential.host && $0.username == credential.username }
+        next.insert(credential, at: 0)
+        try write(next, "credentials")
+        credentials = next
     }
 
-    func delete(_ credential: SavedCredential) { credentials.removeAll { $0.id == credential.id }; write(credentials, "credentials") }
-    func saveProfile() { write(profile, "profile") }
-    func save(_ card: PaymentCard) { cards.removeAll { $0.id == card.id }; cards.append(card); write(cards, "cards") }
-    func delete(_ card: PaymentCard) { cards.removeAll { $0.id == card.id }; write(cards, "cards") }
+    func delete(_ credential: SavedCredential) throws {
+        let next = credentials.filter { $0.id != credential.id }
+        try write(next, "credentials")
+        credentials = next
+    }
+
+    func saveProfile() throws { try write(profile, "profile") }
+
+    func save(_ card: PaymentCard) throws {
+        var next = cards.filter { $0.id != card.id }
+        next.append(card)
+        try write(next, "cards")
+        cards = next
+    }
+
+    func delete(_ card: PaymentCard) throws {
+        let next = cards.filter { $0.id != card.id }
+        try write(next, "cards")
+        cards = next
+    }
 }

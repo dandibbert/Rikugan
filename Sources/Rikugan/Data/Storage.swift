@@ -49,33 +49,87 @@ enum AppPaths {
     }
 }
 
-/// Small Codable file persistence with debounced writes.
+/// Small Codable file persistence. Writes are debounced but go through one shared writer, so the
+/// latest value of every file is written in order, `PersistenceQueue.shared.flush()` can force
+/// them out (the app calls it when going to the background), and write / decode errors are
+/// reported instead of being dropped.
 final class JSONFile<Value: Codable> {
     let url: URL
-    private var pending: DispatchWorkItem?
-    private let queue = DispatchQueue(label: "rikugan.jsonfile", qos: .utility)
 
     init(_ url: URL) { self.url = url }
 
+    private static var encoder: JSONEncoder { let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e }
+
+    /// nil when the file does not exist. A file that exists but cannot be decoded is moved aside
+    /// (kept for recovery) and reported, rather than silently treated as an empty store.
     func load() -> Value? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(Value.self, from: data)
+        do {
+            return try decoder.decode(Value.self, from: Data(contentsOf: url))
+        } catch {
+            PersistenceQueue.quarantine(url, error: error)
+            return nil
+        }
     }
 
     func save(_ value: Value, immediately: Bool = false) {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(value) else { return }
-        pending?.cancel()
-        let url = self.url
-        let work = DispatchWorkItem {
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: url, options: [.atomic])
+        do {
+            PersistenceQueue.shared.schedule(try Self.encoder.encode(value), to: url, immediately: immediately)
+        } catch {
+            PersistenceQueue.report("编码失败", url: url, error: error)
         }
-        pending = work
-        if immediately { queue.sync(execute: work) } else { queue.asyncAfter(deadline: .now() + 0.4, execute: work) }
+    }
+
+    /// Synchronous write that throws (for transactions such as archive import).
+    func write(_ value: Value) throws {
+        try PersistenceQueue.shared.writeNow(try Self.encoder.encode(value), to: url)
+    }
+}
+
+/// Serialises all JSON file writes (latest value per file wins) and reports failures.
+final class PersistenceQueue: @unchecked Sendable {
+    static let shared = PersistenceQueue()
+    private let queue = DispatchQueue(label: "rikugan.persistence", qos: .utility)
+    private let lock = NSLock()
+    private var pending: [URL: Data] = [:]
+
+    func schedule(_ data: Data, to url: URL, immediately: Bool) {
+        lock.lock(); pending[url] = data; lock.unlock()
+        if immediately { flush() } else { queue.asyncAfter(deadline: .now() + 0.4) { self.drain() } }
+    }
+
+    /// Writes everything pending now (call from the main thread, never from the writer queue).
+    func flush() { queue.sync { drain() } }
+
+    func writeNow(_ data: Data, to url: URL) throws {
+        lock.lock(); pending.removeValue(forKey: url); lock.unlock()
+        try queue.sync { try Self.write(data, to: url) }
+    }
+
+    private func drain() {
+        lock.lock(); let work = pending; pending.removeAll(); lock.unlock()
+        for (url, data) in work {
+            do { try Self.write(data, to: url) } catch { Self.report("写入失败", url: url, error: error) }
+        }
+    }
+
+    private static func write(_ data: Data, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: [.atomic])
+    }
+
+    static func quarantine(_ url: URL, error: Error) {
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let target = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".corrupt-" + stamp)
+        try? FileManager.default.moveItem(at: url, to: target)
+        report("文件已损坏，已另存为 \(target.lastPathComponent)", url: url, error: error)
+    }
+
+    static func report(_ what: String, url: URL, error: Error) {
+        let message = "\(url.lastPathComponent)：\(what)（\((error as NSError).domain) \((error as NSError).code)）"
+        DispatchQueue.main.async { MainActor.assumeIsolated { ErrorLog.shared.record(message, source: "storage") } }
     }
 }
 
@@ -83,14 +137,18 @@ final class JSONFile<Value: Codable> {
 enum Keychain {
     static let service = "com.dandibbert.Rikugan.autofill"
 
+    /// Replaces the item in place (never delete-then-add, which loses the old value if the add fails).
     static func set(_ data: Data, account: String) throws {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecAttrAccount as String: account]
-        SecItemDelete(query as CFDictionary)
-        var attributes = query
-        attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        let status = SecItemAdd(attributes as CFDictionary, nil)
+        let update: [String: Any] = [kSecValueData as String: data]
+        var status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound {
+            var attributes = query
+            attributes[kSecValueData as String] = data
+            attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            status = SecItemAdd(attributes as CFDictionary, nil)
+        }
         guard status == errSecSuccess else { throw RikuganError("钥匙串写入失败（\(status)）") }
     }
 
@@ -113,6 +171,8 @@ enum Keychain {
     static func authenticate(reason: String) async -> Bool {
         let context = LAContext()
         var error: NSError?
+        // No passcode set: there is nothing to authenticate with. Secrets are still protected by
+        // kSecAttrAccessibleWhenUnlockedThisDeviceOnly; the UI says so (AutofillSettings).
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else { return true }
         return (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
     }

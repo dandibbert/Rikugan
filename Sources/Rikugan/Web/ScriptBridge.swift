@@ -77,7 +77,10 @@ extension WKScriptMessage {
             }
             return nil
         case "frame":
-            tab?.registerFrame(message.frameInfo)
+            tab?.registerFrame(message.frameInfo, token: args["token"] as? String)
+            return nil
+        case "frameGone":
+            if let token = args["token"] as? String { tab?.unregisterFrame(token: token) }
             return nil
         case "pickerDone":
             if let selector = args["selector"] as? String, let host = args["host"] as? String, !selector.isEmpty {

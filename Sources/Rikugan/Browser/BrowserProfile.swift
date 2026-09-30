@@ -60,7 +60,10 @@ struct ProfileInfo: Codable, Identifiable, Hashable {
 
     func releasePrivateStoreIfUnused() {
         let anyPrivate = TabRegistry.shared.allTabs.contains { $0.isPrivate && $0.profile === self }
-        if !anyPrivate { privateStore = nil }
+        if !anyPrivate {
+            privateStore = nil
+            FaviconCache.privateSession.clear()
+        }
     }
 
     func start() {

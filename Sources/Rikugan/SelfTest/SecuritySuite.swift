@@ -119,14 +119,23 @@ import WebKit
         // Diagnostics export privacy: the bug-report file carries the rejection count but none of the
         // secrets, stored values or full URLs present in this run.
         ErrorLog.shared.record("probe https://user:pw@private.example/path/secret-page?token=abc", source: "security-suite")
+        // An extension error carrying a secret and a local file path, as a real extension might.
+        ErrorLog.shared.record("TypeError: login failed password=SYNTHETIC_SECRET_42 at file:///private/var/mobile/x.js", source: "security-suite")
         let exported = (try? DiagnosticsReport.collect().json()).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        let leaks = ["victim-secret", "a-secret", "secret-page", "token=abc", "user:pw", "/sec/index.html"].filter { exported.contains($0) }
+        let optIn = (try? DiagnosticsReport.collect(includeErrorText: true).json()).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let secrets = ["victim-secret", "a-secret", "secret-page", "token=abc", "user:pw", "/sec/index.html", "SYNTHETIC_SECRET_42", "/private/var/mobile"]
+        let leaks = secrets.filter { exported.contains($0) }
+        let optInLeaks = secrets.filter { optIn.contains($0) }
+        ctx.record("诊断导出默认只含错误类型，不含错误原文", !exported.contains("probe https") && exported.contains("TypeError"),
+                   exported.contains("probe https") ? "message text exported" : "ok")
+        ctx.record("附带原文的导出已脱敏（密码、文件路径、网址路径）", optInLeaks.isEmpty && optIn.contains("\"includesErrorText\" : true"),
+                   optInLeaks.isEmpty ? "ok" : "leaked: \(optInLeaks)")
         ctx.record("诊断导出不含存储值 / 秘密 / 完整网址", !exported.isEmpty && leaks.isEmpty, leaks.isEmpty ? "\(exported.count) bytes" : "leaked: \(leaks)")
         let required = ["\"backgroundRuntime\"", "\"security\"", "\"featureFlags\"", "\"compatibilityMatrixVersion\"", "\"manualTests\"", "\"gitCommit\"", "\"privacy\"", "not CI results"]
         let missing = required.filter { !exported.contains($0) }
         ctx.record("诊断导出包含必需字段（后台、安全、开关、矩阵版本、人工清单、commit、隐私声明）", missing.isEmpty, missing.isEmpty ? "ok" : "missing: \(missing)")
         ctx.record("诊断导出中的安全拒绝计数与日志一致", exported.contains("\"rejectedPrivilegedCalls\" : \(SecurityLog.shared.totalRejected)"))
-        ctx.record("诊断导出中的网址只保留域名", exported.contains("https://private.example/…"))
+        ctx.record("诊断导出中的网址只保留域名", optIn.contains("https://private.example/…"))
 
         // Legitimate paths still work (the fixes did not break the victims).
         if let command = tab.menuCommands.first(where: { $0.title == "Victim command" }) {

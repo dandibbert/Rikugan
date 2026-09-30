@@ -364,7 +364,7 @@ struct TranslationSettingsView: View {
     @EnvironmentObject private var services: AppServices
     var body: some View {
         Form {
-            Section("翻译服务") {
+            Section {
                 Picker("服务", selection: $services.prefs.translationProvider) {
                     ForEach(Array(TranslationService.providerOptions.enumerated()), id: \.offset) { _, option in Text(option.name).tag(option.id) }
                 }
@@ -374,7 +374,15 @@ struct TranslationSettingsView: View {
                 if services.prefs.translationProvider == "libre" || services.prefs.translationProvider == "deepl" {
                     SecureField("API Key", text: $services.prefs.translationAPIKey)
                 }
-            }
+                if ["google", "microsoft"].contains(services.prefs.translationProvider) {
+                    Toggle("失败时改用另一个免费服务", isOn: $services.prefs.translationFreeFallback)
+                }
+            } header: {
+                Text("翻译服务")
+            } footer: {
+                Text(["libre", "deepl"].contains(services.prefs.translationProvider)
+                     ? "网页文本只发送到这里选择的服务，失败时不会改用其他服务。API Key 保存在钥匙串中，不会出现在导出文件里。"
+                     : "网页文本只发送到这里选择的服务。打开上面的开关后，Google 与 Microsoft 其中一个失败时会改用另一个。")
             Section("目标语言") {
                 Picker("翻译为", selection: $services.prefs.translationTargetLanguage) {
                     ForEach(TranslationLanguage.common) { Text($0.name).tag($0.code) }

@@ -92,6 +92,10 @@ enum TranslationState: Equatable {
     var frames: [WKFrameInfo] = []
     var pendingExternalConfiguration: WKWebViewConfiguration?
     var translationSourceLanguage: String?
+    /// Current translation run; a new run, stop or navigation cancels it (see TranslationCoordinator).
+    var translationTask: Task<Void, Never>?
+    var translationGeneration = 0
+    var translationTarget: String?
 
     var isHome: Bool { url == nil && webView?.url == nil }
     var host: String? { url?.host?.lowercased() }
@@ -395,7 +399,8 @@ enum TranslationState: Equatable {
 
     func refreshFavicon() {
         guard let webView, let pageURL = webView.url, let host = pageURL.host else { return }
-        if let cached = FaviconCache.shared.image(for: host) { favicon = cached; return }
+        let cache = isPrivate ? FaviconCache.privateSession : FaviconCache.shared
+        if let cached = cache.image(for: host) { favicon = cached; return }
         Task {
             let script = """
             const links = Array.from(document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"], link[rel="shortcut icon"]'));
@@ -405,7 +410,7 @@ enum TranslationState: Equatable {
             """
             let href = (try? await webView.rkCall(script, world: Worlds.tools)) as? String
             let iconURL = href.flatMap(URL.init(string:)) ?? URL(string: "\(pageURL.scheme ?? "https")://\(host)/favicon.ico")
-            guard let iconURL, let image = await FaviconCache.shared.fetch(iconURL, host: host) else { return }
+            guard let iconURL, let image = await cache.fetch(iconURL, host: host) else { return }
             if self.webView?.url?.host == host { self.favicon = image }
         }
     }
@@ -435,6 +440,9 @@ enum TranslationState: Equatable {
         menuCommands.removeAll()
         sniffedMedia.removeAll()
         consoleEntries.removeAll()
+        translationTask?.cancel()
+        translationGeneration += 1
+        translationTarget = nil
         translation = .idle
         frames.removeAll()
         frameRecords.removeAll()
@@ -449,29 +457,52 @@ enum TranslationState: Equatable {
     /// Frames reported by the tools world (used by scripting.executeScript allFrames / frameIds).
     private(set) var frameRecords: [LoadedExtension.FrameRecord] = []
 
-    func registerFrame(_ frame: WKFrameInfo) {
+    /// Identified by the per-document token the tools world generates, not by URL.
+    func registerFrame(_ frame: WKFrameInfo, token: String?) {
         guard !frame.isMainFrame else { return }
         let url = frame.request.url?.absoluteString ?? ""
-        if frameRecords.contains(where: { $0.url == url }) { return }
-        let id = 1000 + frameRecords.count
-        frameRecords.append(.init(frameID: id, frame: frame, url: url))
+        let token = token ?? UUID().uuidString
+        if frameRecords.contains(where: { $0.token == token }) { return }
+        let id = 1000 + (frameRecords.map(\.frameID).max().map { $0 - 999 } ?? 0)
+        frameRecords.append(.init(frameID: id, frame: frame, url: url, token: token))
     }
+
+    func unregisterFrame(token: String) { frameRecords.removeAll { $0.token == token } }
     var lastInjectedURL: URL? { injectedForURL }
 }
 
 /// Small in-memory favicon cache.
+/// Favicons are fetched without cookies and without any shared URL cache, so loading an icon
+/// never writes to (or reads from) a cookie jar or disk cache. Private tabs use their own
+/// in-memory cache, cleared when the private session ends.
 @MainActor final class FaviconCache {
     static let shared = FaviconCache()
+    static let privateSession = FaviconCache()
     private var images: [String: UIImage] = [:]
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
 
     func image(for host: String) -> UIImage? { images[host] }
 
     func fetch(_ url: URL, host: String) async -> UIImage? {
         var request = URLRequest(url: url, timeoutInterval: 8)
         request.setValue("image/*", forHTTPHeaderField: "Accept")
-        guard let (data, _) = try? await URLSession.shared.data(for: request), let image = UIImage(data: data) else { return nil }
+        guard let (data, _) = try? await session.data(for: request), let image = UIImage(data: data) else { return nil }
         images[host] = image
         return image
+    }
+
+    func clear() {
+        images.removeAll()
+        session.invalidateAndCancel()
+        session = { let c = URLSessionConfiguration.ephemeral; c.httpShouldSetCookies = false; c.httpCookieAcceptPolicy = .never
+                    c.httpCookieStorage = nil; c.urlCache = nil; return URLSession(configuration: c) }()
     }
 }
 

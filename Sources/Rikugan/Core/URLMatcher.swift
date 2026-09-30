@@ -199,15 +199,67 @@ public enum DomainTools {
         return result
     }
 
-    /// Very small registrable-domain heuristic (handles common two-level public suffixes).
+    /// Hosting platforms where every sub-domain belongs to a different owner (a subset of the
+    /// Public Suffix List's private section).
+    static let privateSuffixes: Set<String> = [
+        "github.io", "gitlab.io", "pages.dev", "workers.dev", "vercel.app", "netlify.app", "herokuapp.com", "appspot.com",
+        "blogspot.com", "cloudfront.net", "azurewebsites.net", "firebaseapp.com", "web.app", "glitch.me", "repl.co",
+        "fly.dev", "onrender.com", "surge.sh", "neocities.org", "wordpress.com", "tumblr.com", "myshopify.com",
+    ]
+    static let secondLevelLabels: Set<String> = ["co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "mil", "nom", "gob", "gen"]
+
+    /// Conservative public-suffix test: a single label, `<co|com|org…>.<ccTLD>`, or a known hosting
+    /// platform. Errs on the side of treating something as a suffix (then it is refused).
+    public static func isPublicSuffix(_ domain: String) -> Bool {
+        let d = domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let parts = d.split(separator: ".").map(String.init)
+        if parts.count <= 1 { return true }
+        if privateSuffixes.contains(d) { return true }
+        if parts.count == 2, parts[1].count == 2, secondLevelLabels.contains(parts[0]) { return true }
+        return false
+    }
+
+    /// Registrable domain (eTLD+1) using `isPublicSuffix`.
     public static func registrableDomain(_ host: String) -> String {
         let parts = host.lowercased().split(separator: ".").map(String.init)
-        guard parts.count > 2 else { return host.lowercased() }
-        let twoLevel: Set<String> = ["co.uk", "org.uk", "ac.uk", "gov.uk", "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn",
-                                     "com.hk", "com.tw", "co.jp", "ne.jp", "or.jp", "co.kr", "com.au", "net.au", "org.au",
-                                     "com.br", "com.sg", "co.nz", "co.in", "com.mx", "co.za", "com.tr", "com.ru"]
-        let lastTwo = parts.suffix(2).joined(separator: ".")
-        if twoLevel.contains(lastTwo) { return parts.suffix(3).joined(separator: ".") }
-        return lastTwo
+        guard parts.count > 1 else { return host.lowercased() }
+        for n in 1..<parts.count where isPublicSuffix(parts.suffix(n).joined(separator: ".")) && !isPublicSuffix(parts.suffix(n + 1).joined(separator: ".")) {
+            return parts.suffix(n + 1).joined(separator: ".")
+        }
+        return parts.suffix(2).joined(separator: ".")
+    }
+
+    public static func isIPAddress(_ host: String) -> Bool {
+        host.contains(":") || host.split(separator: ".").count == 4 && host.split(separator: ".").allSatisfy { UInt8($0) != nil }
+    }
+}
+
+/// Cookie domain rules shared by chrome.cookies and GM_cookie (RFC 6265 §5.3).
+public enum CookieScope {
+    /// Whether a stored cookie would be sent with a request to `url` (RFC 6265 §5.4): host-only vs
+    /// domain match, path prefix, Secure only over https, not expired.
+    public static func cookie(_ cookie: HTTPCookie, appliesTo url: URL, now: Date = Date()) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        let isDomainCookie = cookie.domain.hasPrefix(".")
+        let domain = (isDomainCookie ? String(cookie.domain.dropFirst()) : cookie.domain).lowercased()
+        let domainOK = isDomainCookie ? DomainTools.host(host, isWithin: domain) : host == domain
+        let path = url.path.isEmpty ? "/" : url.path
+        let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
+        let pathOK = path == cookiePath || (path.hasPrefix(cookiePath) && (cookiePath.hasSuffix("/") || path.dropFirst(cookiePath.count).hasPrefix("/")))
+        let secureOK = !cookie.isSecure || url.scheme?.lowercased() == "https"
+        let fresh = cookie.expiresDate.map { $0 > now } ?? true
+        return domainOK && pathOK && secureOK && fresh
+    }
+
+    /// The `Domain` a cookie set for `url` may carry, or nil when the request is not allowed:
+    /// the domain must domain-match the URL's host and must not be a public suffix; IP hosts only
+    /// allow host-only cookies. nil `requested` means a host-only cookie for the URL's host.
+    public static func domain(requested: String?, for url: URL) -> String? {
+        guard let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        guard let raw = requested?.lowercased(), !raw.trimmingCharacters(in: CharacterSet(charactersIn: ".")).isEmpty else { return host }
+        let d = raw.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        if DomainTools.isIPAddress(host) { return d == host ? host : nil }
+        guard DomainTools.host(host, isWithin: d), !DomainTools.isPublicSuffix(d) else { return nil }
+        return "." + d
     }
 }

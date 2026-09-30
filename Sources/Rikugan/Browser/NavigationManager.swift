@@ -26,7 +26,11 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         }
 
         if scheme == profile.extensions.scheme {
-            decisionHandler(profile.extensions.canNavigate(to: target, from: webView.url) ? .allow : .cancel, preferences)
+            let allowed = !isPrivate && profile.extensions.canNavigate(to: target, from: webView.url)
+            // An extension page (options, dashboard) in a normal tab gets its chrome.* runtime like
+            // the popup does; the previous page's scripts are replaced.
+            if allowed, isMainFrame { WebViewFactory.prepareContent(for: self, url: target) }
+            decisionHandler(allowed ? .allow : .cancel, preferences)
             return
         }
 

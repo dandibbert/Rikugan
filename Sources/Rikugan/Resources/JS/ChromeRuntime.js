@@ -17,7 +17,7 @@
   };
   const bridge = (api, args) => {
     if (!postRaw) return Promise.reject(new Error('Rikugan extension bridge unavailable'));
-    return postRaw({ ch: 'chrome', ext: cfg.extId, ctx: cfg.ctx, api, args: jsonable(args === undefined ? {} : args) });
+    return postRaw({ ch: 'chrome', ext: cfg.extId, ctx: cfg.ctx, api, args: jsonable(args === undefined ? {} : args), frame: contentFrameToken });
   };
 
   // ---- lastError / callback+promise dual mode -------------------------------------------------
@@ -123,6 +123,8 @@
     }
   }
   const uuid = () => (g.crypto && crypto.randomUUID ? crypto.randomUUID() : 'p' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+  // Identifies this content-script document (frame) in native messages; URLs are not unique.
+  var contentFrameToken = cfg.ctx === 'content' ? uuid() : null;
   const connect = (target, info) => {
     const portId = uuid();
     const port = new Port(portId, info && info.name);
@@ -698,6 +700,11 @@
     if (document.readyState === 'complete') setTimeout(signalReady, 0);
     else addEventListener('load', () => setTimeout(signalReady, 0), { once: true });
   } else {
-    bridge('runtime._ready', { ctx: 'content', url: String(location.href), top: (() => { try { return top === self; } catch (_) { return false; } })() }).catch(() => {});
+    const isTopFrame = (() => { try { return top === self; } catch (_) { return false; } })();
+    const frameToken = contentFrameToken;
+    bridge('runtime._ready', { ctx: 'content', url: String(location.href), top: isTopFrame, frameToken }).catch(() => {});
+    if (!isTopFrame && typeof addEventListener === 'function') {
+      addEventListener('pagehide', () => { bridge('runtime._frameGone', { frameToken }).catch(() => {}); });
+    }
   }
 })(/*__RK_CHROME_CONFIG__*/null);

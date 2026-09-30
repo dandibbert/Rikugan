@@ -90,6 +90,8 @@ struct BrowserWindowHost: View {
                     // Keep the current page's thumbnail for the tab switcher after a relaunch.
                     manager.activeTab?.captureThumbnail()
                     manager.save()
+                    // The app may be suspended right after this: write pending files now.
+                    PersistenceQueue.shared.flush()
                 @unknown default: break
                 }
             }

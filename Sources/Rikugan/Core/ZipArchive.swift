@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 #if canImport(Compression)
 import Compression
 #endif
@@ -161,9 +164,17 @@ public struct ZipArchive {
 
 /// Chrome CRX (v2 / v3) container.
 public struct CRXPackage {
+    public enum Algorithm { case rsaSHA256, ecdsaSHA256, rsaSHA1 }
+    public struct Proof { public let algorithm: Algorithm; public let publicKey: Data; public let signature: Data }
+
+    public let version: Int
     public let zipData: Data
     public let publicKey: Data?
+    /// ID declared by the package (CRX3 signed header, or derived from the CRX2 key). Not proof of
+    /// authenticity on its own — see `verifiedID()`.
     public let crxID: String?
+    public let proofs: [Proof]
+    let signedHeaderData: Data?
 
     public init(data: Data) throws {
         let b = [UInt8](data)
@@ -171,40 +182,134 @@ public struct CRXPackage {
         guard b.count > 16, b[0] == 0x43, b[1] == 0x72, b[2] == 0x32, b[3] == 0x34 else {
             throw RikuganError("不是 CRX 文件（缺少 Cr24 头）")
         }
-        let version = u32(4)
+        version = u32(4)
         if version == 2 {
             let keyLength = u32(8), sigLength = u32(12)
             let start = 16 + keyLength + sigLength
-            guard start < b.count else { throw RikuganError("CRX2 文件损坏") }
-            publicKey = data.subdata(in: 16..<(16 + keyLength))
+            guard keyLength > 0, sigLength > 0, start < b.count else { throw RikuganError("CRX2 文件损坏") }
+            let key = data.subdata(in: 16..<(16 + keyLength))
+            publicKey = key
             zipData = data.subdata(in: start..<b.count)
-            crxID = publicKey.map(ExtensionID.fromPublicKey)
+            crxID = ExtensionID.fromPublicKey(key)
+            proofs = [Proof(algorithm: .rsaSHA1, publicKey: key, signature: data.subdata(in: (16 + keyLength)..<start))]
+            signedHeaderData = nil
         } else if version == 3 {
             let headerLength = u32(8)
             let start = 12 + headerLength
             guard start < b.count else { throw RikuganError("CRX3 文件损坏") }
             let header = Array(b[12..<start])
             zipData = data.subdata(in: start..<b.count)
-            var key: Data?
             var id: String?
-            // CrxFileHeader: 2 = sha256_with_rsa (AsymmetricKeyProof), 10000 = signed_header_data
+            var signed: Data?
+            var found: [Proof] = []
+            // CrxFileHeader: 2 = sha256_with_rsa, 3 = sha256_with_ecdsa (AsymmetricKeyProof
+            // {1: public_key, 2: signature}), 10000 = signed_header_data (SignedData {1: crx_id}).
             for field in Protobuf.fields(header) {
-                if field.number == 10000, let signed = field.bytes {
-                    for inner in Protobuf.fields(signed) where inner.number == 1 {
-                        if let raw = inner.bytes, raw.count == 16 { id = ExtensionID.fromRawID(Data(raw)) }
+                if field.number == 10000, let raw = field.bytes {
+                    signed = Data(raw)
+                    for inner in Protobuf.fields(raw) where inner.number == 1 {
+                        if let rawID = inner.bytes, rawID.count == 16 { id = ExtensionID.fromRawID(Data(rawID)) }
                     }
                 }
-                if field.number == 2, key == nil, let proof = field.bytes {
-                    for inner in Protobuf.fields(proof) where inner.number == 1 {
-                        if let raw = inner.bytes { key = Data(raw) }
+                if field.number == 2 || field.number == 3, let proof = field.bytes {
+                    var key: Data?, signature: Data?
+                    for inner in Protobuf.fields(proof) {
+                        if inner.number == 1, let raw = inner.bytes { key = Data(raw) }
+                        if inner.number == 2, let raw = inner.bytes { signature = Data(raw) }
+                    }
+                    if let key, let signature {
+                        found.append(Proof(algorithm: field.number == 2 ? .rsaSHA256 : .ecdsaSHA256, publicKey: key, signature: signature))
                     }
                 }
             }
-            publicKey = key
-            crxID = id ?? key.map(ExtensionID.fromPublicKey)
+            proofs = found
+            signedHeaderData = signed
+            publicKey = found.first { id != nil && ExtensionID.fromPublicKey($0.publicKey) == id }?.publicKey ?? found.first?.publicKey
+            crxID = id ?? publicKey.map(ExtensionID.fromPublicKey)
         } else {
             throw RikuganError("不支持的 CRX 版本 \(version)")
         }
+    }
+
+    /// The package ID, only if a valid signature over the payload was made by the key that ID is
+    /// derived from (what Chrome checks). nil for an unsigned, tampered or foreign-signed package.
+    public func verifiedID() -> String? {
+        switch version {
+        case 2:
+            guard let proof = proofs.first else { return nil }
+            return CRXSignature.verify(proof, message: zipData) ? ExtensionID.fromPublicKey(proof.publicKey) : nil
+        case 3:
+            guard let signed = signedHeaderData, let id = crxID else { return nil }
+            var message = Data("CRX3 SignedData".utf8)
+            message.append(0)
+            let n = UInt32(signed.count)
+            message.append(contentsOf: [UInt8(n & 0xFF), UInt8((n >> 8) & 0xFF), UInt8((n >> 16) & 0xFF), UInt8((n >> 24) & 0xFF)])
+            message.append(signed)
+            message.append(zipData)
+            let developerProofs = proofs.filter { ExtensionID.fromPublicKey($0.publicKey) == id }
+            return developerProofs.contains { CRXSignature.verify($0, message: message) } ? id : nil
+        default:
+            return nil
+        }
+    }
+}
+
+/// Signature checks with the Security framework. Keys are X.509 SubjectPublicKeyInfo (DER).
+enum CRXSignature {
+    static func verify(_ proof: CRXPackage.Proof, message: Data) -> Bool {
+        #if canImport(Security)
+        guard let parsed = subjectPublicKey(proof.publicKey) else { return false }
+        let (algorithmOID, keyBits) = parsed
+        let isEC = algorithmOID == ecPublicKeyOID
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: isEC ? kSecAttrKeyTypeECSECPrimeRandom : kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+        ]
+        guard let key = SecKeyCreateWithData(keyBits as CFData, attributes as CFDictionary, nil) else { return false }
+        let algorithm: SecKeyAlgorithm
+        switch proof.algorithm {
+        case .rsaSHA256: algorithm = .rsaSignatureMessagePKCS1v15SHA256
+        case .rsaSHA1: algorithm = .rsaSignatureMessagePKCS1v15SHA1
+        case .ecdsaSHA256: algorithm = .ecdsaSignatureMessageX962SHA256
+        }
+        guard (proof.algorithm == .ecdsaSHA256) == isEC, SecKeyIsAlgorithmSupported(key, .verify, algorithm) else { return false }
+        return SecKeyVerifySignature(key, algorithm, message as CFData, proof.signature as CFData, nil)
+        #else
+        return false
+        #endif
+    }
+
+    static let ecPublicKeyOID: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01] // 1.2.840.10045.2.1
+
+    /// SubjectPublicKeyInfo ::= SEQUENCE { algorithm SEQUENCE { OID, params }, subjectPublicKey BIT STRING }
+    /// Returns the algorithm OID and the key bits (PKCS#1 RSAPublicKey or an X9.63 EC point).
+    static func subjectPublicKey(_ der: Data) -> ([UInt8], Data)? {
+        let bytes = [UInt8](der)
+        var index = 0
+        func readTLV() -> (tag: UInt8, range: Range<Int>)? {
+            guard index + 2 <= bytes.count else { return nil }
+            let tag = bytes[index]; index += 1
+            var length = Int(bytes[index]); index += 1
+            if length & 0x80 != 0 {
+                let count = length & 0x7F
+                guard count > 0, count <= 4, index + count <= bytes.count else { return nil }
+                length = 0
+                for _ in 0..<count { length = length << 8 | Int(bytes[index]); index += 1 }
+            }
+            guard index + length <= bytes.count else { return nil }
+            defer { index += length }
+            return (tag, index..<(index + length))
+        }
+        guard let outer = readTLV(), outer.tag == 0x30 else { return nil }
+        index = outer.range.lowerBound
+        guard let algorithm = readTLV(), algorithm.tag == 0x30 else { return nil }
+        let afterAlgorithm = index
+        index = algorithm.range.lowerBound
+        guard let oid = readTLV(), oid.tag == 0x06 else { return nil }
+        let oidBytes = Array(bytes[oid.range])
+        index = afterAlgorithm
+        guard let bitString = readTLV(), bitString.tag == 0x03, bitString.range.count > 1, bytes[bitString.range.lowerBound] == 0 else { return nil }
+        return (oidBytes, Data(bytes[(bitString.range.lowerBound + 1)..<bitString.range.upperBound]))
     }
 }
 

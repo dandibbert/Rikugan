@@ -96,6 +96,13 @@ public enum DNRConverter {
             default:
                 output.skipped.append((id, "未知动作 \(type)")); continue
             }
+            // A condition WebKit cannot express makes the whole rule unusable: applying it without
+            // that condition would make it match more than the extension asked for.
+            let inexpressible = ["requestMethods", "excludedRequestMethods", "tabIds", "excludedTabIds", "excludedRequestDomains",
+                                 "responseHeaders", "excludedResponseHeaders", "topDomains", "excludedTopDomains"]
+            if let key = inexpressible.first(where: { condition[$0] != nil }) {
+                output.skipped.append((id, "条件 \(key) 无法在 WebKit 内容规则中表达，规则未应用")); continue
+            }
             var regexes: [String] = []
             if let filter = condition["urlFilter"] as? String {
                 guard let regex = ABPPattern.regex(filter) else { output.skipped.append((id, "urlFilter 无法转换")); continue }
@@ -107,11 +114,13 @@ public enum DNRConverter {
                 regexes = [".*"]
             }
             let requestDomains = condition["requestDomains"] as? [String] ?? []
-            if !requestDomains.isEmpty {
-                // Combining a request domain with an arbitrary filter is not expressible; keep the filter then.
-                if regexes == [".*"] {
-                    regexes = requestDomains.map { ABPPattern.domainAnchor + URLMatcher.escape($0.lowercased()) + ABPPattern.separator }
+            let hasURLCondition = condition["urlFilter"] != nil || condition["regexFilter"] != nil
+            if !requestDomains.isEmpty, mapped != .allowDocument {
+                // "request domain AND url filter" needs a conjunction WebKit's url-filter lacks.
+                guard !hasURLCondition else {
+                    output.skipped.append((id, "requestDomains 与 urlFilter / regexFilter 同时使用无法等价表达，规则未应用")); continue
                 }
+                regexes = requestDomains.map { ABPPattern.domainAnchor + URLMatcher.escape($0.lowercased()) + ABPPattern.separator }
             }
             var base = NetworkRule(action: mapped, urlRegex: ".*")
             base.priority = rule["priority"] as? Int
@@ -128,8 +137,12 @@ public enum DNRConverter {
             if let domainType = condition["domainType"] as? String { base.thirdParty = domainType == "thirdParty" }
             let initiators = (condition["initiatorDomains"] as? [String]) ?? (condition["domains"] as? [String]) ?? []
             let excludedInitiators = (condition["excludedInitiatorDomains"] as? [String]) ?? (condition["excludedDomains"] as? [String]) ?? []
+            // WebKit allows if-domain or unless-domain on a trigger, not both.
+            if !initiators.isEmpty, !excludedInitiators.isEmpty {
+                output.skipped.append((id, "initiatorDomains 与 excludedInitiatorDomains 同时使用无法等价表达，规则未应用")); continue
+            }
             base.ifDomains = initiators
-            if initiators.isEmpty { base.unlessDomains = excludedInitiators }
+            base.unlessDomains = excludedInitiators
             var types: [FilterResourceType] = []
             var contexts: Set<String> = []
             let resourceTypes = condition["resourceTypes"] as? [String]
@@ -154,13 +167,17 @@ public enum DNRConverter {
             base.resourceTypes = Array(Set(types)).sorted { $0.rawValue < $1.rawValue }
             if contexts.count == 1, !types.contains(where: { $0 != .document }) { base.loadContext = Array(contexts) }
             if mapped == .allowDocument {
-                // Applies to every request of matching documents.
-                base.resourceTypes = []
-                if let host = initiators.first ?? requestDomains.first {
-                    base.ifDomains = [host]; base.unlessDomains = []
-                } else if regexes != [".*"] {
-                    output.skipped.append((id, "allowAllRequests 仅支持 initiator / request 域名条件（已近似处理）"))
+                // Expressed as "ignore earlier rules for every request of documents on these
+                // domains". Only a document-domain condition (requestDomains) maps exactly; a URL
+                // filter or an initiator condition does not, and such a rule is not applied at all
+                // (turning it into ".*" would disable the extension's blocking everywhere).
+                if hasURLCondition || !initiators.isEmpty || !excludedInitiators.isEmpty {
+                    output.skipped.append((id, "allowAllRequests 只支持 requestDomains 条件，规则未应用")); continue
                 }
+                base.resourceTypes = []
+                base.loadContext = []
+                base.ifDomains = requestDomains
+                base.unlessDomains = []
                 regexes = [".*"]
             }
             for regex in regexes {

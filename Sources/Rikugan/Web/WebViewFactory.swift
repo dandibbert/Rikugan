@@ -133,7 +133,7 @@ import UIKit
         }
 
         // 4. Extension content scripts.
-        if isWeb || url.scheme == "about", site.extensionsEnabled != false {
+        if isWeb || url.scheme == "about" || url.scheme == profile.extensions.scheme, site.extensionsEnabled != false {
             for item in profile.extensions.contentScripts(for: url, tab: tab) {
                 ensureHandler(controller, world: item.world, profile: profile)
                 controller.addUserScript(WKUserScript(source: item.source, injectionTime: item.time, forMainFrameOnly: item.mainFrameOnly, in: item.world))

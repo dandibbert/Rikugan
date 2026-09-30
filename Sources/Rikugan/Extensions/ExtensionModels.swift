@@ -80,6 +80,7 @@ struct ExtensionAlarm {
         let frameID: Int
         let frame: WKFrameInfo
         let url: String
+        var token: String = ""
     }
 
     init(record: InstalledExtension, manifest: ExtensionManifest, directory: URL, scheme: String) {
@@ -102,7 +103,10 @@ struct ExtensionAlarm {
         // Lexical check (see ZipArchive.safeRelativePath): filesystem-normalised prefixes differ
         // between existing and not-yet-existing paths under /private on devices.
         guard let safe = ZipArchive.safeRelativePath(decoded) else { return nil }
-        return directory.appendingPathComponent(safe)
+        let url = directory.appendingPathComponent(safe)
+        // Never serve a symbolic link (it could point outside the package).
+        if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { return nil }
+        return url
     }
 
     func text(_ path: String) -> String? {

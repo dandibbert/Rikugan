@@ -163,6 +163,18 @@ final class ArchiveTests: XCTestCase {
         XCTAssertEqual(decoded.summary.groups, 1)
     }
 
+    /// Secrets are not part of the settings JSON at all: an archive never contains the translation
+    /// key field, and an old archive carrying one does not bring it back on import.
+    func testArchiveContainsNoTranslationKey() throws {
+        let text = String(decoding: try ArchiveCodec.encode(makeArchive()), as: UTF8.self)
+        XCTAssertFalse(text.contains(Preferences.translationKeyAccount))
+        let legacy = Data(#"{"searchEngineID":"bing","translationAPIKey":"SENTINEL-SECRET-123"}"#.utf8)
+        let decoded = try JSONDecoder().decode(Preferences.self, from: legacy)
+        XCTAssertEqual(decoded.searchEngineID, "bing")
+        let reencoded = String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self)
+        XCTAssertFalse(reencoded.contains("SENTINEL-SECRET-123"))
+    }
+
     func testMergeDoesNotDuplicateAndRemapsIDs() throws {
         let archive = makeArchive()
         let once = ArchiveCodec.apply(archive.profiles[0], to: ProfileData(), mode: .merge)

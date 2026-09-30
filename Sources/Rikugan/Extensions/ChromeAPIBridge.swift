@@ -38,6 +38,7 @@ import UserNotifications
         let ext: LoadedExtension
         let ctx: String            // content | page | background
         let message: WKScriptMessage
+        var frameToken: String? = nil
         var tab: BrowserTab? { message.tab }
         var webView: WKWebView? { message.webView }
         var endpoint: Endpoint {
@@ -86,7 +87,7 @@ import UserNotifications
                 throw RikuganError("Extension page origin mismatch")
             }
         }
-        let caller = Caller(ext: ext, ctx: ctx, message: message)
+        let caller = Caller(ext: ext, ctx: ctx, message: message, frameToken: body["frame"] as? String)
         let api = body["api"] as? String ?? ""
         let argsDict = body["args"] as? [String: Any] ?? [:]
         let list = argsDict["args"] as? [Any] ?? []
@@ -95,7 +96,7 @@ import UserNotifications
 
         let contentAllowed: Set<String> = ["runtime.sendMessage", "runtime.connect", "port.post", "port.disconnect", "runtime._ready",
                                            "runtime._readResource", "events.subscribe", "i18n.detectLanguage",
-                                           "runtime._reportError", "runtime._reportUnsupported"]
+                                           "runtime._reportError", "runtime._reportUnsupported", "runtime._frameGone"]
         if ctx == "content", !api.hasPrefix("storage."), !contentAllowed.contains(api) {
             throw RikuganError("Unsupported API: \(api) is not available in content scripts")
         }
@@ -106,9 +107,16 @@ import UserNotifications
         // ---- runtime ----------------------------------------------------------------------------------
         case "runtime._ready":
             if ctx == "background" { ext.background?.markReady() }
-            else if ctx == "content", let tab = caller.tab { _ = runtime.registerContentFrame(ext: ext, tab: tab, frame: message.frameInfo) }
+            else if ctx == "content", let tab = caller.tab {
+                _ = runtime.registerContentFrame(ext: ext, tab: tab, frame: message.frameInfo, token: argsDict["frameToken"] as? String)
+            }
             else if let webView = caller.webView, runtime.pageKind(of: webView) == nil, caller.tab == nil {
                 runtime.registerPage(webView, extID: ext.id, kind: "page")
+            }
+            return nil
+        case "runtime._frameGone":
+            if ctx == "content", let tab = caller.tab, let token = argsDict["frameToken"] as? String {
+                runtime.unregisterContentFrame(ext: ext, tab: tab, token: token)
             }
             return nil
         case "events.subscribe":
@@ -152,6 +160,13 @@ import UserNotifications
             }
 
         // ---- storage ----------------------------------------------------------------------------------
+        // Every storage call: the area is one of Chrome's four (it becomes part of a file name, so
+        // anything else could address another extension's file) and the permission is declared.
+        case let name where name.hasPrefix("storage.") && !Self.storageAreas.contains(argsDict["area"] as? String ?? "local"):
+            SecurityLog.shared.record("chrome.\(name) rejected: invalid storage area from \(ext.displayName)")
+            throw RikuganError("Invalid storage area")
+        case let name where name.hasPrefix("storage.") && !(ext.has("storage") || ext.has("unlimitedStorage")):
+            throw RikuganError("Permission 'storage' is required to use chrome.storage")
         case "storage.get":
             let area = argsDict["area"] as? String ?? "local"
             try requireStorage(ext)
@@ -174,12 +189,15 @@ import UserNotifications
             }
             let size = all.reduce(0) { $0 + $1.key.utf8.count + $1.value.utf8.count }
             if area == "sync", size > 102_400 { throw RikuganError("QUOTA_BYTES quota exceeded") }
-            if area == "local", size > 10_485_760, !ext.has("unlimitedStorage") { throw RikuganError("QUOTA_BYTES quota exceeded") }
+            if area == "local" || area == "session", size > 10_485_760, !(area == "local" && ext.has("unlimitedStorage")) {
+                throw RikuganError("QUOTA_BYTES quota exceeded")
+            }
             runtime.setStorage(ext, area: area, all)
             runtime.storageChanged(ext, area: area, changes: changes)
             return nil
         case "storage.remove":
             let area = argsDict["area"] as? String ?? "local"
+            guard area != "managed" else { throw RikuganError("storage.managed is read-only") }
             var all = runtime.storage(ext, area: area)
             var changes: [String: [String: Any]] = [:]
             for key in argsDict["keys"] as? [String] ?? [] { if let old = all.removeValue(forKey: key) { changes[key] = ["oldValue": old] } }
@@ -188,6 +206,7 @@ import UserNotifications
             return nil
         case "storage.clear":
             let area = argsDict["area"] as? String ?? "local"
+            guard area != "managed" else { throw RikuganError("storage.managed is read-only") }
             let all = runtime.storage(ext, area: area)
             runtime.setStorage(ext, area: area, [:])
             runtime.storageChanged(ext, area: area, changes: all.mapValues { ["oldValue": $0] })
@@ -249,7 +268,7 @@ import UserNotifications
         case "tabs.goForward":
             try tabFor(arg(0) as? Int, caller: caller).goForward(); return nil
         case "tabs.captureVisibleTab":
-            guard let tab = TabRegistry.shared.focusedWindow?.activeTab, let webView = tab.webView else { throw RikuganError("No active tab") }
+            guard let tab = TabRegistry.shared.focusedWindow?.activeTab, !tab.isPrivate, let webView = tab.webView else { throw RikuganError("No active tab") }
             guard ext.hostAllowed(webView.url, tabID: tab.numericID) || ext.record.grantedHosts.contains("<all_urls>") else {
                 throw RikuganError("Missing host permission or activeTab for captureVisibleTab")
             }
@@ -445,13 +464,15 @@ import UserNotifications
 
         // ---- webNavigation ---------------------------------------------------------------------------------
         case "webNavigation.getFrame":
+            try requirePermission(ext, "webNavigation")
             let d = dict(0)
-            guard let tab = (d["tabId"] as? Int).flatMap(TabRegistry.shared.tab) else { return nil }
+            guard let tab = (d["tabId"] as? Int).flatMap(TabRegistry.shared.tab), !tab.isPrivate else { return nil }
             let frameID = d["frameId"] as? Int ?? 0
             if frameID == 0 { return ["url": tab.webView?.url?.absoluteString ?? "", "parentFrameId": -1, "errorOccurred": false, "frameId": 0] }
             return ext.contentFrames[tab.numericID]?.first { $0.frameID == frameID }.map { ["url": $0.url, "parentFrameId": 0, "errorOccurred": false, "frameId": $0.frameID] }
         case "webNavigation.getAllFrames":
-            guard let tab = (dict(0)["tabId"] as? Int).flatMap(TabRegistry.shared.tab) else { return nil }
+            try requirePermission(ext, "webNavigation")
+            guard let tab = (dict(0)["tabId"] as? Int).flatMap(TabRegistry.shared.tab), !tab.isPrivate else { return nil }
             var frames: [[String: Any]] = [["url": tab.webView?.url?.absoluteString ?? "", "parentFrameId": -1, "errorOccurred": false, "frameId": 0, "processId": -1]]
             for record in ext.contentFrames[tab.numericID] ?? [] where record.frameID != 0 {
                 frames.append(["url": record.url, "parentFrameId": 0, "errorOccurred": false, "frameId": record.frameID, "processId": -1])
@@ -472,6 +493,8 @@ import UserNotifications
     }
 
     // MARK: Helpers
+
+    static let storageAreas: Set<String> = ["local", "sync", "session", "managed"]
 
     func requirePermission(_ ext: LoadedExtension, _ permission: String) throws {
         guard ext.has(permission) else { throw RikuganError("Permission '\(permission)' is required. Declare it in manifest.json.") }
@@ -494,7 +517,8 @@ import UserNotifications
             guard let tab = TabRegistry.shared.tab(id), !tab.isPrivate else { throw RikuganError("No tab with id: \(id)") }
             return tab
         }
-        guard let tab = caller.tab ?? TabRegistry.shared.focusedWindow?.activeTab else { throw RikuganError("No active tab") }
+        // Implicit addressing ("the current tab") must not reach a private tab either.
+        guard let tab = caller.tab ?? TabRegistry.shared.focusedWindow?.activeTab, !tab.isPrivate else { throw RikuganError("No active tab") }
         return tab
     }
 
@@ -579,8 +603,8 @@ import UserNotifications
         sender["origin"] = URL(string: frameURL).map { "\($0.scheme ?? "")://\($0.host ?? "")" + ($0.port.map { ":\($0)" } ?? "") } ?? ""
         if caller.ctx == "content", let tab = caller.tab {
             sender["tab"] = tabJSON(tab, for: caller.ext)
-            sender["frameId"] = caller.ext.contentFrames[tab.numericID]?.first { $0.url == frameURL && $0.frame.isMainFrame == caller.message.frameInfo.isMainFrame }?.frameID
-                ?? (caller.message.frameInfo.isMainFrame ? 0 : 1)
+            sender["frameId"] = caller.message.frameInfo.isMainFrame ? 0
+                : (caller.ext.contentFrames[tab.numericID]?.first { $0.token == caller.frameToken }?.frameID ?? -1)
             sender["documentLifecycle"] = "active"
         } else if let tab = caller.tab {
             sender["tab"] = tabJSON(tab, for: caller.ext)
@@ -762,18 +786,40 @@ import UserNotifications
 
     // MARK: scripting.executeScript / insertCSS
 
-    private func targetFrames(_ target: [String: Any], ext: LoadedExtension, caller: Caller) throws -> (BrowserTab, [WKFrameInfo?]) {
+    struct TargetFrame { let info: WKFrameInfo?; let id: Int }
+
+    /// Frames an injection may reach: the "scripting" permission is required, and every frame is
+    /// checked against the extension's access to *that frame's* origin (activeTab covers only the
+    /// tab's top-level origin). Frames the extension may not access are skipped, never injected.
+    private func targetFrames(_ target: [String: Any], ext: LoadedExtension, caller: Caller) throws -> (BrowserTab, [TargetFrame]) {
+        try requirePermission(ext, "scripting")
         let tab = try tabFor(target["tabId"] as? Int, caller: caller)
-        guard ext.hostAllowed(tab.webView?.url, tabID: tab.numericID) else {
+        guard !tab.isPrivate else { throw RikuganError("No tab with id: \(tab.numericID)") }
+        let topURL = tab.webView?.url
+        guard ext.hostAllowed(topURL, tabID: tab.numericID) else {
             throw RikuganError("Cannot access contents of the page. Extension manifest must request permission to access the respective host.")
         }
-        var frames: [WKFrameInfo?] = [nil]
-        let known = (ext.contentFrames[tab.numericID] ?? []) + tab.frameRecords
+        func origin(_ url: URL?) -> String { url.map { "\($0.scheme ?? "")://\($0.host ?? "")\($0.port.map { ":\($0)" } ?? "")" } ?? "" }
+        func mayAccess(_ record: LoadedExtension.FrameRecord) -> Bool {
+            let url = URL(string: record.url) ?? record.frame.request.url
+            if ext.hostAllowed(url) { return true }
+            return ext.activeTabGrants.contains(tab.numericID) && origin(url) == origin(topURL)
+        }
+        let contentFrames = (ext.contentFrames[tab.numericID] ?? []).filter { !$0.frame.isMainFrame }
+        var frames: [TargetFrame] = [TargetFrame(info: nil, id: 0)]
         if target["allFrames"] as? Bool == true {
-            frames += known.filter { !$0.frame.isMainFrame }.map { $0.frame }
+            // The tools world runs in every frame, so its records list each frame exactly once.
+            frames += tab.frameRecords.filter(mayAccess).map { TargetFrame(info: $0.frame, id: $0.frameID) }
         } else if let ids = target["frameIds"] as? [Int] {
-            frames = ids.compactMap { id in id == 0 ? nil : known.first { $0.frameID == id }?.frame }
-            if ids.contains(0) { frames.insert(nil, at: 0) }
+            frames = []
+            for id in ids {
+                if id == 0 { frames.append(TargetFrame(info: nil, id: 0)); continue }
+                guard let record = contentFrames.first(where: { $0.frameID == id }) ?? tab.frameRecords.first(where: { $0.frameID == id }) else {
+                    throw RikuganError("No frame with id \(id) in tab \(tab.numericID).")
+                }
+                guard mayAccess(record) else { throw RikuganError("Cannot access contents of frame \(id).") }
+                frames.append(TargetFrame(info: record.frame, id: id))
+            }
         }
         return (tab, frames)
     }
@@ -784,7 +830,8 @@ import UserNotifications
         guard let webView = tab.webView else { throw RikuganError("Tab has no document") }
         let world = (args["world"] as? String) == "MAIN" ? WKContentWorld.page : Worlds.extensionWorld(ext.id)
         var results: [[String: Any]] = []
-        for frame in frames {
+        for target in frames {
+            let frame = target.info
             if world != .page { try await ensureShim(ext, webView: webView, frame: frame) }
             var value: Any?
             if let fn = args["func"] as? String {
@@ -798,8 +845,7 @@ import UserNotifications
                     value = try await evaluate(code + "\n//# sourceURL=\(ext.baseURL)\(file)", webView: webView, frame: frame, world: world)
                 }
             }
-            let frameID = frame.map { f in (ext.contentFrames[tab.numericID] ?? []).first { $0.frame.request.url == f.request.url }?.frameID ?? 1 } ?? 0
-            results.append(["frameId": frameID, "result": value ?? NSNull(), "documentId": "\(tab.numericID)-\(frameID)"])
+            results.append(["frameId": target.id, "result": value ?? NSNull(), "documentId": "\(tab.numericID)-\(target.id)"])
         }
         return results
     }
@@ -835,7 +881,7 @@ import UserNotifications
             "const m = window.__rkExtCSS || {}; const s = m[k]; if (s) { document.adoptedStyleSheets = document.adoptedStyleSheets.filter(x => x !== s); delete m[k]; } return null;" :
             "window.__rkExtCSS = window.__rkExtCSS || {}; const s = new CSSStyleSheet(); s.replaceSync(c); window.__rkExtCSS[k] = s; document.adoptedStyleSheets = [...document.adoptedStyleSheets, s]; return null;"
         for frame in frames {
-            _ = try await webView.rkCall(body, arguments: ["k": key, "c": css], frame: frame, world: Worlds.extensionWorld(ext.id))
+            _ = try await webView.rkCall(body, arguments: ["k": key, "c": css], frame: frame.info, world: Worlds.extensionWorld(ext.id))
         }
     }
 
@@ -903,7 +949,8 @@ import UserNotifications
             mutate { $0.icon = image }
             return nil
         case "openPopup":
-            runtime.performAction(ext, tab: TabRegistry.shared.focusedWindow?.activeTab)
+            // Programmatic: never grants activeTab (only the user's click on the action does).
+            try runtime.openPopupProgrammatically(ext, tab: TabRegistry.shared.focusedWindow?.activeTab)
             return nil
         default:
             throw RikuganError("Unsupported API: chrome.action.\(method)")
@@ -966,9 +1013,17 @@ import UserNotifications
             return all.filter(matches).map(cookieJSON)
         case "set":
             guard let url else { throw RikuganError("cookies.set requires url") }
+            // The cookie's Domain must domain-match the (permitted) URL and not be a public suffix;
+            // otherwise an extension allowed on one site could plant cookies for another.
+            guard let domain = CookieScope.domain(requested: details["domain"] as? String, for: url) else {
+                throw RikuganError("Failed to parse or set cookie named \"\(details["name"] as? String ?? "")\": domain does not match the url.")
+            }
+            if details["secure"] as? Bool == true, url.scheme?.lowercased() != "https" {
+                throw RikuganError("Failed to parse or set cookie: a Secure cookie requires an https url.")
+            }
             var props: [HTTPCookiePropertyKey: Any] = [
                 .name: details["name"] as? String ?? "", .value: details["value"] as? String ?? "",
-                .path: details["path"] as? String ?? "/", .domain: details["domain"] as? String ?? (url.host ?? ""),
+                .path: details["path"] as? String ?? "/", .domain: domain,
             ]
             if details["secure"] as? Bool == true { props[.secure] = "TRUE" }
             if let expiry = details["expirationDate"] as? Double { props[.expires] = Date(timeIntervalSince1970: expiry) }
@@ -1013,7 +1068,7 @@ import UserNotifications
             return item?.numericID ?? -1
         case "search":
             let query = arg0 as? [String: Any] ?? [:]
-            return manager.items.filter { item in
+            return manager.extensionVisibleItems.filter { item in
                 if let id = query["id"] as? Int, item.numericID != id { return false }
                 if let state = query["state"] as? String, state != item.chromeState { return false }
                 return true
@@ -1021,7 +1076,7 @@ import UserNotifications
         case "pause", "resume", "cancel", "erase", "open", "show":
             let ids: [Int] = (arg0 as? Int).map { [$0] } ?? ((arg0 as? [String: Any])?["id"] as? Int).map { [$0] } ?? []
             for id in ids {
-                guard let item = manager.items.first(where: { $0.numericID == id }) else { continue }
+                guard let item = manager.extensionVisibleItems.first(where: { $0.numericID == id }) else { continue }
                 switch method {
                 case "pause": manager.pause(item)
                 case "resume": manager.resume(item)

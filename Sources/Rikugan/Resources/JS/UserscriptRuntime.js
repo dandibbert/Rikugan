@@ -440,7 +440,12 @@
   });
 
   // ---- GM_cookie (Tampermonkey) ----------------------------------------------------------------
-  const cookieCall = (op, details) => post(op, Object.assign({ url: location.href }, details || {}));
+  // Defaults to the current page unless the script names a url or a domain.
+  const cookieCall = (op, details) => {
+    const d = Object.assign({}, details || {});
+    if (!d.url && !d.domain) d.url = location.href;
+    return post(op, d);
+  };
   const withCallback = (p, cb, map) => {
     if (typeof cb === 'function') p.then(r => cb(map ? map(r) : r, undefined), e => cb(undefined, String(e && e.message || e)));
     return p;

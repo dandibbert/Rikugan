@@ -24,7 +24,11 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
       - name: Swift package tests (URL matcher, metadata, manifests, filters, DNR, ZIP/CRX)
-        run: swift test 2>&1 | tee core-tests.log
+        # pipefail: a compile or test failure must fail the job even though the output goes through tee.
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee core-tests.log
+          grep -Eq "Executed [1-9][0-9]* tests?, with 0 failures" core-tests.log || { echo "::error::swift test did not report a passing test run"; exit 1; }
       - name: JavaScript runtime tests (GM API, chrome.* shim, page tools)
         run: node scripts/test_js.cjs
       - name: Self-test result verifier rejects stale / fake results
@@ -213,6 +217,11 @@ jobs:
           name: compat-sources
           path: compat-artifact/sources
       - name: Compatibility report, build metadata, instructions
+        env:
+          RESULT_CORE: ${{ needs.core-tests.result }}
+          RESULT_IPA: ${{ needs.ipa.result }}
+          RESULT_SIM: ${{ needs.simtests.result }}
+          RESULT_COMPAT: ${{ needs.compat.result }}
         run: |
           TAG="v${APP_VERSION}-build.${GITHUB_RUN_NUMBER}"
           REPORT=$(find compat-artifact -name compat.json | head -1)
@@ -239,7 +248,16 @@ jobs:
               "run": f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
               "ipa": ipa, "ipaSha256": hashlib.sha256(open(f"dist/{ipa}", "rb").read()).hexdigest(),
               "signed": False,
-              "ciResults": "Swift/JS unit tests, verifier tests and simulator suites core, pageworld, security, fonts, dnr, lifecycle, stress, archive passed in this run (simulator only; each result verified against a per-run nonce).",
+              # Job outcomes of this run, not a fixed sentence. The compat job is report-only: its
+              # per-extension result is in compatibility-report.md and compatResult below.
+              "ciResults": {
+                  "coreUnitAndJSTests": os.environ["RESULT_CORE"],
+                  "deviceBuild": os.environ["RESULT_IPA"],
+                  "simulatorSuites": os.environ["RESULT_SIM"],
+                  "realExtensionCompatJob": os.environ["RESULT_COMPAT"],
+                  "scope": "simulator only; each suite result verified against a per-run nonce",
+              },
+              "compatResult": (json.load(open("${REPORT}")).get("result") if "${REPORT}" else "missing"),
               "installedCommitCheck": "Settings → bottom line shows 'commit <12 chars>'; must equal commitShort.",
           }
           json.dump(meta, open("dist/build-metadata.json", "w"), indent=2)

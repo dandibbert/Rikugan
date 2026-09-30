@@ -45,8 +45,9 @@ struct WebStoreItem: Equatable, Hashable {
 }
 
 /// Downloads a store package. The Edge endpoint redirects to a plain-HTTP Microsoft CDN URL:
-/// redirects are upgraded to HTTPS first (CRX signatures are not verified locally, so transport
-/// security matters); only if the HTTPS copy cannot be fetched is the original HTTP URL used.
+/// redirects are upgraded to HTTPS first; only if the HTTPS copy cannot be fetched is the original
+/// HTTP URL used. Integrity does not depend on the transport: `preparePackage` accepts only a CRX
+/// whose signature verifies against the key of the listing's extension ID.
 enum StoreDownload {
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 
@@ -166,12 +167,20 @@ struct PendingExtensionInstall: Identifiable {
         var crxID: String?
         if data.prefix(4) == Data("Cr24".utf8) {
             let crx = try CRXPackage(data: data)
-            zipData = crx.zipData
-            crxID = crx.crxID
-            // A store download must be the package of the listing that was opened.
-            if let expectedID, let id = crx.crxID, id != expectedID {
-                throw RikuganError("下载的扩展包与商店页面不符（ID \(id) ≠ \(expectedID)），已拒绝安装")
+            // The signature proves the payload was signed by the key the extension ID is derived
+            // from, whatever transport delivered it. An unsigned / tampered CRX is refused.
+            guard let verified = crx.verifiedID() else {
+                throw RikuganError("扩展包签名无效或缺失，已拒绝安装（文件可能被篡改）")
             }
+            zipData = crx.zipData
+            crxID = verified
+            // A store download must be the package of the listing that was opened.
+            if let expectedID, verified != expectedID {
+                throw RikuganError("下载的扩展包与商店页面不符（ID \(verified) ≠ \(expectedID)），已拒绝安装")
+            }
+        } else if expectedID != nil {
+            // Stores always deliver signed CRX files; anything else is not the store's package.
+            throw RikuganError("商店返回的不是签名扩展包（CRX），已拒绝安装")
         }
         let archive = try ZipArchive(data: zipData)
         guard let root = archive.rootPrefix(containing: "manifest.json") else {
@@ -179,20 +188,32 @@ struct PendingExtensionInstall: Identifiable {
         }
         let staging = FileManager.default.temporaryDirectory.appendingPathComponent("ext-staging-\(UUID().uuidString)", isDirectory: true)
         try archive.extractAll(to: staging, stripPrefix: root)
-        return try prepareDirectory(staging, source: source, storeURL: storeURL, seed: seed, crxID: crxID ?? expectedID, isStaging: true)
+        return try prepareDirectory(staging, source: source, storeURL: storeURL, seed: seed, crxID: crxID, isStaging: true)
     }
 
     func prepareDirectory(_ directory: URL, source: InstalledExtension.Source, storeURL: String?, seed: String,
                           crxID: String? = nil, isStaging: Bool = false) throws -> PendingExtensionInstall {
         var staging = directory
         if !isStaging {
+            // A folder import must not contain symbolic links (a resource could point outside the
+            // extension); ZIP extraction already refuses them.
+            let keys: [URLResourceKey] = [.isSymbolicLinkKey]
+            if let walker = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: keys) {
+                for case let file as URL in walker where (try? file.resourceValues(forKeys: Set(keys)))?.isSymbolicLink == true {
+                    throw RikuganError("扩展文件夹中包含符号链接（\(file.lastPathComponent)），已拒绝导入")
+                }
+            }
             staging = FileManager.default.temporaryDirectory.appendingPathComponent("ext-staging-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.copyItem(at: directory, to: staging)
         }
         let manifestURL = staging.appendingPathComponent("manifest.json")
         guard let manifestData = try? Data(contentsOf: manifestURL) else { throw RikuganError("找不到 manifest.json") }
         let manifest = try ExtensionManifest(data: manifestData)
-        let id = manifest.key.flatMap(ExtensionID.fromManifestKey) ?? crxID ?? ExtensionID.fromSeed("rikugan:" + manifest.name + ":" + seed)
+        let keyID = manifest.key.flatMap(ExtensionID.fromManifestKey)
+        if let keyID, let crxID, keyID != crxID {
+            throw RikuganError("manifest.json 的 key 与扩展包签名不一致（\(keyID) ≠ \(crxID)），已拒绝安装")
+        }
+        let id = crxID ?? keyID ?? ExtensionID.fromSeed("rikugan:" + manifest.name + ":" + seed)
         for script in manifest.contentScripts {
             for pattern in script.matches where !URLMatcher.isValidMatchPattern(pattern) {
                 throw RikuganError("content_scripts 中的匹配规则无效：\(pattern)")

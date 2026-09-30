@@ -95,7 +95,16 @@ public struct Preferences: Codable, Equatable {
     public var translationProvider = "google"
     public var translationTargetLanguage = "zh-CN"
     public var translationServerURL = ""
-    public var translationAPIKey = ""
+    /// Only between the two free public services (Google ↔ Microsoft), and only when enabled. A
+    /// custom or paid service never falls back to another provider.
+    public var translationFreeFallback = false
+    /// Kept in the Keychain (`Secrets`), not in this struct's JSON: never written to
+    /// preferences.json, pre-import backups or exported archives.
+    public var translationAPIKey: String {
+        get { Secrets.get(Self.translationKeyAccount) ?? "" }
+        set { Secrets.set(newValue, for: Self.translationKeyAccount) }
+    }
+    public static let translationKeyAccount = "translationAPIKey"
     public var autoTranslateLanguages: [String] = []
     public var readerFontSize = 19
     public var readerFontFamily = "-apple-system"
@@ -165,7 +174,7 @@ public struct Preferences: Codable, Equatable {
         translationProvider = v("translationProvider", translationProvider)
         translationTargetLanguage = v("translationTargetLanguage", translationTargetLanguage)
         translationServerURL = v("translationServerURL", translationServerURL)
-        translationAPIKey = v("translationAPIKey", translationAPIKey)
+        translationFreeFallback = v("translationFreeFallback", translationFreeFallback)
         autoTranslateLanguages = v("autoTranslateLanguages", autoTranslateLanguages)
         readerFontSize = v("readerFontSize", readerFontSize)
         readerFontFamily = v("readerFontFamily", readerFontFamily)

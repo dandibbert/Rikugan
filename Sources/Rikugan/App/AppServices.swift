@@ -31,7 +31,17 @@ import Combine
     var profile: ProfileContext { profiles.active }
 
     private init() {
-        prefs = JSONFile<Preferences>(AppPaths.support.appendingPathComponent("preferences.json")).load() ?? Preferences()
+        let prefsURL = AppPaths.support.appendingPathComponent("preferences.json")
+        // Earlier builds stored the translation API key in preferences.json: move it to the
+        // Keychain once and rewrite the file without it.
+        if let data = try? Data(contentsOf: prefsURL), var raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let legacyKey = raw.removeValue(forKey: Preferences.translationKeyAccount) as? String {
+            if legacyKey.isEmpty || Secrets.set(legacyKey, for: Preferences.translationKeyAccount),
+               let cleaned = try? JSONSerialization.data(withJSONObject: raw) {
+                try? cleaned.write(to: prefsURL, options: .atomic)
+            }
+        }
+        prefs = JSONFile<Preferences>(prefsURL).load() ?? Preferences()
         profiles = ProfileManager()
         profiles.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         adBlock.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)

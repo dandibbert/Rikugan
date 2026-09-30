@@ -101,6 +101,36 @@ public struct DNRRuleResource: Codable, Hashable {
 /// Parsed MV3 manifest. Raw JSON is kept for `chrome.runtime.getManifest()`.
 public struct ExtensionManifest {
     public let raw: [String: Any]
+
+    /// MV3 minimum for extension pages: no remote or inline script, no eval.
+    public static let defaultExtensionPagesCSP = "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+
+    /// The Content-Security-Policy applied to the extension's own pages: the manifest's
+    /// `content_security_policy.extension_pages` (MV3) / string policy (MV2), but never weaker than
+    /// the MV3 minimum for scripts (remote hosts and 'unsafe-inline' / 'unsafe-eval' are dropped
+    /// from script-src, as Chrome refuses them for MV3 extension pages).
+    public var extensionPagesCSP: String {
+        let declared: String? = (raw["content_security_policy"] as? [String: Any])?["extension_pages"] as? String
+            ?? raw["content_security_policy"] as? String
+        guard let declared, !declared.trimmingCharacters(in: .whitespaces).isEmpty else { return Self.defaultExtensionPagesCSP }
+        var directives: [String] = []
+        var hasScript = false, hasObject = false
+        for part in declared.split(separator: ";") {
+            let tokens = part.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard let name = tokens.first?.lowercased() else { continue }
+            if name == "script-src" || name == "script-src-elem" {
+                hasScript = hasScript || name == "script-src"
+                let allowed = tokens.dropFirst().filter { ["'self'", "'wasm-unsafe-eval'", "'none'"].contains($0.lowercased()) || $0.lowercased().hasPrefix("'sha") }
+                directives.append(([name] + (allowed.isEmpty ? ["'self'"] : allowed)).joined(separator: " "))
+            } else {
+                if name == "object-src" { hasObject = true }
+                directives.append(tokens.joined(separator: " "))
+            }
+        }
+        if !hasScript { directives.append("script-src 'self' 'wasm-unsafe-eval'") }
+        if !hasObject { directives.append("object-src 'self'") }
+        return directives.joined(separator: "; ") + ";"
+    }
     public let manifestVersion: Int
     public let name: String
     public let shortName: String?

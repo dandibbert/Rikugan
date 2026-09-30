@@ -1,5 +1,6 @@
 import XCTest
 import Compression
+import Security
 @testable import RikuganCore
 
 /// Builds small ZIP archives in memory for tests.
@@ -20,15 +21,18 @@ enum ZipBuilder {
             }
             let offset = out.count
             let nameData = Data(name.utf8)
-            out += u32(0x04034B50) + u16(20) + u16(0) + u16(method) + u16(0) + u16(0) + u32(0)
-            out += u32(payload.count) + u32(content.count) + u16(nameData.count) + u16(0) + nameData + payload
-            central += u32(0x02014B50) + u16(20) + u16(20) + u16(0) + u16(method) + u16(0) + u16(0) + u32(0)
-            central += u32(payload.count) + u32(content.count) + u16(nameData.count) + u16(0) + u16(0) + u16(0) + u16(0)
-            central += u32(0) + u32(offset) + nameData
+            // Appended field by field: long `+` chains of Data exceed the type checker's time limit.
+            func fields(_ values: [Data]) -> Data { values.reduce(into: Data()) { $0.append($1) } }
+            out.append(fields([u32(0x04034B50), u16(20), u16(0), u16(method), u16(0), u16(0), u32(0)]))
+            out.append(fields([u32(payload.count), u32(content.count), u16(nameData.count), u16(0), nameData, payload]))
+            central.append(fields([u32(0x02014B50), u16(20), u16(20), u16(0), u16(method), u16(0), u16(0), u32(0)]))
+            central.append(fields([u32(payload.count), u32(content.count), u16(nameData.count), u16(0), u16(0), u16(0), u16(0)]))
+            central.append(fields([u32(0), u32(offset), nameData]))
         }
         let cdOffset = out.count
-        out += central
-        out += u32(0x06054B50) + u16(0) + u16(0) + u16(files.count) + u16(files.count) + u32(central.count) + u32(cdOffset) + u16(0)
+        out.append(central)
+        let end: [Data] = [u32(0x06054B50), u16(0), u16(0), u16(files.count), u16(files.count), u32(central.count), u32(cdOffset), u16(0)]
+        out.append(end.reduce(into: Data()) { $0.append($1) })
         return out
     }
 }
@@ -102,6 +106,62 @@ final class ZipAndCRXTests: XCTestCase {
         XCTAssertEqual(package.zipData, zip)
         XCTAssertEqual(package.crxID, "aaabacadaeafagahaiajakalamanaoap")
         XCTAssertTrue(ExtensionID.isValid(package.crxID!))
+    }
+
+    /// DER length + SubjectPublicKeyInfo wrapper for an RSA PKCS#1 key (test helper).
+    private func spki(rsa pkcs1: Data) -> Data {
+        func der(_ tag: UInt8, _ body: Data) -> Data {
+            var out = Data([tag])
+            if body.count < 0x80 { out.append(UInt8(body.count)) }
+            else if body.count <= 0xFF { out += Data([0x81, UInt8(body.count)]) }
+            else { out += Data([0x82, UInt8(body.count >> 8), UInt8(body.count & 0xFF)]) }
+            return out + body
+        }
+        let algorithm = der(0x30, der(0x06, Data([0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01])) + Data([0x05, 0x00]))
+        return der(0x30, algorithm + der(0x03, Data([0x00]) + pkcs1))
+    }
+
+    private func varint(_ value: Int) -> Data {
+        var v = value, out = Data()
+        repeat { var byte = UInt8(v & 0x7F); v >>= 7; if v != 0 { byte |= 0x80 }; out.append(byte) } while v != 0
+        return out
+    }
+
+    private func field(_ number: Int, _ bytes: Data) -> Data { varint(number << 3 | 2) + varint(bytes.count) + bytes }
+
+    /// A CRX3 signed with a freshly generated key verifies; a tampered payload or a proof by a
+    /// key that does not match the declared ID does not.
+    func testCRX3SignatureVerification() throws {
+        let attributes: [String: Any] = [kSecAttrKeyType as String: kSecAttrKeyTypeRSA, kSecAttrKeySizeInBits as String: 2048]
+        guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, nil),
+              let publicKey = SecKeyCopyPublicKey(privateKey),
+              let pkcs1 = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? else { return XCTFail("key generation failed") }
+        let spkiKey = spki(rsa: pkcs1)
+        let rawID = ExtensionID.sha256(spkiKey).prefix(16)
+        let signedHeader = field(1, Data(rawID))
+        let zip = ZipBuilder.make([("manifest.json", Data(#"{"manifest_version":3,"name":"S","version":"1"}"#.utf8))])
+        func crx(payload: Data, signWith key: SecKey, publishKey: Data) -> Data {
+            var message = Data("CRX3 SignedData".utf8); message.append(0)
+            let n = UInt32(signedHeader.count)
+            message += Data([UInt8(n & 0xFF), UInt8((n >> 8) & 0xFF), UInt8((n >> 16) & 0xFF), UInt8(n >> 24)]) + signedHeader + payload
+            let signature = SecKeyCreateSignature(key, .rsaSignatureMessagePKCS1v15SHA256, message as CFData, nil)! as Data
+            let header = field(2, field(1, publishKey) + field(2, signature)) + field(10000, signedHeader)
+            let h = UInt32(header.count)
+            var out = Data("Cr24".utf8) + Data([3, 0, 0, 0])
+            out += Data([UInt8(h & 0xFF), UInt8((h >> 8) & 0xFF), UInt8((h >> 16) & 0xFF), UInt8(h >> 24)])
+            return out + header + payload
+        }
+        let good = try CRXPackage(data: crx(payload: zip, signWith: privateKey, publishKey: spkiKey))
+        XCTAssertEqual(good.verifiedID(), ExtensionID.fromRawID(Data(rawID)))
+
+        var tampered = crx(payload: zip, signWith: privateKey, publishKey: spkiKey)
+        tampered[tampered.count - 30] ^= 0xFF
+        XCTAssertNil(try CRXPackage(data: tampered).verifiedID(), "modified payload must not verify")
+
+        let other = SecKeyCreateRandomKey(attributes as CFDictionary, nil)!
+        let otherPKCS1 = SecKeyCopyExternalRepresentation(SecKeyCopyPublicKey(other)!, nil)! as Data
+        let foreign = try CRXPackage(data: crx(payload: zip, signWith: other, publishKey: spki(rsa: otherPKCS1)))
+        XCTAssertNil(foreign.verifiedID(), "a signature by a key other than the declared ID's must not verify")
     }
 
     func testExtensionIDFromKey() {
@@ -200,6 +260,17 @@ final class FilterTests: XCTestCase {
         XCTAssertTrue(hit("https://sub.ads.example.com/x"))
         XCTAssertFalse(hit("https://notads.example.com/x"))
         XCTAssertFalse(hit("https://example.com/ads.example.com"))
+        // Right boundary: the host must end at the separator.
+        XCTAssertFalse(hit("https://ads.example.com.evil.test/x"))
+        XCTAssertFalse(hit("https://ads.example.company/x"))
+        XCTAssertTrue(hit("https://ads.example.com:8443/x"))
+        XCTAssertTrue(hit("https://ads.example.com"))
+        // A trailing `^` after a path matches a separator or the end, not more of the name.
+        let path = try NSRegularExpression(pattern: XCTUnwrap(ABPPattern.regex("/banner.js^")))
+        func pathHit(_ s: String) -> Bool { path.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil }
+        XCTAssertTrue(pathHit("https://x.com/banner.js"))
+        XCTAssertTrue(pathHit("https://x.com/banner.js?v=1"))
+        XCTAssertFalse(pathHit("https://x.com/banner.jsx"))
         XCTAssertEqual(ABPPattern.regex("|https://x.com/a*b|"), "^https://x\\.com/a.*b$")
         XCTAssertNil(ABPPattern.webKitRegex(from: "a|b"))
         XCTAssertEqual(ABPPattern.webKitRegex(from: "ad\\d+"), "ad[0-9]+")
@@ -266,6 +337,25 @@ final class FilterTests: XCTestCase {
         XCTAssertEqual(out.rules.last?.action, .allow)
         XCTAssertEqual(out.rules.first { $0.resourceTypes == [.script] }?.urlRegex, ABPPattern.regex("||blocked.test^"))
         XCTAssertTrue(out.rules.contains { $0.action == .upgradeScheme })
+    }
+
+    /// Conditions WebKit cannot express skip the rule instead of widening it.
+    func testDNRNeverWidensRules() {
+        let rules: [[String: Any]] = [
+            // allowAllRequests with only a URL filter must not become a global ignore-previous-rules.
+            ["id": 1, "action": ["type": "allowAllRequests"], "condition": ["urlFilter": "||ok.test^", "resourceTypes": ["main_frame"]]],
+            ["id": 2, "action": ["type": "block"], "condition": ["urlFilter": "ads", "requestDomains": ["a.test"]]],
+            ["id": 3, "action": ["type": "block"], "condition": ["urlFilter": "ads", "requestMethods": ["post"]]],
+            ["id": 4, "action": ["type": "block"], "condition": ["urlFilter": "ads", "initiatorDomains": ["a.test"], "excludedInitiatorDomains": ["b.a.test"]]],
+            ["id": 5, "action": ["type": "block"], "condition": ["urlFilter": "ads", "excludedRequestDomains": ["cdn.test"]]],
+            ["id": 6, "action": ["type": "allowAllRequests"], "condition": ["requestDomains": ["trusted.test"], "resourceTypes": ["main_frame"]]],
+            ["id": 7, "action": ["type": "block"], "condition": ["urlFilter": "tracker", "excludedInitiatorDomains": ["x.test"]]],
+        ]
+        let out = DNRConverter.convert(rules)
+        XCTAssertEqual(Set(out.skipped.map(\.id)), [1, 2, 3, 4, 5])
+        XCTAssertFalse(out.rules.contains { $0.action == .allowDocument && $0.ifDomains.isEmpty }, "no unconditional document allow")
+        XCTAssertEqual(out.rules.first { $0.action == .allowDocument }?.ifDomains, ["trusted.test"])
+        XCTAssertEqual(out.rules.first { $0.action == .block }?.unlessDomains, ["x.test"])
     }
 }
 

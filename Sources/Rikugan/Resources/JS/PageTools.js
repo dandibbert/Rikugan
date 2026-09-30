@@ -703,7 +703,10 @@ html::-webkit-scrollbar { background: #222; }`;
   applyDarkMode(cfg.dark);
   if (cfg.font) applyFont(cfg.font);
   if (cfg.cosmetic && (cfg.cosmetic.selectors.length || cfg.cosmetic.css.length)) applyCosmetic(cfg.cosmetic.selectors, cfg.cosmetic.css);
-  post('frame', { url: location.href, top: isTop }).catch(() => {});
+  // Per-document frame token: identifies this frame for scripting.executeScript (URLs are not unique).
+  const frameToken = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now();
+  post('frame', { url: location.href, top: isTop, token: frameToken }).catch(() => {});
+  if (!isTop) window.addEventListener('pagehide', () => { post('frameGone', { token: frameToken }).catch(() => {}); });
   if (isTop) {
     const signal = (type) => post('lifecycle', { type, url: location.href }).catch(() => {});
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => signal('DOMContentLoaded'), { once: true });

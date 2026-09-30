@@ -3,8 +3,9 @@ import WebKit
 import CryptoKit
 
 /// Snapshot of the app's runtime state for the Diagnostics page and its single-file bug-report
-/// export. Contains no passwords, cookies, Keychain items, page or form contents, userscript
-/// source or stored values, extension storage, or archive contents; URLs are reduced to their host.
+/// export. Built from structured state (counters, names, versions, grants). Error messages are
+/// free text from extensions / scripts / pages, so by default only their type and location are
+/// exported; the redacted text and test notes are an explicit, previewable opt-in.
 struct DiagnosticsReport: Codable {
     struct Build: Codable { var appVersion: String; var gitCommit: String; var buildDate: String; var device: String; var os: String; var isSimulator: Bool }
     struct Tabs: Codable { var windows: Int; var tabs: Int; var active: Int; var liveBackground: Int; var suspended: Int; var restoring: Int; var terminated: Int
@@ -19,9 +20,10 @@ struct DiagnosticsReport: Codable {
 
     struct Security: Codable { var rejectedPrivilegedCalls: Int; var recent: [SecurityLog.Entry] }
 
-    static let privacyStatement = "Contains: build, OS/device model, tab and background-runtime counters, extension and userscript names/versions/grants, feature flags, compatibility-matrix version, DNR skipped-rule summary, recent runtime/security log lines (URLs reduced to domains), manual test statuses. Does NOT contain: passwords, cookies, Keychain secrets, page or form contents, browsing URLs beyond domains, userscript source or GM stored values, extension storage, or archive contents."
+    static let privacyStatement = "Contains: build, OS/device model, tab and background-runtime counters, extension and userscript names/versions/grants, feature flags, compatibility-matrix version, DNR skipped-rule summary, error types and source locations, rejected-call log (hosts only), manual test statuses. Not read by the exporter: passwords, cookies, Keychain secrets, page or form contents, userscript source or GM stored values, extension storage, archive contents. Error message text and test notes are included only when includesErrorText is true; that text was redacted automatically, which cannot guarantee it holds no personal data."
 
-    var reportFormat = "rikugan-diagnostics/2"
+    var reportFormat = "rikugan-diagnostics/3"
+    var includesErrorText = false
     var generatedAt = Date()
     var privacy = DiagnosticsReport.privacyStatement
     var build: Build
@@ -39,7 +41,8 @@ struct DiagnosticsReport: Codable {
     /// Entered by a person on the Manual Test Checklist page — not CI results.
     var manualTests: ManualTestStore.Export
 
-    @MainActor static func collect() -> DiagnosticsReport {
+    @MainActor static func collect(includeErrorText: Bool = false) -> DiagnosticsReport {
+        let text: (String) -> String = includeErrorText ? Redactor.redact : Redactor.signature
         let services = AppServices.shared
         let info = Bundle.main.infoDictionary ?? [:]
         #if targetEnvironment(simulator)
@@ -72,7 +75,7 @@ struct DiagnosticsReport: Codable {
                                  backgroundState: loaded?.background?.state.rawValue,
                                  backgroundDetail: loaded?.background?.diagnostics,
                                  unsupportedCalls: runtime.unsupportedCalls[record.id] ?? [:],
-                                 recentErrors: record.lastErrors.suffix(5).map(ErrorLog.scrub))
+                                 recentErrors: record.lastErrors.suffix(5).map(text))
         }
         let scripts = services.profile.userscripts.scripts.map {
             ScriptInfo(name: $0.metadata.name, version: $0.metadata.version, enabled: $0.enabled,
@@ -96,11 +99,17 @@ struct DiagnosticsReport: Codable {
             webInspector: services.prefs.webInspectorEnabled,
             profile: services.profile.info.name, profileCount: services.profiles.profiles.count)
         let security = Security(rejectedPrivilegedCalls: SecurityLog.shared.totalRejected, recent: Array(SecurityLog.shared.entries.suffix(30)))
-        return DiagnosticsReport(build: build, environment: environment, tabs: tabs, extensions: extensions, userscripts: scripts,
-                                 chromeAPI: api, dnr: dnr, errors: ErrorLog.shared.entries,
+        let errors = ErrorLog.shared.entries.map { ErrorLog.Entry(id: $0.id, date: $0.date, source: $0.source, message: text($0.message)) }
+        var manual = ManualTestStore.shared.export()
+        if !includeErrorText { manual.items = manual.items.map { var item = $0; item.note = item.note.isEmpty ? "" : "（备注未导出）"; return item } }
+        else { manual.items = manual.items.map { var item = $0; item.note = Redactor.redact(item.note); return item } }
+        var report = DiagnosticsReport(build: build, environment: environment, tabs: tabs, extensions: extensions, userscripts: scripts,
+                                 chromeAPI: api, dnr: dnr, errors: errors,
                                  backgroundRuntime: BackgroundRuntimeSummary.collect(), security: security,
                                  featureFlags: featureFlags(services.prefs), compatibilityMatrixVersion: matrixVersion(),
-                                 manualTests: ManualTestStore.shared.export())
+                                 manualTests: manual)
+        report.includesErrorText = includeErrorText
+        return report
     }
 
     /// Non-sensitive switches only (no API keys, server URLs, homepage or search templates).
@@ -134,6 +143,7 @@ struct DiagnosticsView: View {
     @EnvironmentObject private var services: AppServices
     @ObservedObject private var errors = ErrorLog.shared
     @State private var report = DiagnosticsReport.collect()
+    @State private var includeErrorText = false
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -222,11 +232,20 @@ struct DiagnosticsView: View {
             }
             Section {
                 row("兼容性矩阵版本", report.compatibilityMatrixVersion)
+                Toggle("附带错误原文和测试备注", isOn: $includeErrorText)
+                NavigationLink {
+                    ScrollView {
+                        Text((try? String(decoding: DiagnosticsReport.collect(includeErrorText: includeErrorText).json(), as: UTF8.self)) ?? "")
+                            .font(.caption.monospaced()).textSelection(.enabled).padding()
+                    }
+                    .navigationTitle("导出预览")
+                } label: { Text("预览导出内容") }
                 Button { export() } label: { Text("导出诊断报告（单个 JSON 文件）") }
             } header: { Text("导出") } footer: {
                 Text("""
-                包含：构建与 commit、系统与设备型号、标签页与后台运行时计数、扩展和用户脚本的名称 / 版本 / 权限、功能开关、兼容性矩阵版本、DNR 跳过规则摘要、最近的运行时与安全日志（网址只保留域名）、人工测试状态（标注为人工结果，非 CI）。
-                不包含：密码、Cookie、钥匙串内容、网页与表单内容、完整浏览网址、脚本源码与 GM 存储值、扩展存储、归档内容。导出前你可以在分享面板中查看文件。
+                包含：构建与 commit、系统与设备型号、标签页与后台运行时计数、扩展和用户脚本的名称 / 版本 / 权限、功能开关、兼容性矩阵版本、DNR 跳过规则摘要、错误类型和出错位置、安全拒绝记录（只含域名）、人工测试状态（人工结果，非 CI）。
+                导出程序不读取：密码、Cookie、钥匙串内容、网页与表单内容、脚本源码与 GM 存储值、扩展存储、归档内容。
+                错误原文由扩展、脚本或网页产生，可能含有个人信息，默认不导出。打开上面的开关后会附带自动脱敏的原文和测试备注；自动脱敏不能保证完全去除个人信息，请先预览。
                 """)
             }
         }
@@ -241,7 +260,7 @@ struct DiagnosticsView: View {
     private func export() {
         do {
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("Rikugan-diagnostics-\(Int(Date().timeIntervalSince1970)).json")
-            try DiagnosticsReport.collect().json().write(to: file)
+            try DiagnosticsReport.collect(includeErrorText: includeErrorText).json().write(to: file)
             Presenter.share([file])
         } catch {
             ToastCenter.shared.show("导出失败：\(error.localizedDescription)", symbol: "exclamationmark.triangle")

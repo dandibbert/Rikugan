@@ -197,7 +197,10 @@ import Combine
         records.removeAll { $0.id == id }
         indexFile.save(records)
         try? FileManager.default.removeItem(at: extensionDirectory(id))
-        for area in ["local", "sync"] { try? FileManager.default.removeItem(at: storageURL(id, area)) }
+        for area in ["local", "sync"] {
+            storageCache.removeValue(forKey: id + ":" + area)
+            if let url = storageURL(id, area) { try? FileManager.default.removeItem(at: url) }
+        }
         compileDNR()
         WebViewFactory.invalidateAllTabs()
         managementEvent("onUninstalled", nil, id: id)
@@ -352,14 +355,25 @@ import Combine
                     items.append(ContentScriptItem(source: code + "\n//# sourceURL=\(ext.baseURL)\(file)", time: time, mainFrameOnly: true, world: world))
                 }
             }
+            // A sub-frame gets the script only when the extension may access *that frame's* URL: a
+            // granted host pattern, or (activeTab) the tab's own top-level origin. Matching the
+            // manifest's `matches` alone would let a page embed a revoked / never-granted site.
+            func literal(_ rules: [URLRule]) -> String {
+                rules.map { "[\($0.regex.jsLiteral),\($0.caseInsensitive ? "'i'" : "''")]" }.joined(separator: ",")
+            }
+            let hostRules = ext.record.hostAccess == .granted ? ext.record.grantedHosts.compactMap { try? URLMatcher.matchPattern($0) } : []
+            let topOrigin: String = ext.activeTabGrants.contains(tab.numericID) ? "\(url.scheme ?? "")://\(url.host ?? "")\(url.port.map { ":\($0)" } ?? "")" : ""
             for entry in frameEntries {
                 let world = entry.world == "MAIN" ? WKContentWorld.page : isolated
                 let time: WKUserScriptInjectionTime = entry.runAt == "document_start" ? .atDocumentStart : .atDocumentEnd
-                let include = entry.includeRules().map { "[\($0.regex.jsLiteral),\($0.caseInsensitive ? "'i'" : "''")]" }.joined(separator: ",")
-                let exclude = entry.excludeRules().map { "[\($0.regex.jsLiteral),\($0.caseInsensitive ? "'i'" : "''")]" }.joined(separator: ",")
+                let include = literal(entry.includeRules())
+                let exclude = literal(entry.excludeRules())
+                let globs = literal(entry.globRules())
                 let guardJS = "(function(){try{if(window.top===window)return false;}catch(e){}var h=String(location.href).split('#')[0];" +
-                    "var inc=[\(include)].map(function(r){return new RegExp(r[0],r[1])});var exc=[\(exclude)].map(function(r){return new RegExp(r[0],r[1])});" +
-                    "return inc.some(function(r){return r.test(h)})&&!exc.some(function(r){return r.test(h)});})()"
+                    "var R=function(l){return l.map(function(r){return new RegExp(r[0],r[1])})};" +
+                    "var inc=R([\(include)]),exc=R([\(exclude)]),gl=R([\(globs)]),hp=R([\(literal(hostRules))]);" +
+                    "var allowed=hp.some(function(r){return r.test(h)})||(\(topOrigin.jsLiteral)!==''&&location.origin===\(topOrigin.jsLiteral));" +
+                    "return allowed&&inc.some(function(r){return r.test(h)})&&(gl.length===0||gl.some(function(r){return r.test(h)}))&&!exc.some(function(r){return r.test(h)});})()"
                 if !entry.css.isEmpty {
                     let css = entry.css.compactMap { ext.text($0) }.joined(separator: "\n")
                     items.append(ContentScriptItem(source: Self.cssInjector(css, guardJS: guardJS), time: .atDocumentStart, mainFrameOnly: false, world: world))
@@ -460,22 +474,43 @@ import Combine
         dispatchAll("tabs.onRemoved") { _ in [tab.numericID, ["windowId": tab.manager?.numericID ?? 1, "isWindowClosing": false]] }
     }
 
-    func registerContentFrame(ext: LoadedExtension, tab: BrowserTab, frame: WKFrameInfo) -> Int {
+    /// Frames are identified by a random token their content world generates per document (two
+    /// iframes with the same URL are different frames; the URL is not an identity).
+    func registerContentFrame(ext: LoadedExtension, tab: BrowserTab, frame: WKFrameInfo, token: String?) -> Int {
         var frames = ext.contentFrames[tab.numericID] ?? []
         let url = frame.request.url?.absoluteString ?? ""
-        let id = frame.isMainFrame ? 0 : (frames.first { !$0.frame.isMainFrame && $0.url == url }?.frameID ?? ((frames.map(\.frameID).max() ?? 0) + 1))
+        let token = token ?? UUID().uuidString
+        let id = frame.isMainFrame ? 0 : (frames.first { $0.token == token }?.frameID ?? max(1, (frames.map(\.frameID).max() ?? 0) + 1))
         frames.removeAll { $0.frameID == id }
-        frames.append(.init(frameID: id, frame: frame, url: url))
+        frames.append(.init(frameID: id, frame: frame, url: url, token: token))
         ext.contentFrames[tab.numericID] = frames
         return id
     }
 
+    /// A frame's document went away (pagehide): forget it so it is not addressed again.
+    func unregisterContentFrame(ext: LoadedExtension, tab: BrowserTab, token: String) {
+        ext.contentFrames[tab.numericID]?.removeAll { $0.token == token && !$0.frame.isMainFrame }
+    }
+
     // MARK: Toolbar action (spec §17)
 
+    /// The user invoked the extension's toolbar action. Only this user gesture grants activeTab.
     func performAction(_ ext: LoadedExtension, tab: BrowserTab?) {
-        if let tab { ext.activeTabGrants.insert(tab.numericID) }
         let state = ext.actionState(for: tab?.numericID)
         guard state.enabled else { return }
+        if let tab, !tab.isPrivate { ext.activeTabGrants.insert(tab.numericID) }
+        openActionUI(ext, tab: tab, state: state)
+    }
+
+    /// chrome.action.openPopup: shows the popup without granting any page access.
+    func openPopupProgrammatically(_ ext: LoadedExtension, tab: BrowserTab?) throws {
+        let state = ext.actionState(for: tab?.numericID)
+        guard state.enabled else { throw RikuganError("The action is disabled") }
+        guard let popup = state.popup, !popup.isEmpty else { throw RikuganError("Extension does not have a popup on the active tab") }
+        openActionUI(ext, tab: tab, state: state)
+    }
+
+    private func openActionUI(_ ext: LoadedExtension, tab: BrowserTab?, state: ActionState) {
         if let popup = state.popup, !popup.isEmpty, let url = URL(string: ext.baseURL + popup.trimmingCharacters(in: CharacterSet(charactersIn: "/"))) {
             self.popup = PopupRequest(extID: ext.id, url: url, tabID: tab?.numericID, title: state.title ?? ext.displayName)
         } else if let tab {
@@ -545,7 +580,12 @@ import Combine
 
     // MARK: Storage (spec §13 ExtensionStorage – per extension, never page storage)
 
-    func storageURL(_ id: String, _ area: String) -> URL { directory.appendingPathComponent("\(id).storage-\(area).json") }
+    /// Only "local" and "sync" are files. Validated here as well as in the bridge, so no caller can
+    /// turn an area or ID into a path outside this extension's own storage file.
+    func storageURL(_ id: String, _ area: String) -> URL? {
+        guard ["local", "sync"].contains(area), !id.isEmpty, id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
+        return directory.appendingPathComponent("\(id).storage-\(area).json")
+    }
 
     private var storageCache: [String: [String: String]] = [:]
 
@@ -554,15 +594,17 @@ import Combine
         if area == "managed" { return [:] }
         let key = ext.id + ":" + area
         if let hit = storageCache[key] { return hit }
-        let value = JSONFile<[String: String]>(storageURL(ext.id, area)).load() ?? [:]
+        guard let url = storageURL(ext.id, area) else { return [:] }
+        let value = JSONFile<[String: String]>(url).load() ?? [:]
         storageCache[key] = value
         return value
     }
 
     func setStorage(_ ext: LoadedExtension, area: String, _ values: [String: String]) {
         if area == "session" { ext.sessionStorage = values; return }
+        guard let url = storageURL(ext.id, area) else { return }
         storageCache[ext.id + ":" + area] = values
-        JSONFile<[String: String]>(storageURL(ext.id, area)).save(values)
+        JSONFile<[String: String]>(url).save(values)
     }
 
     func storageChanged(_ ext: LoadedExtension, area: String, changes: [String: [String: Any]]) {
