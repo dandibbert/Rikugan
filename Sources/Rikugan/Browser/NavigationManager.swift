@@ -66,7 +66,6 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         preferences.allowsContentJavaScript = site.javaScript ?? true
         if isMainFrame {
             if desktopMode != desktop { desktopMode = desktop }
-            webView.configuration.preferences.javaScriptCanOpenWindowsAutomatically = Self.allowsAutomaticPopups(site: site, prefs: services.prefs)
             loadError = nil
             WebViewFactory.prepareContent(for: self, url: target)
             profile.extensions.webNavigation(.beforeNavigate, tab: self, url: target, frameID: 0)
@@ -122,6 +121,11 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         if let host = webView.url?.host {
             let site = profile.siteSettings.settings(for: host)
             desktopMode = site.desktopMode ?? services.prefs.defaultDesktopMode
+            // Popup policy for the committed site. Written only when it changes: touching the
+            // web view's preferences re-sends them to the page, which must not happen on every load.
+            let preferences = webView.configuration.preferences
+            let popups = Self.allowsAutomaticPopups(site: site, prefs: services.prefs)
+            if preferences.javaScriptCanOpenWindowsAutomatically != popups { preferences.javaScriptCanOpenWindowsAutomatically = popups }
             if let seconds = site.autoRefreshSeconds, autoRefreshInterval == nil { autoRefreshInterval = TimeInterval(seconds) }
         }
     }
