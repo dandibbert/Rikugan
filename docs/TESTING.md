@@ -16,7 +16,7 @@ Rikugan 的验证分三级。**每一级只证明它能证明的东西**：CI �
 
 | 任务 | 内容 | 是否阻塞发布 |
 |---|---|---|
-| Core unit tests + JS runtime tests | `swift test`（`CoreTests/`：URL 匹配、元数据、manifest、ZIP/CRX、过滤规则、DNR 转换含 redirect/modifyHeaders、标签页生命周期策略、标签页组模型、归档格式 / 迁移 / 损坏文件、字体解析 / TTC 拆分、API 矩阵 JSON）；`node scripts/test_js.cjs`（GM API、chrome.* shim、**API 矩阵与 JS shim / 原生桥逐方法比对**） | 是 |
+| Core unit tests + JS runtime tests | `swift test`（以 `pipefail` 运行，并且日志中必须出现 `Executed N tests, with 0 failures` 且 N≥1，否则任务失败——此前 `swift test | tee` 会吞掉编译失败，Swift 单元测试实际上没有运行；`CoreTests/`：URL 匹配、元数据、manifest、ZIP/CRX、过滤规则、DNR 转换含 redirect/modifyHeaders、标签页生命周期策略、标签页组模型、归档格式 / 迁移 / 损坏文件、字体解析 / TTC 拆分、API 矩阵 JSON）；`node scripts/test_js.cjs`（GM API、chrome.* shim、**API 矩阵与 JS shim / 原生桥逐方法比对**） | 是 |
 | Build unsigned IPA | Release、`iphoneos`、无签名；必须出现 `** BUILD SUCCEEDED **` 且二进制存在 | 是 |
 | Build for simulator tests | `build-for-testing` 一次，产物供下列任务复用 | 是 |
 | Simulator: core | 原有端到端自检：测试扩展（内容脚本、消息、Port、存储、Popup、scripting、权限、后台、DNR、Unsupported API）+ 测试脚本（GM API、@exclude、刷新、无痕）+ 元素隐藏 | 是 |
