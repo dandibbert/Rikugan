@@ -155,12 +155,27 @@ import Combine
 
     // MARK: Install / remove / enable (spec §18)
 
+    /// Replaces the package atomically: the old version is moved aside (not deleted) until the
+    /// new one is in place; if that fails, the old version is restored and loaded again.
     func install(_ pending: PendingExtensionInstall) throws {
+        let fm = FileManager.default
         let destination = extensionDirectory(pending.extensionID)
         let previous = records.first { $0.id == pending.extensionID }
+        let backup = directory.appendingPathComponent(".\(pending.extensionID).previous-\(UUID().uuidString)", isDirectory: true)
+        let hadPrevious = fm.fileExists(atPath: destination.path)
         if let ext = loaded[pending.extensionID] { unload(ext); loaded.removeValue(forKey: pending.extensionID) }
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.moveItem(at: pending.stagingDirectory, to: destination)
+        do {
+            if hadPrevious { try fm.moveItem(at: destination, to: backup) }
+            try fm.moveItem(at: pending.stagingDirectory, to: destination)
+        } catch {
+            if hadPrevious, fm.fileExists(atPath: backup.path) {
+                try? fm.removeItem(at: destination)
+                try? fm.moveItem(at: backup, to: destination)
+            }
+            if let previous, previous.enabled { load(previous, reason: "restore") }
+            throw RikuganError("无法替换扩展文件，仍保留原版本：\(error.localizedDescription)")
+        }
+        if hadPrevious { try? fm.removeItem(at: backup) }
         let now = Date()
         let record = InstalledExtension(
             id: pending.extensionID, name: pending.displayName, version: pending.manifest.version,
@@ -282,14 +297,22 @@ import Combine
     }
 
     /// All live extension page web views of `ext` (background, popup, options, tabs).
+    /// Each web view at most once: the background is also registered in `pages`, and a message or
+    /// port must reach every receiver exactly once.
     func extensionPages(of ext: LoadedExtension) -> [(WKWebView, String)] {
         var result: [(WKWebView, String)] = []
-        if let bg = ext.background?.webView, ext.background?.isReady == true { result.append((bg, "background")) }
+        var seen = Set<ObjectIdentifier>()
+        func add(_ webView: WKWebView, _ kind: String) {
+            if seen.insert(ObjectIdentifier(webView)).inserted { result.append((webView, kind)) }
+        }
+        let background = ext.background?.webView
+        if let bg = background, ext.background?.isReady == true { add(bg, "background") }
         for entry in pages.values where entry.extID == ext.id {
-            if let wv = entry.webView.value { result.append((wv, entry.kind)) }
+            // A background that is not ready must not receive messages through its page entry.
+            if let wv = entry.webView.value, wv !== background { add(wv, entry.kind) }
         }
         for tab in TabRegistry.shared.allTabs where tab.webView?.url?.scheme == scheme && tab.webView?.url?.host == ext.id {
-            if let wv = tab.webView { result.append((wv, "tab")) }
+            if let wv = tab.webView { add(wv, "tab") }
         }
         return result
     }
@@ -905,6 +928,7 @@ enum BackgroundState: String {
         let resumed = waiters
         waiters.removeAll()
         for waiter in resumed { waiter.resume(returning: true) }
+        terminationRestarts = 0
         scheduleIdleCheck()
     }
 
@@ -1109,9 +1133,23 @@ enum BackgroundState: String {
         }
         guard self.webView === webView else { return }
         ErrorLog.shared.record("background WebContent process terminated", source: ext.displayName)
+        let wasStarting = state == .starting || state == .waking
+        startupDeadline?.cancel()
+        startWatchdog?.cancel()
         tearDownWebView()
         state = .suspended   // next message / subscribed event wakes it
+        guard wasStarting else { return }
+        // Requests were waiting for this start: restart once, otherwise fail them explicitly
+        // (never leave a sendMessage / connect pending forever).
+        if terminationRestarts < 1 {
+            terminationRestarts += 1
+            note("process terminated while starting → one restart")
+            launch(as: .waking)
+        } else {
+            fail("background WebContent process terminated while starting (after one restart)")
+        }
     }
+    private var terminationRestarts = 0
 
     /// Diagnostic description used by the self-test and the Diagnostics page.
     var diagnostics: String {

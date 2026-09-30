@@ -143,6 +143,8 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         if nsError.domain == "WebKitErrorDomain" && (nsError.code == 102 || nsError.code == 204) { return } // interrupted by policy / plugin
         if nsError.domain == "WebKitErrorDomain" && nsError.code == 101 { return }
         loadError = nsError.localizedDescription
+        // A failed load ends the restore: the tab is live (showing the error) and can be suspended.
+        restoreFinished()
         profile.extensions.webNavigation(.errorOccurred, tab: self, url: webView?.url ?? url ?? URL(string: "about:blank")!, frameID: 0)
     }
 

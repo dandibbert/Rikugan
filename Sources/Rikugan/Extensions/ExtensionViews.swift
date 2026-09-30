@@ -311,6 +311,12 @@ struct ExtensionPopupSheet: View {
     func close(runtime: ExtensionRuntime) {
         if let webView {
             runtime.unregisterPage(webView)
+            // Ports opened by the popup disconnect now (the background gets onDisconnect and can
+            // go idle again).
+            runtime.bridge.endpointsGone(webView: webView)
+            webView.stopLoading()
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
             webView.configuration.userContentController.removeAllScriptMessageHandlers()
         }
         webView = nil

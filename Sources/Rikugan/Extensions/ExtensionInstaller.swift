@@ -232,14 +232,19 @@ struct PendingExtensionInstall: Identifiable {
 
     // MARK: Install
 
-    func confirm(_ install: PendingExtensionInstall) {
+    /// Returns true only when the new package is on disk and loaded.
+    @discardableResult
+    func confirm(_ install: PendingExtensionInstall) -> Bool {
         do {
             try runtime.install(install)
             pending = nil
             ToastCenter.shared.show(install.existing == nil ? "已安装「\(install.displayName)」" : "已更新「\(install.displayName)」",
                                     symbol: "puzzlepiece.extension")
+            return true
         } catch {
+            try? FileManager.default.removeItem(at: install.stagingDirectory)
             ToastCenter.shared.show("安装失败：\(error.localizedDescription)", symbol: "exclamationmark.triangle", duration: 5)
+            return false
         }
     }
 
@@ -264,8 +269,7 @@ struct PendingExtensionInstall: Identifiable {
                 pending = candidate
                 return "新版本 \(candidate.manifest.version) 需要新的权限，请确认"
             }
-            confirm(candidate)
-            return "已更新到 \(candidate.manifest.version)"
+            return confirm(candidate) ? "已更新到 \(candidate.manifest.version)" : "更新失败，仍在使用版本 \(record.version)"
         } catch {
             return "检查更新失败：\(error.localizedDescription)"
         }

@@ -188,6 +188,63 @@ final class ArchiveTests: XCTestCase {
         XCTAssertEqual(twice.siteSettings.count, 1)
     }
 
+    /// Structural problems are rejected instead of being imported "successfully".
+    func testArchiveValidationRejectsBrokenData() throws {
+        func mutate(_ change: (inout [String: Any]) -> Void) throws -> Data {
+            var json = try JSONSerialization.jsonObject(with: ArchiveCodec.encode(makeArchive())) as! [String: Any]
+            change(&json)
+            return try JSONSerialization.data(withJSONObject: json)
+        }
+        XCTAssertThrowsError(try ArchiveCodec.decode(mutate { $0["formatVersion"] = -1 }), "negative version")
+        XCTAssertThrowsError(try ArchiveCodec.decode(mutate { $0["formatVersion"] = 0 }), "version 0")
+        XCTAssertThrowsError(try ArchiveCodec.decode(mutate { json in
+            var settings = json["settings"] as! [String: Any]
+            settings["adBlockEnabled"] = "yes"
+            json["settings"] = settings
+        }), "wrong type for a known setting")
+        XCTAssertThrowsError(try ArchiveCodec.decode(mutate { $0["activeProfileID"] = UUID().uuidString }), "unknown active profile")
+        // Bookmark folders A → B → A.
+        var archive = makeArchive()
+        let a = BookmarkNode(id: UUID(), title: "A", url: nil, parentID: nil, isFolder: true)
+        var b = BookmarkNode(id: UUID(), title: "B", url: nil, parentID: a.id, isFolder: true)
+        var cyclicA = a
+        cyclicA.parentID = b.id
+        b.parentID = cyclicA.id
+        archive.profiles[0].bookmarks = [cyclicA, b]
+        XCTAssertThrowsError(try ArchiveCodec.decode(ArchiveCodec.encode(archive)), "bookmark cycle")
+    }
+
+    func testBookmarkTreeRules() {
+        let root = BookmarkNode(title: "R", url: nil, parentID: nil, isFolder: true)
+        let child = BookmarkNode(title: "C", url: nil, parentID: root.id, isFolder: true)
+        let leaf = BookmarkNode(title: "L", url: "https://x", parentID: child.id)
+        let nodes = [root, child, leaf]
+        XCTAssertTrue(BookmarkTree.problems(nodes).isEmpty)
+        XCTAssertTrue(BookmarkTree.isDescendant(child.id, of: root.id, in: nodes))
+        XCTAssertTrue(BookmarkTree.isDescendant(root.id, of: root.id, in: nodes))
+        XCTAssertFalse(BookmarkTree.isDescendant(root.id, of: child.id, in: nodes))
+        let underLeaf = BookmarkNode(title: "X", url: "https://y", parentID: leaf.id)
+        XCTAssertFalse(BookmarkTree.problems(nodes + [underLeaf]).isEmpty, "a bookmark cannot be a parent")
+    }
+
+    /// Child folders listed before their parents still land under the right (merged) parent.
+    func testMergeFoldersParentFirst() {
+        let existingTop = BookmarkNode(title: "Top", url: nil, parentID: nil, isFolder: true)
+        var current = ProfileData()
+        current.bookmarks = [existingTop]
+        let top = BookmarkNode(title: "Top", url: nil, parentID: nil, isFolder: true)      // merges into existingTop
+        let mid = BookmarkNode(title: "Mid", url: nil, parentID: top.id, isFolder: true)
+        let deep = BookmarkNode(title: "Deep", url: nil, parentID: mid.id, isFolder: true)
+        let leaf = BookmarkNode(title: "Leaf", url: "https://leaf", parentID: deep.id)
+        let incoming = ProfileArchive(id: UUID(), name: "P", symbol: "person", isDefault: false, siteSettings: [],
+                                      bookmarks: [leaf, deep, mid, top], windows: [], userscripts: [], extensions: [])
+        let merged = ArchiveCodec.apply(incoming, to: current, mode: .merge).bookmarks
+        XCTAssertTrue(BookmarkTree.problems(merged).isEmpty, "\(BookmarkTree.problems(merged))")
+        let midMerged = merged.first { $0.title == "Mid" }
+        XCTAssertEqual(midMerged?.parentID, existingTop.id)
+        XCTAssertEqual(merged.first { $0.title == "Deep" }?.parentID, midMerged?.id)
+    }
+
     func testUnknownFieldsIgnoredAndFutureVersionRejected() throws {
         var json = try JSONSerialization.jsonObject(with: ArchiveCodec.encode(makeArchive())) as! [String: Any]
         json["someFutureField"] = ["x": 1]
@@ -341,7 +398,8 @@ final class MatrixTests: XCTestCase {
     func testMatrixLoadsPerMethodLevels() {
         XCTAssertEqual(ChromeAPIMatrix.method("tabs", "query")?.level, .supported)
         XCTAssertEqual(ChromeAPIMatrix.method("tabs", "update")?.level, .partial)
-        XCTAssertEqual(ChromeAPIMatrix.method("tabs", "move")?.level, .unsupported)
+        XCTAssertEqual(ChromeAPIMatrix.method("tabs", "move")?.level, .partial)
+        XCTAssertEqual(ChromeAPIMatrix.method("tabs", "group")?.level, .unsupported)
         XCTAssertEqual(ChromeAPIMatrix.level(of: "webRequest"), .unsupported)
         XCTAssertEqual(ChromeAPIMatrix.method("declarativeNetRequest", "getMatchedRules")?.level, .unsupported)
         XCTAssertFalse(ChromeAPIMatrix.entries.first { $0.namespace == "tabs" }!.missing.isEmpty)

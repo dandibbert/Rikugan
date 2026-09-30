@@ -12,7 +12,7 @@ public struct RikuganArchive: Codable, Equatable {
     public static let formatName = "rikugan-archive"
     public static let currentFormatVersion = 2
     public static let excludedAlways = ["passwords", "payment cards", "keychain items", "cookies", "website data (localStorage / IndexedDB / cache)",
-                                        "session secrets", "extension packages", "extension storage", "font files"]
+                                        "session secrets", "extension packages", "extension storage", "font files", "wallpaper image"]
 
     public var format: String
     public var formatVersion: Int
@@ -199,10 +199,15 @@ public enum ArchiveCodec {
             // v1 migration.
             let legacy: ExportBundle
             do { legacy = try ExportBundle.decode(data) } catch { throw RikuganError("旧版导出文件已损坏：\(error.localizedDescription)") }
-            return migrateV1(legacy)
+            guard legacy.version == 1 else { throw RikuganError("不支持的旧版导出格式版本 \(legacy.version)") }
+            let migrated = migrateV1(legacy)
+            let problems = validate(migrated) + settingsTypeProblems(object["preferences"])
+            guard problems.isEmpty else { throw RikuganError("导出文件校验失败：" + problems.prefix(5).joined(separator: "；")) }
+            return migrated
         }
         guard format == RikuganArchive.formatName else { throw RikuganError("不是 Rikugan 导出文件") }
         guard let version = object["formatVersion"] as? Int else { throw RikuganError("缺少 formatVersion") }
+        guard version >= 1 else { throw RikuganError("无效的格式版本 \(version)") }
         guard version <= RikuganArchive.currentFormatVersion else {
             throw RikuganError("该文件由更新版本的 Rikugan 导出（格式版本 \(version)），请先升级 App")
         }
@@ -210,9 +215,28 @@ public enum ArchiveCodec {
         do { archive = try decoder.decode(RikuganArchive.self, from: data) } catch {
             throw RikuganError("导出文件结构无效：\(error.localizedDescription)")
         }
-        let problems = validate(archive)
+        let problems = validate(archive) + settingsTypeProblems(object["settings"])
         guard problems.isEmpty else { throw RikuganError("导出文件校验失败：" + problems.prefix(5).joined(separator: "；")) }
         return archive
+    }
+
+    /// Known settings with a value of the wrong JSON type are an error (the tolerant decoder would
+    /// silently fall back to the default and report a successful import). Unknown keys are ignored.
+    static func settingsTypeProblems(_ raw: Any?) -> [String] {
+        guard let settings = raw as? [String: Any],
+              let defaults = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(Preferences()))) as? [String: Any] else { return [] }
+        func kind(_ value: Any) -> String {
+            if value is NSNull { return "null" }
+            if let number = value as? NSNumber { return CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() ? "bool" : "number" }
+            if value is String { return "string" }
+            if value is [Any] { return "array" }
+            if value is [String: Any] { return "object" }
+            return "other"
+        }
+        return settings.compactMap { key, value in
+            guard let expected = defaults[key], !(value is NSNull) else { return nil }
+            return kind(expected) == kind(value) ? nil : "设置项 \(key) 的类型无效（应为 \(kind(expected))）"
+        }.sorted()
     }
 
     public static func validate(_ archive: RikuganArchive) -> [String] {
@@ -222,12 +246,27 @@ public enum ArchiveCodec {
             for (i, window) in profile.windows.enumerated() {
                 problems += SessionOps.validate(window).map { "身份「\(profile.name)」窗口 \(i + 1)：\($0)" }
             }
-            let ids = Set(profile.bookmarks.map(\.id))
-            if ids.count != profile.bookmarks.count { problems.append("身份「\(profile.name)」书签 ID 重复") }
-            for b in profile.bookmarks { if let p = b.parentID, !ids.contains(p) { problems.append("书签「\(b.title)」的父文件夹不存在") } }
+            problems += BookmarkTree.problems(profile.bookmarks).map { "身份「\(profile.name)」：\($0)" }
             if archive.contents.userscriptSource, profile.userscripts.contains(where: { $0.source == nil }) {
                 problems.append("声明包含脚本源码但缺少 source")
             }
+            for script in profile.userscripts {
+                if let source = script.source, MetadataParser.parse(source).hasErrors {
+                    problems.append("脚本「\(script.name)」的元数据无效：\(MetadataParser.parse(source).firstError ?? "")")
+                }
+            }
+            let tabIDs = profile.windows.flatMap { $0.tabs.map(\.id) }
+            if Set(tabIDs).count != tabIDs.count { problems.append("身份「\(profile.name)」中有重复的标签页 ID") }
+            for window in profile.windows {
+                for tab in window.tabs where !tab.url.isEmpty && URL(string: tab.url)?.scheme == nil {
+                    problems.append("身份「\(profile.name)」中有无效的标签页网址")
+                    break
+                }
+            }
+        }
+        if archive.profiles.filter(\.isDefault).count > 1 { problems.append("有多个默认身份") }
+        if let active = archive.activeProfileID, !archive.profiles.contains(where: { $0.id == active }) {
+            problems.append("当前身份 ID 不在身份列表中")
         }
         return problems
     }
@@ -268,7 +307,8 @@ public enum ArchiveCodec {
             result.siteSettings = sites.values.sorted { $0.host < $1.host }
             var nodes = current.bookmarks
             var idMap: [UUID: UUID] = [:]
-            for node in incoming.bookmarks.sorted(by: { ($0.parentID == nil ? 0 : 1) < ($1.parentID == nil ? 0 : 1) }) where node.isFolder {
+            // Parents before children, so every folder's parent mapping is known when it is placed.
+            for node in BookmarkTree.foldersParentFirst(incoming.bookmarks) {
                 let parent = node.parentID.flatMap { idMap[$0] ?? $0 }
                 if let existing = nodes.first(where: { $0.isFolder && ($0.id == node.id || ($0.title == node.title && $0.parentID == parent)) }) {
                     idMap[node.id] = existing.id

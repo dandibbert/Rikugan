@@ -750,7 +750,12 @@ import UserNotifications
     }
 
     func portCount(extID: String) -> Int { ports.values.filter { $0.extID == extID && $0.connected }.count }
-    func hasOpenPorts(extID: String) -> Bool { ports.values.contains { $0.extID == extID && $0.connected } }
+    /// Ports whose ends are gone (a web view deallocated without a clean close) are dropped here,
+    /// so they cannot keep the background from going idle.
+    func hasOpenPorts(extID: String) -> Bool {
+        endpointsGone { $0.webView == nil }
+        return ports.values.contains { $0.extID == extID && $0.connected }
+    }
     var openPortCount: Int { ports.count }
 
     /// A web view went away (tab closed / suspended, background suspended): disconnect its ports.

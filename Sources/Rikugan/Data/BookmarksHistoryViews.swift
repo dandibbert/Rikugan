@@ -125,7 +125,7 @@ struct BookmarkMoveSheet: View {
         NavigationStack {
             List {
                 Button("书签（顶层）") { profile.bookmarks.move(node, to: nil); dismiss() }
-                ForEach(profile.bookmarks.folders.filter { $0.id != node.id }) { folder in
+                ForEach(profile.bookmarks.validParents(for: node)) { folder in
                     Button { profile.bookmarks.move(node, to: folder.id); dismiss() } label: { Label(folder.title, systemImage: "folder") }
                 }
             }

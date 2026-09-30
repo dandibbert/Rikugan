@@ -163,8 +163,19 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     /// Position of `node` among its siblings, in display order.
     func index(of node: BookmarkNode) -> Int { children(of: node.parentID).firstIndex { $0.id == node.id } ?? 0 }
 
+    /// Destinations a node may be moved to: folders that are neither the node nor below it.
+    func validParents(for node: BookmarkNode) -> [BookmarkNode] {
+        folders.filter { !BookmarkTree.isDescendant($0.id, of: node.id, in: nodes) }
+    }
+
     func update(_ node: BookmarkNode) {
         guard let index = nodes.firstIndex(where: { $0.id == node.id }) else { return }
+        // Never create a cycle (a folder inside itself / its own descendant), never re-parent
+        // Favorites, and only folders can contain bookmarks.
+        if node.parentID != nodes[index].parentID {
+            if node.id == BookmarkNode.favoritesID || BookmarkTree.isDescendant(node.parentID, of: node.id, in: nodes) { return }
+            if let parent = node.parentID, nodes.first(where: { $0.id == parent })?.isFolder != true { return }
+        }
         let old = nodes[index]
         let oldIndex = self.index(of: old)
         nodes[index] = node
@@ -174,7 +185,7 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     }
 
     func move(_ node: BookmarkNode, to parent: UUID?) {
-        guard node.id != parent else { return }
+        guard !BookmarkTree.isDescendant(parent, of: node.id, in: nodes) else { return }
         var copy = node
         copy.parentID = parent
         copy.order = (children(of: parent).map(\.order).max() ?? -1) + 1
@@ -209,6 +220,8 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     }
 
     func replaceAll(_ newNodes: [BookmarkNode]) {
+        // Callers validate (archive import); a graph with cycles is never stored.
+        guard BookmarkTree.problems(newNodes).allSatisfy({ !$0.contains("循环") }) else { return }
         nodes = newNodes
         if !nodes.contains(where: { $0.id == BookmarkNode.favoritesID }) {
             nodes.insert(BookmarkNode(id: BookmarkNode.favoritesID, title: "个人收藏", url: nil, parentID: nil, isFolder: true), at: 0)

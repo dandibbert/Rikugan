@@ -188,12 +188,14 @@ enum TranslationState: Equatable {
     /// history (interactionState) and scroll position. JS state, WebSockets and unsaved form
     /// content are lost and the page reloads on restore — this is accepted, not hidden.
     func suspend() async {
-        guard let webView, lifecycle == .liveBackground, manager?.activeTabID != id else { return }
+        // A background tab that is still loading (or failed to load) is `.restoring`; it counts
+        // against the live budget and can be suspended too — only the selected tab is exempt.
+        guard let webView, lifecycle == .liveBackground || lifecycle == .restoring, manager?.activeTabID != id else { return }
         // Prefer the position captured on deactivation; a detached web view can report 0.
         if let y = (try? await webView.rkCall("return window.scrollY || 0;", world: Worlds.tools)) as? Double, y > 0 || lastScrollY == nil { lastScrollY = y }
         // Re-check after the await: the tab may have been selected meanwhile (it is then
         // `.restoring` or `.active` and the current tab) — never release the visible web view.
-        guard self.webView === webView, lifecycle == .liveBackground, manager?.activeTabID != id else { return }
+        guard self.webView === webView, lifecycle == .liveBackground || lifecycle == .restoring, manager?.activeTabID != id else { return }
         captureThumbnail()
         restoreState = (webView.interactionState as? Data) ?? restoreState
         restoreURL = webView.url ?? url

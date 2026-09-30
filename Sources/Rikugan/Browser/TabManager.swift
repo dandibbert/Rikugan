@@ -78,6 +78,9 @@ import UIKit
         if !background {
             if privateTab != isPrivateMode { isPrivateMode = privateTab }
             select(tab)
+        } else {
+            // Opening in the background creates a live web view too: keep the live budget.
+            enforceLifecycle(memoryPressure: false)
         }
         profile.extensions.tabCreated(tab)
         scheduleSave()
@@ -121,6 +124,15 @@ import UIKit
     var liveTabCount: Int { tabs.filter(\.isLive).count }
     var suspendedTabCount: Int { tabs.filter { !$0.isLive && ($0.url != nil) }.count }
 
+    /// Set while a group operation closes several tabs: the replacement tab is chosen once afterwards.
+    private var batchClosing = false
+
+    /// After a batch close: the selected tab must exist and belong to an existing group.
+    private func ensureValidSelection() {
+        if let active = activeTab, active.isPrivate || active.groupID == nil || groups.contains(where: { $0.id == active.groupID }) { return }
+        if let next = visibleTabs.max(by: { $0.lastActiveAt < $1.lastActiveAt }) { select(next) } else { newTab(isPrivate: false) }
+    }
+
     func close(_ tab: BrowserTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         if !tab.isPrivate, !(tab.url == nil && tab.webView == nil) {
@@ -136,7 +148,9 @@ import UIKit
         profile.extensions.tabRemoved(tab)
         tab.teardown()
         if tab.isPrivate { profile.releasePrivateStoreIfUnused() }
-        if wasActive {
+        if wasActive, batchClosing {
+            activeTabID = nil
+        } else if wasActive {
             let remaining = space.filter { $0.id != tab.id }
             if let opener = tab.opener, remaining.contains(where: { $0.id == opener.id }) {
                 select(opener)
@@ -243,6 +257,8 @@ import UIKit
         let remaining = Set(snapshot.tabs.map(\.id))
         let closed = normal.filter { !remaining.contains($0.id) }
         groups = snapshot.groups
+        // Leave a deleted group before closing its tabs, so no replacement tab is created in it.
+        if let group = currentGroupID, !groups.contains(where: { $0.id == group }) { currentGroupID = nil }
         let byID = Dictionary(uniqueKeysWithValues: normal.map { ($0.id, $0) })
         var ordered: [BrowserTab] = []
         for entry in snapshot.tabs {
@@ -253,8 +269,11 @@ import UIKit
         // Keep removed tabs in the list until `close` runs: it needs to find them to tear them down,
         // record them as recently closed and notify extensions (otherwise their web views leak).
         tabs = ordered + closed + tabs.filter(\.isPrivate)
+        batchClosing = true
         for tab in closed { close(tab) }
+        batchClosing = false
         if let group = currentGroupID, !groups.contains(where: { $0.id == group }) { switchToGroup(nil) }
+        ensureValidSelection()
         objectWillChange.send()
         scheduleSave()
     }

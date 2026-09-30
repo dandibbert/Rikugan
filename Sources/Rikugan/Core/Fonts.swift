@@ -27,7 +27,7 @@ public struct FontPlan: Equatable, Codable {
     }
 
     /// Heuristic used by the page tagger to recognise icon / symbol fonts (never overridden).
-    public static let iconFontPattern = "icon|awesome|fontello|glyph|symbol|material|octicon|dashicons|feather|remix|ionic|typicons|entypo|linearicons|themify|bootstrap-icons|codicon|iconfont|^fa$|^fa[srbld]?-|webfont-ico|lucide|tabler|phosphor"
+    public static let iconFontPattern = "icon|icomoon|awesome|fontello|glyph|symbol|material|octicon|dashicons|feather|remix|ionic|typicons|entypo|linearicons|themify|bootstrap-icons|codicon|iconfont|^fa$|^fa[srbld]?-|webfont-ico|lucide|tabler|phosphor"
 }
 
 /// TrueType / OpenType collection (.ttc) splitter: WebKit's font loader handles single-face

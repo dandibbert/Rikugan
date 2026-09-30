@@ -368,7 +368,11 @@ struct ArchiveImportSheet: View {
                 sites = Array(services.profile.siteSettings.sites.values)
                 bookmarks = services.profile.bookmarks.nodes
                 scriptStore = services.profile.userscripts
-                windows = TabRegistry.shared.allWindows.map(\.sessionSnapshot)
+                // Open windows plus saved windows of this identity that are not open right now.
+                let open = TabRegistry.shared.allWindows.filter { $0.profile === services.profile }
+                let openFiles = Set(open.map { $0.windowID.uuidString + ".json" })
+                windows = open.map(\.sessionSnapshot) + sessionFiles(in: dir).filter { !openFiles.contains($0.lastPathComponent) }
+                    .compactMap { JSONFile<WindowSessionSnapshot>($0).load() }.filter { !$0.tabs.isEmpty }
             } else {
                 sites = Array(SiteSettingsStore(directory: dir).sites.values)
                 bookmarks = BookmarkStore(directory: dir).nodes
@@ -428,20 +432,34 @@ struct ArchiveImportSheet: View {
         }
     }
 
-    /// Step 2: apply. All new data is computed first; a backup of the current state is written
-    /// before any store changes, so a failed import never loses existing data.
+    /// A userscript prepared before anything is written: source parsed and every @require /
+    /// @resource downloaded.
+    private struct PreparedScript {
+        let item: ArchivedUserscript
+        let source: String
+        let deps: UserscriptDependencies.Result
+    }
+
+    /// Step 2: apply, as a transaction.
+    /// 1. A backup of the current state is written (no backup → nothing happens).
+    /// 2. Everything is prepared and validated without writing: the resulting data of every
+    ///    profile, and every userscript (metadata + downloaded dependencies). A script that cannot
+    ///    be prepared is reported; the import continues only if the user accepts importing
+    ///    without it.
+    /// 3. Changes are written; if a write fails, the backup is restored and the failure shown.
     static func apply(_ archive: RikuganArchive, mode: ArchiveCodec.ImportMode, into manager: TabManager) async {
         let services = AppServices.shared
-        // Backup.
+        let backupFile: URL
         do {
             let backup = try ArchiveCodec.encode(buildArchive())
-            let dir = AppPaths.directory("Backups")
-            try backup.write(to: dir.appendingPathComponent("pre-import-\(Int(Date().timeIntervalSince1970)).rikugan.json"))
+            backupFile = AppPaths.directory("Backups").appendingPathComponent("pre-import-\(Int(Date().timeIntervalSince1970)).rikugan.json")
+            try backup.write(to: backupFile, options: .atomic)
         } catch {
             ToastCenter.shared.show("无法创建导入前备份，已取消导入：\(error.localizedDescription)", symbol: "exclamationmark.triangle", duration: 5)
             return
         }
-        // Compute every profile's resulting data before writing anything.
+
+        // ---- Prepare (no writes) ----
         var plans: [(ProfileArchive, ProfileData, Bool)] = []
         for incoming in archive.profiles {
             let isActive = incoming.id == services.profile.id || (incoming.isDefault && services.profile.info.isDefault)
@@ -454,53 +472,136 @@ struct ArchiveImportSheet: View {
                 current = ProfileData(siteSettings: Array(SiteSettingsStore(directory: dir).sites.values), bookmarks: BookmarkStore(directory: dir).nodes,
                                       windows: sessionFiles(in: dir).compactMap { JSONFile<WindowSessionSnapshot>($0).load() }, userscripts: [])
             }
-            plans.append((incoming, ArchiveCodec.apply(incoming, to: current, mode: mode), isActive))
+            let result = ArchiveCodec.apply(incoming, to: current, mode: mode)
+            let problems = BookmarkTree.problems(result.bookmarks)
+            guard problems.isEmpty else {
+                ToastCenter.shared.show("导入已取消：身份「\(incoming.name)」的书签合并结果无效（\(problems[0])）", symbol: "exclamationmark.triangle", duration: 6)
+                return
+            }
+            plans.append((incoming, result, isActive))
         }
-        // Write.
-        if mode == .replace { services.prefs = archive.settings } else { services.prefs = mergedPreferences(services.prefs, archive.settings) }
+        var prepared: [UUID: [PreparedScript]] = [:]
+        var failed: [String] = []
+        for (incoming, _, _) in plans {
+            var list: [PreparedScript] = []
+            for item in incoming.userscripts {
+                guard let source = item.source else { failed.append("\(item.name)（归档中没有源码）"); continue }
+                let parsed = MetadataParser.parse(source)
+                if parsed.hasErrors { failed.append("\(item.name)（\(parsed.firstError ?? "元数据无效")）"); continue }
+                do {
+                    list.append(PreparedScript(item: item, source: source, deps: try await UserscriptDependencies.fetch(for: parsed.metadata)))
+                } catch {
+                    failed.append("\(item.name)（依赖下载失败：\(error.localizedDescription)）")
+                }
+            }
+            prepared[incoming.id] = list
+        }
+        if !failed.isEmpty {
+            let proceed = await Presenter.confirm(
+                title: "\(failed.count) 个脚本无法导入",
+                message: failed.prefix(6).joined(separator: "\n") + (failed.count > 6 ? "\n…" : "") + "\n\n继续导入其余内容（这些脚本不导入，\(mode == .replace ? "当前同名脚本保持不变" : "不影响现有脚本")）？",
+                confirm: "继续导入", cancel: "取消导入")
+            guard proceed else { ToastCenter.shared.show("已取消导入，没有做任何更改", symbol: "xmark.circle"); return }
+        }
+
+        // ---- Commit ----
+        do {
+            try await commit(archive, mode: mode, plans: plans, prepared: prepared, failedNames: Set(failed.map { $0.components(separatedBy: "（").first ?? $0 }), into: manager)
+        } catch {
+            // Restore the state saved above.
+            if let data = try? Data(contentsOf: backupFile), let backup = try? ArchiveCodec.decode(data) {
+                try? await commit(backup, mode: .replace, plans: backup.profiles.map { ($0, $0.data, $0.id == services.profile.id) },
+                                  prepared: [:], failedNames: [], into: manager, restoringBackup: true)
+            }
+            ToastCenter.shared.show("导入失败，已恢复导入前的状态：\(error.localizedDescription)", symbol: "exclamationmark.triangle", duration: 6)
+            return
+        }
+        let s = archive.summary
+        let fontNote = archive.fonts.isEmpty ? "" : "；\(archive.fonts.count) 个导入字体需要重新导入字体文件"
+        ToastCenter.shared.show("已导入 \(s.tabs) 个标签页、\(s.groups) 个组、\(s.userscripts - failed.count) 个脚本" +
+                                (failed.isEmpty ? "" : "（\(failed.count) 个脚本未导入）") + fontNote,
+                                symbol: failed.isEmpty ? "checkmark.circle" : "exclamationmark.circle", duration: 5)
+    }
+
+    /// Writes a prepared import. Throws on the first failed write (the caller restores the backup).
+    private static func commit(_ archive: RikuganArchive, mode: ArchiveCodec.ImportMode, plans: [(ProfileArchive, ProfileData, Bool)],
+                               prepared: [UUID: [PreparedScript]], failedNames: Set<String>, into manager: TabManager,
+                               restoringBackup: Bool = false) async throws {
+        let services = AppServices.shared
+        var settings = mode == .replace ? archive.settings : mergedPreferences(services.prefs, archive.settings)
+        // The wallpaper image is not part of an archive: keep a setting only if its file exists here.
+        if let wallpaper = settings.wallpaperFileName, !FileManager.default.fileExists(atPath: AppPaths.wallpapers.appendingPathComponent(wallpaper).path) {
+            settings.wallpaperFileName = services.prefs.wallpaperFileName
+        }
+        services.prefs = settings
         let cb = archive.contentBlocking
         if mode == .replace {
             services.adBlock.replaceState(customRules: cb.customRules, subscriptions: cb.subscriptions, allowlist: cb.allowlist)
         } else {
             let lines = Set(services.adBlock.customRules.components(separatedBy: .newlines))
             let merged = services.adBlock.customRules + cb.customRules.components(separatedBy: .newlines).filter { !$0.isEmpty && !lines.contains($0) }.map { "\n" + $0 }.joined()
-            services.adBlock.replaceState(customRules: merged, subscriptions: services.adBlock.subscriptions,
+            // Subscriptions are merged by URL (existing entries keep their state).
+            let existing = Set(services.adBlock.subscriptions.map(\.url))
+            let subscriptions = services.adBlock.subscriptions + cb.subscriptions.filter { !existing.contains($0.url) }
+            services.adBlock.replaceState(customRules: merged, subscriptions: subscriptions,
                                           allowlist: Array(Set(services.adBlock.allowlist + cb.allowlist)).sorted())
         }
-        var scriptFailures = 0
         for (incoming, data, isActive) in plans {
+            let scripts = prepared[incoming.id] ?? []
             if isActive {
                 let profile = services.profile
                 profile.siteSettings.replaceAll(data.siteSettings)
                 profile.bookmarks.replaceAll(data.bookmarks)
                 if mode == .replace {
-                    if let first = incoming.windows.first { manager.apply(first) }
-                    for extra in incoming.windows.dropFirst() {
-                        JSONFile<WindowSessionSnapshot>(AppPaths.directory("Sessions", in: profile.directory).appendingPathComponent(UUID().uuidString + ".json")).save(extra, immediately: true)
-                    }
+                    try replaceWindows(of: profile, with: incoming.windows, initiator: manager)
                 } else {
                     for window in data.windows { manager.importSession(window) }
                 }
-                scriptFailures += await installScripts(incoming.userscripts, into: profile.userscripts, replace: mode == .replace)
+                try installScripts(scripts, into: profile.userscripts, replace: mode == .replace, keeping: failedNames, restoringBackup: restoringBackup, archived: incoming.userscripts)
             } else {
-                if !services.profiles.profiles.contains(where: { $0.id == incoming.id }) {
+                if let info = services.profiles.profiles.first(where: { $0.id == incoming.id }) {
+                    if info.name != incoming.name || info.symbol != incoming.symbol { services.profiles.rename(incoming.id, name: incoming.name, symbol: incoming.symbol) }
+                } else {
                     services.profiles.adopt(ProfileInfo(id: incoming.id, name: incoming.name, symbol: incoming.symbol, isDefault: false))
                 }
                 let dir = AppPaths.directory(incoming.id.uuidString, in: AppPaths.directory("Profiles"))
-                JSONFile<[String: SiteSettings]>(dir.appendingPathComponent("site-settings.json"))
-                    .save(Dictionary(data.siteSettings.map { ($0.host, $0) }, uniquingKeysWith: { a, _ in a }), immediately: true)
-                JSONFile<[BookmarkNode]>(dir.appendingPathComponent("bookmarks.json")).save(data.bookmarks, immediately: true)
-                if mode == .replace { for file in sessionFiles(in: dir) { try? FileManager.default.removeItem(at: file) } }
+                try JSONFile<[String: SiteSettings]>(dir.appendingPathComponent("site-settings.json"))
+                    .write(Dictionary(data.siteSettings.map { ($0.host, $0) }, uniquingKeysWith: { a, _ in a }))
+                try JSONFile<[BookmarkNode]>(dir.appendingPathComponent("bookmarks.json")).write(data.bookmarks)
+                if mode == .replace { for file in sessionFiles(in: dir) { try FileManager.default.removeItem(at: file) } }
                 for window in (mode == .replace ? incoming.windows : Array(data.windows.suffix(incoming.windows.count))) {
-                    JSONFile<WindowSessionSnapshot>(AppPaths.directory("Sessions", in: dir).appendingPathComponent(UUID().uuidString + ".json")).save(window, immediately: true)
+                    try JSONFile<WindowSessionSnapshot>(AppPaths.directory("Sessions", in: dir).appendingPathComponent(UUID().uuidString + ".json")).write(window)
                 }
                 let store = UserScriptStore(directory: AppPaths.directory("Userscripts", in: dir))
-                scriptFailures += await installScripts(incoming.userscripts, into: store, replace: mode == .replace)
+                try installScripts(scripts, into: store, replace: mode == .replace, keeping: failedNames, restoringBackup: restoringBackup, archived: incoming.userscripts)
             }
         }
-        let s = archive.summary
-        ToastCenter.shared.show("已导入 \(s.tabs) 个标签页、\(s.groups) 个组、\(s.userscripts - scriptFailures) 个脚本" + (scriptFailures > 0 ? "（\(scriptFailures) 个脚本失败）" : ""),
-                                symbol: "checkmark.circle", duration: 4)
+        PersistenceQueue.shared.flush()
+        // Replace also restores which identity was active when the archive was exported.
+        if mode == .replace, !restoringBackup, let active = archive.activeProfileID, active != services.profile.id,
+           services.profiles.profiles.contains(where: { $0.id == active }) {
+            services.profiles.switchTo(active)
+        }
+    }
+
+    /// Replace mode for the active identity: every open window of it is replaced (the first
+    /// archived window goes to the window that started the import, further ones to other open
+    /// windows; open windows without an archived counterpart are emptied) and saved sessions
+    /// of windows that are not open are replaced by the remaining archived windows.
+    private static func replaceWindows(of profile: ProfileContext, with windows: [WindowSessionSnapshot], initiator: TabManager) throws {
+        let open = [initiator] + TabRegistry.shared.allWindows.filter { $0 !== initiator && $0.profile === profile }
+        var remaining = windows[...]
+        for window in open {
+            window.apply(remaining.popFirst() ?? WindowSessionSnapshot())
+            window.save()
+        }
+        let openIDs = Set(open.map { $0.windowID.uuidString + ".json" })
+        for file in sessionFiles(in: profile.directory) where !openIDs.contains(file.lastPathComponent) {
+            try FileManager.default.removeItem(at: file)
+        }
+        for extra in remaining {
+            try JSONFile<WindowSessionSnapshot>(AppPaths.directory("Sessions", in: profile.directory).appendingPathComponent(UUID().uuidString + ".json")).write(extra)
+        }
     }
 
     private static func mergedPreferences(_ current: Preferences, _ incoming: Preferences) -> Preferences {
@@ -511,26 +612,23 @@ struct ArchiveImportSheet: View {
         return merged
     }
 
-    /// Returns the number of scripts that could not be installed.
-    private static func installScripts(_ scripts: [ArchivedUserscript], into store: UserScriptStore, replace: Bool) async -> Int {
-        var failures = 0
+    /// Installs prepared scripts. In replace mode, scripts that are not in the archive are removed,
+    /// except those whose archived copy could not be prepared (they stay as they are).
+    private static func installScripts(_ scripts: [PreparedScript], into store: UserScriptStore, replace: Bool, keeping failedNames: Set<String>,
+                                       restoringBackup: Bool, archived: [ArchivedUserscript]) throws {
         if replace {
-            let keep = Set(scripts.map { $0.name + "\u{0}" + $0.namespace })
+            let keep = Set(archived.map { $0.name + "\u{0}" + $0.namespace })
             for script in store.scripts where !keep.contains(script.metadata.name + "\u{0}" + script.metadata.namespace) { store.delete(script.id) }
         }
-        for item in scripts {
-            guard let source = item.source else { failures += 1; continue }
-            do {
-                let meta = MetadataParser.parse(source).metadata
-                let deps = (try? await UserscriptDependencies.fetch(for: meta)) ?? UserscriptDependencies.Result()
-                let script = try store.install(source: source, sourceURL: item.sourceURL, requires: deps.requires, resources: deps.resources, enabled: item.enabled)
-                if let values = item.values { store.replaceValues(values, for: script.id) }
-            } catch {
-                failures += 1
-                ErrorLog.shared.record("import userscript \(item.name): \(error.localizedDescription)", source: "Import")
-            }
+        // A backup restore re-installs from sources without re-downloading dependencies.
+        let items: [PreparedScript] = restoringBackup
+            ? archived.compactMap { item in item.source.map { PreparedScript(item: item, source: $0, deps: UserscriptDependencies.Result()) } }
+            : scripts
+        for prepared in items where !failedNames.contains(prepared.item.name) {
+            let script = try store.install(source: prepared.source, sourceURL: prepared.item.sourceURL, requires: prepared.deps.requires,
+                                           resources: prepared.deps.resources, enabled: prepared.item.enabled)
+            if let values = prepared.item.values { store.replaceValues(values, for: script.id) }
         }
-        return failures
     }
 }
 

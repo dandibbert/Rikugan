@@ -383,6 +383,7 @@ struct TranslationSettingsView: View {
                 Text(["libre", "deepl"].contains(services.prefs.translationProvider)
                      ? "网页文本只发送到这里选择的服务，失败时不会改用其他服务。API Key 保存在钥匙串中，不会出现在导出文件里。"
                      : "网页文本只发送到这里选择的服务。打开上面的开关后，Google 与 Microsoft 其中一个失败时会改用另一个。")
+            }
             Section("目标语言") {
                 Picker("翻译为", selection: $services.prefs.translationTargetLanguage) {
                     ForEach(TranslationLanguage.common) { Text($0.name).tag($0.code) }
@@ -479,6 +480,9 @@ struct DeveloperSettingsView: View {
             } footer: { Text("诊断页显示构建信息、标签页生命周期、扩展后台状态、API 兼容性、DNR 能力与最近错误，可导出为不含敏感信息的 JSON。") }
             Section {
                 Stepper("后台存活标签页上限：\(services.prefs.maxLiveBackgroundTabs)", value: $services.prefs.maxLiveBackgroundTabs, in: 0...20)
+                    .onChange(of: services.prefs.maxLiveBackgroundTabs) {
+                        for window in TabRegistry.shared.allWindows { window.enforceLifecycle(memoryPressure: false) }
+                    }
                 Stepper("扩展后台空闲挂起：\(services.prefs.backgroundIdleSeconds) 秒", value: $services.prefs.backgroundIdleSeconds, in: 30...1800, step: 30)
             } footer: { Text("超过上限的后台标签页会被挂起（保存网址、历史、滚动位置与快照，释放 WKWebView），切回时恢复。收到内存警告时会挂起全部后台标签页。有打开端口的扩展后台不会被挂起。") }
         }
