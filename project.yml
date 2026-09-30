@@ -54,6 +54,9 @@ targets:
         # App Group shared with the share extension. The CI IPA is unsigned; whoever signs it must
         # keep this group (and the extension's) or the share hand-off falls back to the clipboard.
         CODE_SIGN_ENTITLEMENTS: Sources/Rikugan/Rikugan.entitlements
+        # Simulator builds embed entitlements even unsigned; the shipped IPA carries none, so the
+        # simulator test app must not either (it would test a configuration nobody installs).
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": ""
     dependencies:
       - target: RikuganShare
         embed: true
@@ -69,6 +72,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.Rikugan.Share
         INFOPLIST_FILE: Sources/ShareExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: Sources/ShareExtension/RikuganShare.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": ""
         APPLICATION_EXTENSION_API_ONLY: YES
   RikuganUITests:
     type: bundle.ui-testing
