@@ -693,6 +693,10 @@ import UserNotifications
         let senderInfo = sender(for: caller)
         let opener = caller.endpoint
         ports[key] = PortState(id: portID, extID: ext.id, opener: opener, receivers: [])
+        // Registered before the receivers are looked up (messages posted meanwhile are queued);
+        // if that fails (e.g. the background cannot start) the half-open port must not stay behind.
+        var established = false
+        defer { if !established, ports[key]?.connected != true { ports.removeValue(forKey: key) } }
         var receivers: [Endpoint] = []
         let open = "return globalThis.__rikuganChrome ? globalThis.__rikuganChrome.openPort(id, n, s) : false;"
         if args["target"] as? String == "tab", let tabID = args["tabId"] as? Int, let tab = TabRegistry.shared.tab(tabID), let webView = tab.webView {
@@ -720,6 +724,7 @@ import UserNotifications
         }
         state.receivers = receivers
         state.connected = true
+        established = true
         let queued = state.pending
         state.pending = []
         ports[key] = state
