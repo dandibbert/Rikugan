@@ -117,19 +117,28 @@ struct TabSwitcherView: View {
                 }
             }
             Section("标签页组") {
+                // Tapping a group switches to it (like Safari); editing is in its own submenu below.
                 ForEach(manager.groups) { group in
-                    Menu {
-                        Button { manager.switchToGroup(group.id) } label: { Label("打开", systemImage: "arrow.right.circle") }
-                        Button { newGroupName = group.name; renamingGroup = group } label: { Label("重命名", systemImage: "pencil") }
-                        Button(role: .destructive) { manager.deleteGroup(group.id, mode: .moveTabsToDefault) } label: { Label("删除组（标签页移到“标签页”）", systemImage: "folder.badge.minus") }
-                        Button(role: .destructive) { manager.deleteGroup(group.id, mode: .closeTabs) } label: { Label("删除组并关闭其中标签页", systemImage: "trash") }
-                    } label: {
+                    Button { manager.switchToGroup(group.id) } label: {
                         Label("\(group.name)（\(manager.tabs(inGroup: group.id).count)）",
                               systemImage: !manager.isPrivateMode && manager.currentGroupID == group.id ? "checkmark" : "square.grid.2x2")
                     }
                 }
-                Button { showNewGroup = true } label: { Text("新建空白标签页组") }
-                if manager.groups.count > 1 { Button { showManageGroups = true } label: { Label("调整组顺序…", systemImage: "arrow.up.arrow.down") } }
+                Button { showNewGroup = true } label: { Label("新建空白标签页组", systemImage: "plus") }
+            }
+            if !manager.groups.isEmpty {
+                Section {
+                    Menu {
+                        ForEach(manager.groups) { group in
+                            Menu(group.name) {
+                                Button { newGroupName = group.name; renamingGroup = group } label: { Label("重命名", systemImage: "pencil") }
+                                Button(role: .destructive) { manager.deleteGroup(group.id, mode: .moveTabsToDefault) } label: { Label("删除组（标签页移到“标签页”）", systemImage: "folder.badge.minus") }
+                                Button(role: .destructive) { manager.deleteGroup(group.id, mode: .closeTabs) } label: { Label("删除组并关闭其中标签页", systemImage: "trash") }
+                            }
+                        }
+                        if manager.groups.count > 1 { Button { showManageGroups = true } label: { Label("调整组顺序…", systemImage: "arrow.up.arrow.down") } }
+                    } label: { Label("编辑标签页组", systemImage: "slider.horizontal.3") }
+                }
             }
         } label: {
             HStack(spacing: 4) {
