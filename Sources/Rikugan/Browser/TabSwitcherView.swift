@@ -24,7 +24,7 @@ struct TabSwitcherView: View {
                 ScrollView {
                     if filtered.isEmpty {
                         VStack(spacing: 10) {
-                            Image(systemName: manager.isPrivateMode ? "hand.raised" : "square.on.square").font(.largeTitle).foregroundStyle(.secondary)
+                            Image(icon: manager.isPrivateMode ? "hand.raised" : "square.on.square").font(.largeTitle).foregroundStyle(.secondary)
                             Text(manager.isPrivateMode ? "无痕浏览：不会记录历史、Cookie 和搜索记录" : "没有标签页").foregroundStyle(.secondary)
                         }
                         .padding(.top, 80)
@@ -66,16 +66,16 @@ struct TabSwitcherView: View {
                                 ForEach(manager.recentlyClosed.prefix(15)) { snapshot in
                                     Button(snapshot.title.isEmpty ? snapshot.url : snapshot.title) { manager.reopen(snapshot); dismiss() }
                                 }
-                            } label: { Label("最近关闭的标签页", systemImage: "arrow.uturn.backward") }
+                            } label: { Label("最近关闭的标签页", icon: "arrow.uturn.backward") }
                         }
-                        Button(role: .destructive) { manager.closeAll() } label: { Label("关闭全部 \(manager.visibleTabs.count) 个标签页", systemImage: "xmark") }
+                        Button(role: .destructive) { manager.closeAll() } label: { Label("关闭全部 \(manager.visibleTabs.count) 个标签页", icon: "xmark") }
                         if let active = manager.activeTab {
-                            Button { manager.closeOthers(than: active) } label: { Label("关闭其他标签页", systemImage: "xmark.square") }
+                            Button { manager.closeOthers(than: active) } label: { Label("关闭其他标签页", icon: "xmark.square") }
                         }
-                    } label: { Image(systemName: "ellipsis.circle") }
+                    } label: { Image(icon: "ellipsis.circle") }
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
-                    Button { manager.newTab(); dismiss() } label: { Image(systemName: "plus") }
+                    Button { manager.newTab(); dismiss() } label: { Image(icon: "plus") }
                         .accessibilityIdentifier("switcherNewTab")
                     Spacer()
                     groupMenu
@@ -110,10 +110,10 @@ struct TabSwitcherView: View {
         Menu {
             Section {
                 Button { manager.switchToGroup(nil) } label: {
-                    Label("\(manager.tabs(inGroup: nil).count) 个标签页", systemImage: !manager.isPrivateMode && manager.currentGroupID == nil ? "checkmark" : "square.on.square")
+                    Label("\(manager.tabs(inGroup: nil).count) 个标签页", icon: !manager.isPrivateMode && manager.currentGroupID == nil ? "checkmark" : "square.on.square")
                 }
                 Button { manager.switchToPrivate() } label: {
-                    Label("无痕浏览（\(manager.privateTabs.count)）", systemImage: manager.isPrivateMode ? "checkmark" : "hand.raised")
+                    Label("无痕浏览（\(manager.privateTabs.count)）", icon: manager.isPrivateMode ? "checkmark" : "hand.raised")
                 }
             }
             Section("标签页组") {
@@ -121,29 +121,29 @@ struct TabSwitcherView: View {
                 ForEach(manager.groups) { group in
                     Button { manager.switchToGroup(group.id) } label: {
                         Label("\(group.name)（\(manager.tabs(inGroup: group.id).count)）",
-                              systemImage: !manager.isPrivateMode && manager.currentGroupID == group.id ? "checkmark" : "square.grid.2x2")
+                              icon: !manager.isPrivateMode && manager.currentGroupID == group.id ? "checkmark" : "square.grid.2x2")
                     }
                 }
-                Button { showNewGroup = true } label: { Label("新建空白标签页组", systemImage: "plus") }
+                Button { showNewGroup = true } label: { Label("新建空白标签页组", icon: "plus") }
             }
             if !manager.groups.isEmpty {
                 Section {
                     Menu {
                         ForEach(manager.groups) { group in
                             Menu(group.name) {
-                                Button { newGroupName = group.name; renamingGroup = group } label: { Label("重命名", systemImage: "pencil") }
-                                Button(role: .destructive) { manager.deleteGroup(group.id, mode: .moveTabsToDefault) } label: { Label("删除组（标签页移到“标签页”）", systemImage: "folder.badge.minus") }
-                                Button(role: .destructive) { manager.deleteGroup(group.id, mode: .closeTabs) } label: { Label("删除组并关闭其中标签页", systemImage: "trash") }
+                                Button { newGroupName = group.name; renamingGroup = group } label: { Label("重命名", icon: "pencil") }
+                                Button(role: .destructive) { manager.deleteGroup(group.id, mode: .moveTabsToDefault) } label: { Label("删除组（标签页移到“标签页”）", icon: "folder.badge.minus") }
+                                Button(role: .destructive) { manager.deleteGroup(group.id, mode: .closeTabs) } label: { Label("删除组并关闭其中标签页", icon: "trash") }
                             }
                         }
-                        if manager.groups.count > 1 { Button { showManageGroups = true } label: { Label("调整组顺序…", systemImage: "arrow.up.arrow.down") } }
-                    } label: { Label("编辑标签页组", systemImage: "slider.horizontal.3") }
+                        if manager.groups.count > 1 { Button { showManageGroups = true } label: { Label("调整组顺序…", icon: "arrow.up.arrow.down") } }
+                    } label: { Label("编辑标签页组", icon: "slider.horizontal.3") }
                 }
             }
         } label: {
             HStack(spacing: 4) {
                 Text(manager.currentSpaceTitle).font(.headline)
-                Image(systemName: "chevron.down").font(.caption)
+                Image(icon: "chevron.down").font(.caption)
             }
         }
         .accessibilityIdentifier("groupMenu")
@@ -165,7 +165,7 @@ struct TabCard: View {
                     } else {
                         ZStack {
                             Color(.secondarySystemBackground)
-                            Image(systemName: tab.isHome ? "house" : "globe").font(.largeTitle).foregroundStyle(.tertiary)
+                            Image(icon: tab.isHome ? "house" : "globe").font(.largeTitle).foregroundStyle(.tertiary)
                         }
                     }
                 }
@@ -173,11 +173,11 @@ struct TabCard: View {
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(active ? Color.accentColor : Color.clear, lineWidth: 3))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(active ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.clear), lineWidth: 3))
                 .onTapGesture(perform: open)
                 // 28 pt visible badge inside a 44 pt hit area (Apple's minimum touch target).
                 Button(action: close) {
-                    Image(systemName: "xmark")
+                    Image(icon: "xmark")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 28, height: 28)
@@ -190,7 +190,7 @@ struct TabCard: View {
                 .accessibilityLabel("关闭标签页")
             }
             HStack(spacing: 5) {
-                if tab.pinned { Image(systemName: "pin.fill").font(.caption2) }
+                if tab.pinned { Image(icon: "pin.fill").font(.caption2) }
                 if let icon = tab.favicon { Image(uiImage: icon).resizable().frame(width: 14, height: 14) }
                 Text(tab.isHome ? "起始页" : tab.title).font(.caption).lineLimit(1)
             }
@@ -210,7 +210,7 @@ struct GroupOrderSheet: View {
             List {
                 ForEach(manager.groups) { group in
                     HStack {
-                        Label(group.name, systemImage: "square.grid.2x2")
+                        Label(group.name, icon: "square.grid.2x2")
                         Spacer()
                         Text("\(manager.tabs(inGroup: group.id).count)").foregroundStyle(.secondary)
                     }

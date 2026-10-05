@@ -69,6 +69,8 @@ struct BrowserWindowHost: View {
 
     var body: some View {
         BrowserView()
+            .tint(Theme.color)
+            .onAppear { Theme.applyToWindows() }
             .environmentObject(manager)
             .environmentObject(services.profile)
             .environmentObject(services.profile.extensions)

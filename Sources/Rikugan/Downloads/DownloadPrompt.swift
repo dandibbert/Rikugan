@@ -63,10 +63,10 @@ struct DownloadConfirmView: View {
             Form {
                 Section {
                     HStack(spacing: 12) {
-                        Image(systemName: DownloadRow.symbol(forFileName: name))
+                        Image(icon: DownloadRow.symbol(forFileName: name))
                             .font(.title2).foregroundStyle(.tint)
                             .frame(width: 44, height: 44)
-                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .background(Theme.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             TextField("文件名", text: $name)
                                 .font(.headline)

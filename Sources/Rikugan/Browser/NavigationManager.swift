@@ -335,32 +335,32 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         let isPrivate = self.isPrivate
         let configuration = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] suggested in
             var actions: [UIMenuElement] = [
-                UIAction(title: "在新标签页中打开", image: UIImage(systemName: "plus.square.on.square")) { _ in
+                UIAction(title: "在新标签页中打开", image: UIImage.icon("plus.square.on.square")) { _ in
                     manager?.newTab(url: link, background: false, isPrivate: isPrivate, opener: self)
                 },
-                UIAction(title: "在后台打开", image: UIImage(systemName: "square.on.square.dashed")) { _ in
+                UIAction(title: "在后台打开", image: UIImage.icon("square.on.square.dashed")) { _ in
                     manager?.newTab(url: link, background: true, isPrivate: isPrivate, opener: self)
                     ToastCenter.shared.show("已在后台打开", symbol: "square.on.square")
                 },
-                UIAction(title: "在无痕标签页中打开", image: UIImage(systemName: "hand.raised")) { _ in
+                UIAction(title: "在无痕标签页中打开", image: UIImage.icon("hand.raised")) { _ in
                     manager?.newTab(url: link, background: false, isPrivate: true, opener: nil)
                 },
-                UIAction(title: "拷贝链接", image: UIImage(systemName: "doc.on.doc")) { _ in UIPasteboard.general.url = link },
-                UIAction(title: "下载链接文件", image: UIImage(systemName: "arrow.down.circle")) { _ in
+                UIAction(title: "拷贝链接", image: UIImage.icon("doc.on.doc")) { _ in UIPasteboard.general.url = link },
+                UIAction(title: "下载链接文件", image: UIImage.icon("arrow.down.circle")) { _ in
                     AppServices.shared.downloads.downloadInteractively(url: link, suggestedName: nil, from: self)
                 },
-                UIAction(title: "添加到书签", image: UIImage(systemName: "book")) { _ in
+                UIAction(title: "添加到书签", image: UIImage.icon("book")) { _ in
                     self?.profile.bookmarks.add(title: link.host ?? link.absoluteString, url: link.absoluteString, parent: nil)
                     ToastCenter.shared.show("已添加书签", symbol: "book")
                 },
-                UIAction(title: "分享", image: UIImage(systemName: "square.and.arrow.up")) { _ in Presenter.share([link], from: webView) },
+                UIAction(title: "分享", image: UIImage.icon("square.and.arrow.up")) { _ in Presenter.share([link], from: webView) },
             ]
             if let self {
                 let extensionItems = self.profile.extensions.contextMenuItems(for: ["link", "all"], tab: self, linkURL: link)
                 if !extensionItems.isEmpty { actions.append(UIMenu(title: "扩展", options: .displayInline, children: extensionItems)) }
             }
             if link.path.lowercased().hasSuffix(".user.js") {
-                actions.insert(UIAction(title: "安装用户脚本", image: UIImage(systemName: "curlybraces")) { _ in
+                actions.insert(UIAction(title: "安装用户脚本", image: UIImage.icon("curlybraces")) { _ in
                     if let self { UserscriptInstallCoordinator.shared.beginInstall(from: link, tab: self) }
                 }, at: 0)
             }

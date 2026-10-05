@@ -46,7 +46,7 @@ struct WebInspectorView: View {
                         Toggle("捕获 console（下次加载生效）", isOn: $services.prefs.consoleCaptureEnabled)
                         Toggle("允许 Safari 远程检查", isOn: $services.prefs.webInspectorEnabled)
                         Button("清空") { tab.consoleEntries.removeAll(); output.removeAll() }
-                    } label: { Image(systemName: "gearshape") }
+                    } label: { Image(icon: "gearshape") }
                 }
             }
         }
@@ -128,7 +128,7 @@ struct QRCodeSheet: View {
                     Image(uiImage: image).interpolation(.none).resizable().scaledToFit().frame(maxWidth: 280).padding()
                         .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
                     Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(3).padding(.horizontal)
-                    Button { Presenter.share([image]) } label: { Label("分享二维码", systemImage: "square.and.arrow.up") }.buttonStyle(.borderedProminent)
+                    Button { Presenter.share([image]) } label: { Label("分享二维码", icon: "square.and.arrow.up") }.buttonStyle(.borderedProminent)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -153,7 +153,7 @@ struct QRScannerSheet: View {
                     if let result {
                         Text(result).font(.footnote).padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                     }
-                    PhotosPicker(selection: $photo, matching: .images) { Label("从相册识别", systemImage: "photo") }
+                    PhotosPicker(selection: $photo, matching: .images) { Label("从相册识别", icon: "photo") }
                         .buttonStyle(.borderedProminent)
                 }
                 .padding(.bottom, 40)

@@ -68,6 +68,7 @@ import Combine
     }
 
     private func prefsChanged(old: Preferences) {
+        if old.themeColor != prefs.themeColor { Theme.applyToWindows() }
         if old.adBlockEnabled != prefs.adBlockEnabled { adBlock.setEnabled(prefs.adBlockEnabled) }
         let affectsPages = old.pageDarkMode != prefs.pageDarkMode || old.webFontEnabled != prefs.webFontEnabled ||
             old.webFontFamily != prefs.webFontFamily || old.webFontKeepMonospace != prefs.webFontKeepMonospace ||

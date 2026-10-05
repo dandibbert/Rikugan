@@ -208,10 +208,10 @@ struct ToolbarSlotButton: View {
                     Text("\(min(manager.visibleTabs.count, 99))").font(.system(size: 11, weight: .semibold))
                 }
             } else {
-                Image(systemName: QuickActions.symbol(action))
+                Image(icon: QuickActions.symbol(action))
             }
         }
-        .foregroundStyle(disabled ? Color.secondary.opacity(0.5) : Color.accentColor)
+        .foregroundStyle(disabled ? AnyShapeStyle(Color.secondary.opacity(0.5)) : AnyShapeStyle(.tint))
         .frame(minWidth: 36, minHeight: 36)
         .contentShape(Rectangle())
         .onTapGesture { if !disabled { onTap() } }
@@ -309,7 +309,7 @@ struct ToolbarSlotEditor: View {
             HStack {
                 Text(title).foregroundStyle(.primary)
                 Spacer()
-                if selected { Image(systemName: "checkmark").foregroundStyle(.tint).fontWeight(.semibold) }
+                if selected { Image(icon: "checkmark").foregroundStyle(.tint).fontWeight(.semibold) }
             }
             .contentShape(Rectangle())
         }

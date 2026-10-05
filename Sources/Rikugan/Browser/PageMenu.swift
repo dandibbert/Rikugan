@@ -19,32 +19,32 @@ struct PageMenuButton: View {
         // submenu so the common actions are one tap away.
         Menu {
             Section {
-                Button { manager.newTab() } label: { Label("新标签页", systemImage: "plus.square.on.square") }
-                Button { manager.newTab(isPrivate: true) } label: { Label("无痕标签页", systemImage: "hand.raised") }
+                Button { manager.newTab() } label: { Label("新标签页", icon: "plus.square.on.square") }
+                Button { manager.newTab(isPrivate: true) } label: { Label("无痕标签页", icon: "hand.raised") }
                 if !tab.isHome {
-                    Button { PageActions.share(tab) } label: { Label("分享", systemImage: "square.and.arrow.up") }
-                    Button { PageActions.addBookmark(tab) } label: { Label("添加书签", systemImage: "book") }
+                    Button { PageActions.share(tab) } label: { Label("分享", icon: "square.and.arrow.up") }
+                    Button { PageActions.addBookmark(tab) } label: { Label("添加书签", icon: "book") }
                 }
             }
             if !tab.isHome {
                 Section {
-                    Menu { pageTools } label: { Label("网页工具", systemImage: "wrench.and.screwdriver") }
+                    Menu { pageTools } label: { Label("网页工具", icon: "wrench.and.screwdriver") }
                     Menu { addOns } label: {
-                        Label("脚本 / 扩展 / 拦截" + (tab.injectedScripts.isEmpty ? "" : "（\(tab.injectedScripts.count) 个脚本运行中）"), systemImage: "puzzlepiece.extension")
+                        Label("脚本 / 扩展 / 拦截" + (tab.injectedScripts.isEmpty ? "" : "（\(tab.injectedScripts.count) 个脚本运行中）"), icon: "puzzlepiece.extension")
                     }
                     Menu { mediaAndFiles } label: {
-                        Label("媒体与文件" + (tab.sniffedMedia.isEmpty ? "" : "（\(tab.sniffedMedia.count)）"), systemImage: "play.rectangle.on.rectangle")
+                        Label("媒体与文件" + (tab.sniffedMedia.isEmpty ? "" : "（\(tab.sniffedMedia.count)）"), icon: "play.rectangle.on.rectangle")
                     }
                 }
             }
             Section {
-                Button { sheet = .bookmarks } label: { Label("书签与历史", systemImage: "clock") }
-                Button { sheet = .downloads } label: { Label("下载", systemImage: "arrow.down.circle") }
-                if !tab.isHome { Button { sheet = .siteSettings } label: { Label("网站设置", systemImage: "slider.horizontal.3") } }
-                Button { sheet = .settings } label: { Label("设置", systemImage: "gearshape") }
+                Button { sheet = .bookmarks } label: { Label("书签与历史", icon: "clock") }
+                Button { sheet = .downloads } label: { Label("下载", icon: "arrow.down.circle") }
+                if !tab.isHome { Button { sheet = .siteSettings } label: { Label("网站设置", icon: "slider.horizontal.3") } }
+                Button { sheet = .settings } label: { Label("设置", icon: "gearshape") }
             }
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(icon: "ellipsis.circle")
         }
         .accessibilityIdentifier("pageMenu")
     }
@@ -53,18 +53,18 @@ struct PageMenuButton: View {
 
     @ViewBuilder private var pageTools: some View {
         Section {
-            Button { PageActions.findInPage(tab) } label: { Label("页内查找", systemImage: "doc.text.magnifyingglass") }
-            Button { PageActions.translate(tab) } label: { Label(translateTitle, systemImage: "character.bubble") }
-            Button { sheet = .reader } label: { Label("阅读模式", systemImage: "doc.plaintext") }
+            Button { PageActions.findInPage(tab) } label: { Label("页内查找", icon: "doc.text.magnifyingglass") }
+            Button { PageActions.translate(tab) } label: { Label(translateTitle, icon: "character.bubble") }
+            Button { sheet = .reader } label: { Label("阅读模式", icon: "doc.plaintext") }
             Menu {
                 Picker("本网站", selection: Binding(get: { siteDark ?? .auto }, set: { tab.setPageDarkMode($0 == .auto ? nil : $0) })) {
                     Text("跟随全局设置").tag(TriState.auto)
                     Text("本网站始终开启").tag(TriState.on)
                     Text("本网站始终关闭").tag(TriState.off)
                 }
-            } label: { Label("网页深色模式：" + darkModeSummary, systemImage: "moon") }
+            } label: { Label("网页深色模式：" + darkModeSummary, icon: "moon") }
             Button { tab.toggleDesktopMode() } label: {
-                Label(tab.desktopMode ? "请求移动版网站" : "请求桌面版网站", systemImage: tab.desktopMode ? "iphone" : "desktopcomputer")
+                Label(tab.desktopMode ? "请求移动版网站" : "请求桌面版网站", icon: tab.desktopMode ? "iphone" : "desktopcomputer")
             }
         }
         Section {
@@ -73,27 +73,27 @@ struct PageMenuButton: View {
                     Button {
                         tab.autoRefreshInterval = seconds == 0 ? nil : TimeInterval(seconds)
                     } label: {
-                        if Int(tab.autoRefreshInterval ?? 0) == seconds { Label(refreshTitle(seconds), systemImage: "checkmark") }
+                        if Int(tab.autoRefreshInterval ?? 0) == seconds { Label(refreshTitle(seconds), icon: "checkmark") }
                         else { Text(refreshTitle(seconds)) }
                     }
                 }
                 Button("自定义…") { askCustomRefresh() }
-            } label: { Label(tab.autoRefreshInterval == nil ? "定时刷新" : "定时刷新（\(Int(tab.autoRefreshInterval ?? 0)) 秒）", systemImage: "timer") }
+            } label: { Label(tab.autoRefreshInterval == nil ? "定时刷新" : "定时刷新（\(Int(tab.autoRefreshInterval ?? 0)) 秒）", icon: "timer") }
             Menu {
-                Button { AutofillCoordinator.fillLogin(tab) } label: { Label("填充密码", systemImage: "key") }
-                Button { AutofillCoordinator.fillProfile(tab) } label: { Label("填充个人信息", systemImage: "person.text.rectangle") }
+                Button { AutofillCoordinator.fillLogin(tab) } label: { Label("填充密码", icon: "key") }
+                Button { AutofillCoordinator.fillProfile(tab) } label: { Label("填充个人信息", icon: "person.text.rectangle") }
                 ForEach(autofill.cards) { card in
-                    Button { AutofillCoordinator.fillCard(tab, card: card) } label: { Label("填充 \(card.nickname.isEmpty ? card.masked : card.nickname)", systemImage: "creditcard") }
+                    Button { AutofillCoordinator.fillCard(tab, card: card) } label: { Label("填充 \(card.nickname.isEmpty ? card.masked : card.nickname)", icon: "creditcard") }
                 }
-            } label: { Label("自动填充", systemImage: "rectangle.and.pencil.and.ellipsis") }
-            Button { PageActions.print(tab) } label: { Label("打印", systemImage: "printer") }
-            Button { PageActions.createPDF(tab) } label: { Label("创建 PDF", systemImage: "doc.richtext") }
+            } label: { Label("自动填充", icon: "rectangle.and.pencil.and.ellipsis") }
+            Button { PageActions.print(tab) } label: { Label("打印", icon: "printer") }
+            Button { PageActions.createPDF(tab) } label: { Label("创建 PDF", icon: "doc.richtext") }
             Menu {
-                if let url = tab.url { Button { sheet = .qrCode(url.absoluteString) } label: { Label("当前网址二维码", systemImage: "qrcode") } }
-                Button { sheet = .qrScanner } label: { Label("扫描二维码", systemImage: "qrcode.viewfinder") }
-            } label: { Label("二维码", systemImage: "qrcode") }
-            Button { PageActions.addBookmark(tab, favorites: true) } label: { Label("添加到个人收藏", systemImage: "star") }
-            Button { sheet = .console } label: { Label("网页检查器", systemImage: "ladybug") }
+                if let url = tab.url { Button { sheet = .qrCode(url.absoluteString) } label: { Label("当前网址二维码", icon: "qrcode") } }
+                Button { sheet = .qrScanner } label: { Label("扫描二维码", icon: "qrcode.viewfinder") }
+            } label: { Label("二维码", icon: "qrcode") }
+            Button { PageActions.addBookmark(tab, favorites: true) } label: { Label("添加到个人收藏", icon: "star") }
+            Button { sheet = .console } label: { Label("网页检查器", icon: "ladybug") }
         }
     }
 
@@ -107,8 +107,8 @@ struct PageMenuButton: View {
                 }
             }
             Divider()
-            Button { sheet = .userscripts } label: { Label("管理用户脚本", systemImage: "gearshape") }
-        } label: { Label("用户脚本" + (tab.injectedScripts.isEmpty ? "" : "（\(tab.injectedScripts.count) 个运行中）"), systemImage: "curlybraces") }
+            Button { sheet = .userscripts } label: { Label("管理用户脚本", icon: "gearshape") }
+        } label: { Label("用户脚本" + (tab.injectedScripts.isEmpty ? "" : "（\(tab.injectedScripts.count) 个运行中）"), icon: "curlybraces") }
         Menu {
             ForEach(runtime.toolbarExtensions) { ext in
                 Button { runtime.performAction(ext, tab: tab) } label: { Label(ext.displayName, uiImage: ext.actionState(for: tab.numericID).icon ?? ext.icon) }
@@ -121,27 +121,27 @@ struct PageMenuButton: View {
                 }
             }
             Divider()
-            Button { sheet = .extensions } label: { Label("管理扩展", systemImage: "gearshape") }
-        } label: { Label("扩展", systemImage: "puzzlepiece.extension") }
+            Button { sheet = .extensions } label: { Label("管理扩展", icon: "gearshape") }
+        } label: { Label("扩展", icon: "puzzlepiece.extension") }
         Menu {
             if let host = tab.host {
                 Button { PageActions.toggleSiteAdBlock(tab) } label: {
-                    Label(adBlock.isAllowlisted(host) ? "在此网站启用拦截" : "在此网站停用拦截", systemImage: "shield.slash")
+                    Label(adBlock.isAllowlisted(host) ? "在此网站启用拦截" : "在此网站停用拦截", icon: "shield.slash")
                 }
             }
-            Button { PageActions.elementPicker(tab) } label: { Label("隐藏网页元素", systemImage: "eye.slash") }
-            Button { sheet = .adblock } label: { Label("内容拦截设置", systemImage: "gearshape") }
-        } label: { Label("广告拦截", systemImage: "shield.lefthalf.filled") }
+            Button { PageActions.elementPicker(tab) } label: { Label("隐藏网页元素", icon: "eye.slash") }
+            Button { sheet = .adblock } label: { Label("内容拦截设置", icon: "gearshape") }
+        } label: { Label("广告拦截", icon: "shield.lefthalf.filled") }
     }
 
     @ViewBuilder private var mediaAndFiles: some View {
-        Button { sheet = .media } label: { Label("媒体资源" + (tab.sniffedMedia.isEmpty ? "" : "（\(tab.sniffedMedia.count)）"), systemImage: "play.rectangle.on.rectangle") }
-        Button { sheet = .images } label: { Label("查看图片", systemImage: "photo.on.rectangle") }
+        Button { sheet = .media } label: { Label("媒体资源" + (tab.sniffedMedia.isEmpty ? "" : "（\(tab.sniffedMedia.count)）"), icon: "play.rectangle.on.rectangle") }
+        Button { sheet = .images } label: { Label("查看图片", icon: "photo.on.rectangle") }
         Menu {
-            Button { PageActions.videoAction(tab, "pip") } label: { Label("画中画", systemImage: "pip.enter") }
-            Button { PageActions.videoAction(tab, "fullscreen") } label: { Label("全屏", systemImage: "arrow.up.left.and.arrow.down.right") }
-            Button { PageActions.videoAction(tab, "play") } label: { Label("播放 / 暂停", systemImage: "playpause") }
-        } label: { Label("视频", systemImage: "video") }
+            Button { PageActions.videoAction(tab, "pip") } label: { Label("画中画", icon: "pip.enter") }
+            Button { PageActions.videoAction(tab, "fullscreen") } label: { Label("全屏", icon: "arrow.up.left.and.arrow.down.right") }
+            Button { PageActions.videoAction(tab, "play") } label: { Label("播放 / 暂停", icon: "playpause") }
+        } label: { Label("视频", icon: "video") }
     }
 
     private var darkModeSummary: String {

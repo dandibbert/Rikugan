@@ -140,6 +140,14 @@ import WebKit
         ctx.record("App 图标：备用图标已编入 Info.plist", expectedIcons.isSubset(of: declaredIcons),
                    "declared=\(declaredIcons.sorted()) supportsAlternateIcons=\(UIApplication.shared.supportsAlternateIcons)")
 
+        // Every generated icon must load as a symbol image (a template Xcode accepts but that
+        // fails to load would silently fall back to the system symbol).
+        let iconNames = (Bundle.main.url(forResource: "icon-names", withExtension: "json"))
+            .flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String] } ?? []
+        let brokenIcons = iconNames.filter { UIImage(named: "rk." + $0)?.isSymbolImage != true }
+        ctx.record("图标集：自定义符号全部可加载", !iconNames.isEmpty && brokenIcons.isEmpty,
+                   "icons=\(iconNames.count) broken=\(brokenIcons.prefix(10))")
+
         let tab = await ctx.open("/index.html")
         ctx.record("测试页面加载", tab.webView?.url?.path == "/index.html")
         // Wait for every asynchronous result to be reported by the page (no fixed delay).
@@ -241,7 +249,7 @@ struct SelfTestView: View {
                     .disabled(runner.running)
                     Button {
                         Task { await runner.run(in: manager) }
-                    } label: { HStack { Label("运行自检", systemImage: "play.circle"); if runner.running { Spacer(); ProgressView() } } }
+                    } label: { HStack { Label("运行自检", icon: "play.circle"); if runner.running { Spacer(); ProgressView() } } }
                     .disabled(runner.running)
                     .accessibilityIdentifier("runSelfTest")
                     if let summary = runner.summary {
@@ -253,7 +261,7 @@ struct SelfTestView: View {
                 }
                 ForEach(runner.results) { result in
                     HStack(alignment: .top) {
-                        Image(systemName: result.passed ? "checkmark.circle.fill" : "xmark.octagon.fill").foregroundStyle(result.passed ? .green : .red)
+                        Image(icon: result.passed ? "checkmark.circle.fill" : "xmark.octagon.fill").foregroundStyle(result.passed ? .green : .red)
                         VStack(alignment: .leading) {
                             Text(result.name)
                             if !result.detail.isEmpty { Text(result.detail).font(.subheadline).foregroundStyle(.secondary) }

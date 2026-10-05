@@ -66,7 +66,7 @@ struct AppIconPickerView: View {
                                 .overlay(RoundedRectangle(cornerRadius: 13.5, style: .continuous).stroke(.quaternary, lineWidth: 0.5))
                             Text(option.title).foregroundStyle(.primary)
                             Spacer()
-                            if option == selected { Image(systemName: "checkmark").foregroundStyle(.tint).fontWeight(.semibold) }
+                            if option == selected { Image(icon: "checkmark").foregroundStyle(.tint).fontWeight(.semibold) }
                         }
                     }
                     .disabled(changing || !UIApplication.shared.supportsAlternateIcons)

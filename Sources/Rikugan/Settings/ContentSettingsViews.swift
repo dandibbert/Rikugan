@@ -239,9 +239,9 @@ struct ProfilesView: View {
                         services.profiles.switchTo(info.id)
                     } label: {
                         HStack {
-                            Label(info.name, systemImage: info.symbol)
+                            Label(info.name, icon: info.symbol)
                             Spacer()
-                            if info.id == services.profile.id { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                            if info.id == services.profile.id { Image(icon: "checkmark").foregroundStyle(.tint) }
                         }
                     }
                     .foregroundStyle(.primary)
@@ -256,7 +256,7 @@ struct ProfilesView: View {
             }
             Section("新建身份") {
                 TextField("名称，例如 工作", text: $name)
-                Picker("图标", selection: $symbol) { ForEach(symbols, id: \.self) { Image(systemName: $0).tag($0) } }
+                Picker("图标", selection: $symbol) { ForEach(symbols, id: \.self) { Image(icon: $0).tag($0) } }
                 Button("创建") { services.profiles.create(name: name.isEmpty ? "新身份" : name, symbol: symbol); name = "" }
             }
         }
@@ -278,7 +278,7 @@ struct ImportExportView: View {
                 Toggle("包含用户脚本源代码", isOn: $includeSource)
                 Toggle("包含用户脚本存储值（GM_setValue）", isOn: $includeValues)
                 Button { ImportExport.exportAll(from: manager, includeSource: includeSource, includeValues: includeValues) } label: {
-                    Label("导出全部身份的设置、标签页与分组", systemImage: "square.and.arrow.up")
+                    Label("导出全部身份的设置、标签页与分组", icon: "square.and.arrow.up")
                 }
                 Button { importKind = .settings } label: { Text("从文件导入…") }
             } footer: {

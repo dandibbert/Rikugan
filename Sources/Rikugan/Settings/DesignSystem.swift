@@ -25,10 +25,10 @@ struct LinkRow: View {
     var body: some View {
         Menu {
             Button { UIPasteboard.general.string = value; ToastCenter.shared.show("已拷贝", symbol: "doc.on.doc") } label: {
-                Label("拷贝", systemImage: "doc.on.doc")
+                Label("拷贝", icon: "doc.on.doc")
             }
-            if let url, let open { Button { open(url) } label: { Label("在新标签页打开", systemImage: "safari") } }
-            if let url { ShareLink(item: url) { Label("分享", systemImage: "square.and.arrow.up") } }
+            if let url, let open { Button { open(url) } label: { Label("在新标签页打开", icon: "safari") } }
+            if let url { ShareLink(item: url) { Label("分享", icon: "square.and.arrow.up") } }
         } label: {
             HStack(spacing: 12) {
                 Text(title).foregroundStyle(.primary)

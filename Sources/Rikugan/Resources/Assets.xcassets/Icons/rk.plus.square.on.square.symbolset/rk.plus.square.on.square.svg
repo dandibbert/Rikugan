@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3300" height="2200">
+<!--Phosphor Icons (MIT) converted for Rikugan by scripts/gen_icons.py-->
+<g id="Notes">
+<rect height="2200" id="artboard" style="fill:white;opacity:1" width="3300" x="0" y="0"/>
+<text id="template-version" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 3036 1933)">Template v.3.0</text>
+</g>
+<g id="Guides">
+<line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696.0" y2="696.0"/>
+<line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+<line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126.0" y2="1126.0"/>
+<line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+<line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556.0" y2="1556.0"/>
+<line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+<line id="left-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1397.250" x2="1397.250" y1="1030.79" y2="1150.12"/>
+<line id="right-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1484.750" x2="1484.750" y1="1030.79" y2="1150.12"/>
+</g>
+<g id="Symbols">
+<g id="Regular-M">
+<path d="M 1472.25,1053.27 L 1409.75,1053.27 A 6.25,6.25 0 0,0 1403.5,1059.52 L 1403.5,1122.02 a 6.25,6.25 0 0,0 6.25,6.25 L 1472.25,1128.27 a 6.25,6.25 0 0,0 6.25,-6.25 L 1478.5,1059.52 A 6.25,6.25 0 0,0 1472.25,1053.27 Z m 0,68.75 L 1409.75,1122.02 L 1409.75,1059.52 L 1472.25,1059.52 L 1472.25,1122.02 Z m -12.5,-31.25 a 3.125,3.125 0 0,1 -3.125,3.125 L 1444.125,1093.895 l 0,12.5 a 3.125,3.125 0 0,1 -6.25,0 L 1437.875,1093.895 L 1425.375,1093.895 a 3.125,3.125 0 0,1 0,-6.25 l 12.5,0 L 1437.875,1075.145 a 3.125,3.125 0 0,1 6.25,0 l 0,12.5 l 12.5,0 A 3.125,3.125 0 0,1 1459.75,1090.77 Z"/>
+</g>
+</g>
+</svg>

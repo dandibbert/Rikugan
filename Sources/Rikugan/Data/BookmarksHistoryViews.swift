@@ -44,7 +44,7 @@ struct BookmarkFolderView: View {
                 Group {
                     if node.isFolder {
                         NavigationLink { BookmarkFolderView(parent: node.id, onOpen: onOpen).navigationTitle(node.title) } label: {
-                            Label(node.title, systemImage: node.id == BookmarkNode.favoritesID ? "star" : "folder")
+                            Label(node.title, icon: node.id == BookmarkNode.favoritesID ? "star" : "folder")
                         }
                     } else {
                         Button {
@@ -60,15 +60,15 @@ struct BookmarkFolderView: View {
                 .swipeActions {
                     if node.id != BookmarkNode.favoritesID {
                         Button("删除", role: .destructive) { profile.bookmarks.delete(node) }
-                        Button("编辑") { editing = node }.tint(.blue)
+                        Button("编辑") { editing = node }.tint(Theme.color)
                         Button("移动") { moving = node }.tint(.orange)
                     }
                 }
                 .contextMenu {
                     if let url = node.url.flatMap(URL.init(string:)) {
-                        Button { manager.newTab(url: url); onOpen() } label: { Label("在新标签页打开", systemImage: "plus.square.on.square") }
-                        Button { manager.newTab(url: url, isPrivate: true); onOpen() } label: { Label("在无痕标签页打开", systemImage: "hand.raised") }
-                        Button { UIPasteboard.general.url = url } label: { Label("拷贝链接", systemImage: "doc.on.doc") }
+                        Button { manager.newTab(url: url); onOpen() } label: { Label("在新标签页打开", icon: "plus.square.on.square") }
+                        Button { manager.newTab(url: url, isPrivate: true); onOpen() } label: { Label("在无痕标签页打开", icon: "hand.raised") }
+                        Button { UIPasteboard.general.url = url } label: { Label("拷贝链接", icon: "doc.on.doc") }
                     }
                 }
             }
@@ -126,7 +126,7 @@ struct BookmarkMoveSheet: View {
             List {
                 Button("书签（顶层）") { profile.bookmarks.move(node, to: nil); dismiss() }
                 ForEach(profile.bookmarks.validParents(for: node)) { folder in
-                    Button { profile.bookmarks.move(node, to: folder.id); dismiss() } label: { Label(folder.title, systemImage: "folder") }
+                    Button { profile.bookmarks.move(node, to: folder.id); dismiss() } label: { Label(folder.title, icon: "folder") }
                 }
             }
             .navigationTitle("移动到")
@@ -195,7 +195,7 @@ struct DownloadsView: View {
     var body: some View {
         List {
             if downloads.items.isEmpty {
-                ContentUnavailableView("没有下载项", systemImage: "arrow.down.circle", description: Text("网页下载、长按链接下载和媒体面板下载会出现在这里。"))
+                ContentUnavailableView { Label("没有下载项", icon: "arrow.down.circle") } description: { Text("网页下载、长按链接下载和媒体面板下载会出现在这里。") }
             }
             if !active.isEmpty {
                 Section("进行中") { ForEach(active) { DownloadRow(item: $0) } }
@@ -210,9 +210,9 @@ struct DownloadsView: View {
             ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
-                    Button { openDownloadsFolder() } label: { Label("在“文件”中打开下载文件夹", systemImage: "folder") }
-                    Button(role: .destructive) { downloads.clearFinished() } label: { Label("清除已完成的记录", systemImage: "trash") }
-                } label: { Image(systemName: "ellipsis.circle") }
+                    Button { openDownloadsFolder() } label: { Label("在“文件”中打开下载文件夹", icon: "folder") }
+                    Button(role: .destructive) { downloads.clearFinished() } label: { Label("清除已完成的记录", icon: "trash") }
+                } label: { Image(icon: "ellipsis.circle") }
             }
         }
     }
@@ -234,7 +234,7 @@ struct DownloadRow: View {
         HStack(alignment: .center, spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.opacity(0.15)).frame(width: 40, height: 40)
-                Image(systemName: fileSymbol).foregroundStyle(tint).font(.system(size: 18))
+                Image(icon: fileSymbol).foregroundStyle(tint).font(.system(size: 18))
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.fileName).font(.subheadline.weight(.medium)).lineLimit(2)
@@ -258,18 +258,18 @@ struct DownloadRow: View {
         .onTapGesture { if item.state == .completed { downloads.open(item) } }
         .contextMenu { menuItems }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { downloads.remove(item, deleteFile: true) } label: { Label("删除", systemImage: "trash") }
+            Button(role: .destructive) { downloads.remove(item, deleteFile: true) } label: { Label("删除", icon: "trash") }
         }
     }
 
     @ViewBuilder private var trailingButton: some View {
         switch item.state {
         case .downloading:
-            Button { downloads.pause(item) } label: { Image(systemName: "pause.circle.fill").font(.title2) }.buttonStyle(.borderless)
+            Button { downloads.pause(item) } label: { Image(icon: "pause.circle.fill").font(.title2) }.buttonStyle(.borderless)
         case .paused, .failed:
-            Button { downloads.resume(item) } label: { Image(systemName: "arrow.clockwise.circle.fill").font(.title2) }.buttonStyle(.borderless)
+            Button { downloads.resume(item) } label: { Image(icon: "arrow.clockwise.circle.fill").font(.title2) }.buttonStyle(.borderless)
         case .completed:
-            Menu { menuItems } label: { Image(systemName: "ellipsis.circle").font(.title3) }
+            Menu { menuItems } label: { Image(icon: "ellipsis.circle").font(.title3) }
         case .cancelled:
             EmptyView()
         }
@@ -278,21 +278,21 @@ struct DownloadRow: View {
     @ViewBuilder private var menuItems: some View {
         switch item.state {
         case .completed:
-            Button { downloads.open(item) } label: { Label("打开", systemImage: "eye") }
-            Button { downloads.share(item) } label: { Label("分享", systemImage: "square.and.arrow.up") }
-            Button { downloads.saveToFiles(item) } label: { Label("存储到“文件”…", systemImage: "folder") }
+            Button { downloads.open(item) } label: { Label("打开", icon: "eye") }
+            Button { downloads.share(item) } label: { Label("分享", icon: "square.and.arrow.up") }
+            Button { downloads.saveToFiles(item) } label: { Label("存储到“文件”…", icon: "folder") }
         case .downloading:
-            Button { downloads.pause(item) } label: { Label("暂停", systemImage: "pause") }
-            Button(role: .destructive) { downloads.cancel(item) } label: { Label("取消", systemImage: "xmark") }
+            Button { downloads.pause(item) } label: { Label("暂停", icon: "pause") }
+            Button(role: .destructive) { downloads.cancel(item) } label: { Label("取消", icon: "xmark") }
         case .paused, .failed:
-            Button { downloads.resume(item) } label: { Label("继续", systemImage: "arrow.clockwise") }
+            Button { downloads.resume(item) } label: { Label("继续", icon: "arrow.clockwise") }
         case .cancelled:
             EmptyView()
         }
         if let url = item.sourceURL {
-            Button { UIPasteboard.general.url = url } label: { Label("拷贝下载地址", systemImage: "link") }
+            Button { UIPasteboard.general.url = url } label: { Label("拷贝下载地址", icon: "link") }
         }
-        Button(role: .destructive) { downloads.remove(item, deleteFile: true) } label: { Label("删除", systemImage: "trash") }
+        Button(role: .destructive) { downloads.remove(item, deleteFile: true) } label: { Label("删除", icon: "trash") }
     }
 
     private func subtitle(_ detail: String) -> String {
@@ -306,7 +306,7 @@ struct DownloadRow: View {
         switch item.state {
         case .failed: return .red
         case .cancelled: return .gray
-        default: return .accentColor
+        default: return Theme.color
         }
     }
 

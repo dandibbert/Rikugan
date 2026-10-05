@@ -187,7 +187,9 @@ struct BrowserView: View {
 
 extension View {
     func environmentObjects(_ services: AppServices, _ manager: TabManager) -> some View {
-        self.environmentObject(services)
+        // Sheets get the theme tint too.
+        self.tint(Color(uiColor: UIColor(hex: services.prefs.themeColor) ?? UIColor(hex: Theme.defaultHex)!))
+            .environmentObject(services)
             .environmentObject(manager)
             .environmentObject(services.profile)
             .environmentObject(services.profile.extensions)
@@ -217,7 +219,7 @@ struct TabContentView: View {
             }
             VStack(spacing: 0) {
                 if tab.isLoading && !tab.isHome {
-                    ProgressView(value: max(0.05, tab.progress)).progressViewStyle(.linear).tint(.accentColor).frame(height: 2)
+                    ProgressView(value: max(0.05, tab.progress)).progressViewStyle(.linear).frame(height: 2)
                 }
                 if let item = tab.storeInstallCandidate {
                     StoreInstallBanner(item: item)
@@ -238,7 +240,7 @@ struct LoadErrorView: View {
     let retry: () -> Void
     var body: some View {
         VStack(spacing: 14) {
-            Image(systemName: "wifi.exclamationmark").font(.system(size: 44)).foregroundStyle(.secondary)
+            Image(icon: "wifi.exclamationmark").font(.system(size: 44)).foregroundStyle(.secondary)
             Text("无法打开页面").font(.title3.bold())
             Text(message).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Button("重新加载", action: retry).buttonStyle(.borderedProminent)
@@ -256,7 +258,7 @@ struct StoreInstallBanner: View {
     var body: some View {
         let installed = runtime.records.contains { $0.id == item.extensionID }
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "puzzlepiece.extension.fill").foregroundStyle(.tint)
+            Image(icon: "puzzlepiece.extension.fill").foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 1) {
                 Text(installed ? "已安装到 Rikugan" : "安装到 Rikugan").font(.subheadline.weight(.semibold))
                 Text("商店页面上的“添加 / 获取”按钮在 iPhone 上不可用，请用这里安装").font(.footnote).foregroundStyle(.secondary)
@@ -300,20 +302,20 @@ struct TranslationBanner: View {
             .pageBanner()
         case .translated(let showingOriginal):
             HStack(spacing: 12) {
-                Image(systemName: "character.bubble").foregroundStyle(.tint)
+                Image(icon: "character.bubble").foregroundStyle(.tint)
                 Text(showingOriginal ? "正在显示原文" : "已翻译为\(TranslationLanguage.name(for: AppServices.shared.prefs.translationTargetLanguage))")
                 Spacer()
                 Button(showingOriginal ? "显示译文" : "显示原文") { TranslationCoordinator.toggleOriginal(tab) }
-                Button { TranslationCoordinator.stop(tab) } label: { Image(systemName: "xmark") }
+                Button { TranslationCoordinator.stop(tab) } label: { Image(icon: "xmark") }
                     .foregroundStyle(.secondary).accessibilityLabel("关闭")
             }
             .pageBanner()
         case .failed(let message):
             HStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Image(icon: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 Text(message).lineLimit(2)
                 Spacer()
-                Button { tab.translation = .idle } label: { Image(systemName: "xmark") }
+                Button { tab.translation = .idle } label: { Image(icon: "xmark") }
                     .foregroundStyle(.secondary).accessibilityLabel("关闭")
             }
             .pageBanner()
@@ -338,7 +340,7 @@ struct ToastView: View {
     var body: some View {
         if let toast = toasts.current {
             HStack(spacing: 10) {
-                Image(systemName: toast.symbol)
+                Image(icon: toast.symbol)
                 Text(toast.text).font(.subheadline).lineLimit(3)
                 if let title = toast.actionTitle {
                     Button(title) { toast.action?(); toasts.current = nil }.font(.subheadline.bold())
@@ -395,7 +397,7 @@ struct FindBarContent: View {
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.subheadline)
+                Image(icon: "magnifyingglass").foregroundStyle(.secondary).font(.subheadline)
                 TextField("在页面中查找", text: $query)
                     .focused($focused)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -411,9 +413,9 @@ struct FindBarContent: View {
             .padding(.horizontal, 12)
             .frame(height: 40)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            Button { step(false) } label: { Image(systemName: "chevron.up") }
+            Button { step(false) } label: { Image(icon: "chevron.up") }
                 .disabled(tab.findResult.count < 2).accessibilityLabel("上一个")
-            Button { step(true) } label: { Image(systemName: "chevron.down") }
+            Button { step(true) } label: { Image(icon: "chevron.down") }
                 .disabled(tab.findResult.count < 2).accessibilityLabel("下一个")
             Button("完成") { close() }.fontWeight(.semibold)
         }
@@ -487,10 +489,10 @@ struct AddressBarContent: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if tab.isPrivate { Image(systemName: "hand.raised.fill").foregroundStyle(.purple).font(.caption) }
+            if tab.isPrivate { Image(icon: "hand.raised.fill").foregroundStyle(.purple).font(.caption) }
             HStack(spacing: 6) {
                 if let url = tab.url, url.scheme == "https", !tab.isHome {
-                    Image(systemName: tab.hasSecureContent ? "lock.fill" : "lock.open").font(.caption2).foregroundStyle(.secondary)
+                    Image(icon: tab.hasSecureContent ? "lock.fill" : "lock.open").font(.caption2).foregroundStyle(.secondary)
                 }
                 label
                 Spacer(minLength: 0)
@@ -505,9 +507,9 @@ struct AddressBarContent: View {
                 ExtensionToolbarMenu(tab: tab)
             }
             if tab.isLoading {
-                Button { tab.stop() } label: { Image(systemName: "xmark") }.accessibilityLabel("停止")
+                Button { tab.stop() } label: { Image(icon: "xmark") }.accessibilityLabel("停止")
             } else if !tab.isHome {
-                Button { tab.reload() } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("刷新")
+                Button { tab.reload() } label: { Image(icon: "arrow.clockwise") }.accessibilityLabel("刷新")
             }
         }
         .padding(.horizontal, 12)
@@ -569,10 +571,10 @@ struct ExtensionToolbarMenu: View {
             }
             Divider()
             Button { NotificationCenter.default.post(name: .rikuganOpenSheet, object: tab.manager, userInfo: ["sheet": BrowserSheet.extensions]) } label: {
-                Label("管理扩展", systemImage: "gearshape")
+                Label("管理扩展", icon: "gearshape")
             }
         } label: {
-            Image(systemName: "puzzlepiece.extension")
+            Image(icon: "puzzlepiece.extension")
         }
         .accessibilityIdentifier("extensionsMenu")
     }
@@ -590,7 +592,7 @@ struct ExtensionActionButton: View {
                 if let image = state.icon ?? ext.icon {
                     Image(uiImage: image).resizable().scaledToFit().frame(width: 20, height: 20)
                 } else {
-                    Image(systemName: "puzzlepiece.extension")
+                    Image(icon: "puzzlepiece.extension")
                 }
                 if !state.badgeText.isEmpty {
                     Text(state.badgeText).font(.system(size: 9, weight: .bold)).foregroundStyle(Color(state.badgeTextColor))
@@ -612,7 +614,7 @@ extension Label where Title == Text, Icon == Image {
         if let uiImage {
             self.init { Text(title) } icon: { Image(uiImage: uiImage.preparingThumbnail(of: CGSize(width: 22, height: 22)) ?? uiImage) }
         } else {
-            self.init { Text(title) } icon: { Image(systemName: "puzzlepiece.extension") }
+            self.init { Text(title) } icon: { Image(icon: "puzzlepiece.extension") }
         }
     }
 }
@@ -649,7 +651,7 @@ struct BackForwardButton: View {
                 Button(item.title?.isEmpty == false ? item.title! : item.url.absoluteString) { tab.webView?.go(to: item) }
             }
         } label: {
-            Image(systemName: forward ? "chevron.forward" : "chevron.backward")
+            Image(icon: forward ? "chevron.forward" : "chevron.backward")
         } primaryAction: {
             forward ? tab.goForward() : tab.goBack()
         }
@@ -664,13 +666,13 @@ struct TabsButton: View {
 
     var body: some View {
         Menu {
-            Button { manager.newTab() } label: { Label("新标签页", systemImage: "plus") }
-            Button { manager.newTab(isPrivate: true) } label: { Label("新无痕标签页", systemImage: "hand.raised") }
+            Button { manager.newTab() } label: { Label("新标签页", icon: "plus") }
+            Button { manager.newTab(isPrivate: true) } label: { Label("新无痕标签页", icon: "hand.raised") }
             if let tab = manager.activeTab {
-                Button(role: .destructive) { manager.close(tab) } label: { Label("关闭此标签页", systemImage: "xmark") }
+                Button(role: .destructive) { manager.close(tab) } label: { Label("关闭此标签页", icon: "xmark") }
             }
             if !manager.recentlyClosed.isEmpty {
-                Button { manager.reopenLastClosed() } label: { Label("恢复关闭的标签页", systemImage: "arrow.uturn.backward") }
+                Button { manager.reopenLastClosed() } label: { Label("恢复关闭的标签页", icon: "arrow.uturn.backward") }
             }
         } label: {
             ZStack {
@@ -716,14 +718,14 @@ struct RegularToolbarContent: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            Button { withAnimation { showSidebar.toggle() } } label: { Image(systemName: "sidebar.left") }
+            Button { withAnimation { showSidebar.toggle() } } label: { Image(icon: "sidebar.left") }
             BackForwardButton(tab: tab, forward: false)
             BackForwardButton(tab: tab, forward: true)
             AddressOrFindBar(tab: tab, editing: $editing, sheet: $sheet).frame(maxWidth: 720)
             ForEach(runtime.toolbarExtensions.prefix(6)) { ext in ExtensionActionButton(ext: ext, tab: tab) }
-            Button { PageActions.share(tab) } label: { Image(systemName: "square.and.arrow.up") }
-            Button { manager.newTab() } label: { Image(systemName: "plus") }.accessibilityIdentifier("newTabButton")
-            Button { tab.captureThumbnail(); showTabs = true } label: { Image(systemName: "square.on.square") }
+            Button { PageActions.share(tab) } label: { Image(icon: "square.and.arrow.up") }
+            Button { manager.newTab() } label: { Image(icon: "plus") }.accessibilityIdentifier("newTabButton")
+            Button { tab.captureThumbnail(); showTabs = true } label: { Image(icon: "square.on.square") }
             PageMenuButton(tab: tab, sheet: $sheet, importKind: $importKind)
         }
         .font(.system(size: 18))
@@ -763,11 +765,11 @@ struct TabStripItem: View {
     var body: some View {
         HStack(spacing: 6) {
             if let icon = tab.favicon { Image(uiImage: icon).resizable().frame(width: 14, height: 14) }
-            else { Image(systemName: tab.isPrivate ? "hand.raised" : "globe").font(.caption) }
+            else { Image(icon: tab.isPrivate ? "hand.raised" : "globe").font(.caption) }
             Text(tab.isHome ? "起始页" : tab.title).font(.footnote).lineLimit(1)
             Spacer(minLength: 0)
             Button { manager.close(tab) } label: {
-                Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Image(icon: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     .frame(width: 30, height: 30).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -786,20 +788,20 @@ struct TabContextMenu: View {
     @EnvironmentObject private var manager: TabManager
 
     var body: some View {
-        Button { manager.duplicate(tab) } label: { Label("复制标签页", systemImage: "plus.square.on.square") }
-        Button { manager.togglePin(tab) } label: { Label(tab.pinned ? "取消固定" : "固定标签页", systemImage: "pin") }
+        Button { manager.duplicate(tab) } label: { Label("复制标签页", icon: "plus.square.on.square") }
+        Button { manager.togglePin(tab) } label: { Label(tab.pinned ? "取消固定" : "固定标签页", icon: "pin") }
         if !tab.isPrivate {
             Menu {
                 Button("标签页") { manager.move(tab, toGroup: nil) }
                 ForEach(manager.groups) { group in Button(group.name) { manager.move(tab, toGroup: group.id) } }
                 Button("新建标签页组…") { manager.createGroup(name: "新组 \(manager.groups.count + 1)", moving: tab) }
-            } label: { Label("移到标签页组", systemImage: "square.grid.2x2") }
+            } label: { Label("移到标签页组", icon: "square.grid.2x2") }
         }
         if let url = tab.url {
-            Button { UIPasteboard.general.url = url } label: { Label("拷贝链接", systemImage: "doc.on.doc") }
+            Button { UIPasteboard.general.url = url } label: { Label("拷贝链接", icon: "doc.on.doc") }
         }
-        Button { manager.closeOthers(than: tab) } label: { Label("关闭其他标签页", systemImage: "xmark.square") }
-        Button(role: .destructive) { manager.close(tab) } label: { Label("关闭标签页", systemImage: "xmark") }
+        Button { manager.closeOthers(than: tab) } label: { Label("关闭其他标签页", icon: "xmark.square") }
+        Button(role: .destructive) { manager.close(tab) } label: { Label("关闭标签页", icon: "xmark") }
     }
 }
 
@@ -822,21 +824,21 @@ struct SidebarView: View {
                 SidebarRow(title: "无痕浏览", symbol: "hand.raised", count: manager.privateTabs.count, selected: manager.isPrivateMode) {
                     manager.switchToPrivate()
                 }
-                Button { manager.createGroup(name: "新组 \(manager.groups.count + 1)") } label: { Label("新建标签页组", systemImage: "plus") }
+                Button { manager.createGroup(name: "新组 \(manager.groups.count + 1)") } label: { Label("新建标签页组", icon: "plus") }
             }
             Section("个人收藏") {
                 ForEach(profile.bookmarks.favorites) { node in
                     Button { if let url = node.url.flatMap(URL.init(string:)) { manager.activeTab?.load(url) } } label: {
-                        Label(node.title, systemImage: "star")
+                        Label(node.title, icon: "star")
                     }
                 }
             }
             Section {
-                Button { sheet = .bookmarks } label: { Label("书签", systemImage: "book") }
-                Button { sheet = .history } label: { Label("历史记录", systemImage: "clock") }
-                Button { sheet = .downloads } label: { Label("下载", systemImage: "arrow.down.circle") }
-                Button { sheet = .extensions } label: { Label("扩展", systemImage: "puzzlepiece.extension") }
-                Button { sheet = .userscripts } label: { Label("用户脚本", systemImage: "curlybraces") }
+                Button { sheet = .bookmarks } label: { Label("书签", icon: "book") }
+                Button { sheet = .history } label: { Label("历史记录", icon: "clock") }
+                Button { sheet = .downloads } label: { Label("下载", icon: "arrow.down.circle") }
+                Button { sheet = .extensions } label: { Label("扩展", icon: "puzzlepiece.extension") }
+                Button { sheet = .userscripts } label: { Label("用户脚本", icon: "curlybraces") }
             }
         }
         .listStyle(.sidebar)
@@ -853,11 +855,11 @@ struct SidebarRow: View {
     var body: some View {
         Button(action: action) {
             HStack {
-                Label(title, systemImage: symbol)
+                Label(title, icon: symbol)
                 Spacer()
                 Text("\(count)").foregroundStyle(.secondary).font(.footnote)
             }
         }
-        .listRowBackground(selected ? Color.accentColor.opacity(0.15) : nil)
+        .listRowBackground(Rectangle().fill(.tint.opacity(selected ? 0.15 : 0)))
     }
 }

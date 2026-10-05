@@ -20,38 +20,38 @@ struct SettingsView: View {
             Form {
                 Section {
                     NavigationLink { ProfilesView() } label: {
-                        Label("身份：\(profile.info.name)", systemImage: profile.info.symbol)
+                        Label("身份：\(profile.info.name)", icon: profile.info.symbol)
                     }
                 }
                 Section("浏览") {
-                    NavigationLink { SearchSettingsView() } label: { Label("搜索引擎：\(services.prefs.searchEngine.name)", systemImage: "magnifyingglass") }
-                    NavigationLink { AppearanceSettingsView() } label: { Label("外观与工具栏", systemImage: "paintbrush") }
-                    NavigationLink { HomepageSettingsView() } label: { Label("起始页与壁纸", systemImage: "house") }
-                    NavigationLink { WebFontSettingsView(importKind: $importKind) } label: { Label("网页字体", systemImage: "textformat") }
-                    NavigationLink { DarkModeSettingsView() } label: { Label("网页深色模式", systemImage: "moon") }
-                    NavigationLink { TranslationSettingsView() } label: { Label("网页翻译", systemImage: "character.bubble") }
-                    NavigationLink { NavigationControlSettingsView() } label: { Label("页面跳转控制", systemImage: "arrow.triangle.branch") }
+                    NavigationLink { SearchSettingsView() } label: { Label("搜索引擎：\(services.prefs.searchEngine.name)", icon: "magnifyingglass") }
+                    NavigationLink { AppearanceSettingsView() } label: { Label("外观与工具栏", icon: "paintbrush") }
+                    NavigationLink { HomepageSettingsView() } label: { Label("起始页与壁纸", icon: "house") }
+                    NavigationLink { WebFontSettingsView(importKind: $importKind) } label: { Label("网页字体", icon: "textformat") }
+                    NavigationLink { DarkModeSettingsView() } label: { Label("网页深色模式", icon: "moon") }
+                    NavigationLink { TranslationSettingsView() } label: { Label("网页翻译", icon: "character.bubble") }
+                    NavigationLink { NavigationControlSettingsView() } label: { Label("页面跳转控制", icon: "arrow.triangle.branch") }
                 }
                 Section("内容") {
-                    NavigationLink { UserscriptManagerView(importKind: $importKind) } label: { Label("用户脚本", systemImage: "curlybraces") }
-                    NavigationLink { ExtensionManagerView(importKind: $importKind) } label: { Label("扩展", systemImage: "puzzlepiece.extension") }
-                    NavigationLink { AdBlockSettingsView() } label: { Label("内容拦截", systemImage: "shield.lefthalf.filled") }
-                    NavigationLink { SiteSettingsListView() } label: { Label("网站设置", systemImage: "slider.horizontal.3") }
-                    NavigationLink { MediaSettingsView() } label: { Label("媒体与下载", systemImage: "play.rectangle") }
+                    NavigationLink { UserscriptManagerView(importKind: $importKind) } label: { Label("用户脚本", icon: "curlybraces") }
+                    NavigationLink { ExtensionManagerView(importKind: $importKind) } label: { Label("扩展", icon: "puzzlepiece.extension") }
+                    NavigationLink { AdBlockSettingsView() } label: { Label("内容拦截", icon: "shield.lefthalf.filled") }
+                    NavigationLink { SiteSettingsListView() } label: { Label("网站设置", icon: "slider.horizontal.3") }
+                    NavigationLink { MediaSettingsView() } label: { Label("媒体与下载", icon: "play.rectangle") }
                 }
                 Section("隐私与数据") {
-                    NavigationLink { AutofillSettingsView() } label: { Label("密码与自动填充", systemImage: "key") }
-                    NavigationLink { PrivacySettingsView() } label: { Label("清除浏览数据", systemImage: "trash") }
-                    NavigationLink { ImportExportView(importKind: $importKind) } label: { Label("导入与导出", systemImage: "arrow.up.arrow.down.square") }
+                    NavigationLink { AutofillSettingsView() } label: { Label("密码与自动填充", icon: "key") }
+                    NavigationLink { PrivacySettingsView() } label: { Label("清除浏览数据", icon: "trash") }
+                    NavigationLink { ImportExportView(importKind: $importKind) } label: { Label("导入与导出", icon: "arrow.up.arrow.down.square") }
                 }
                 Section("高级") {
-                    NavigationLink { DeveloperSettingsView() } label: { Label("开发者与网页检查器", systemImage: "hammer") }
-                    NavigationLink { CompatibilityView() } label: { Label("兼容性矩阵", systemImage: "checklist") }
+                    NavigationLink { DeveloperSettingsView() } label: { Label("开发者与网页检查器", icon: "hammer") }
+                    NavigationLink { CompatibilityView() } label: { Label("兼容性矩阵", icon: "checklist") }
                     if showDiagnostics {
-                        NavigationLink { DiagnosticsView() } label: { Label("诊断", systemImage: "waveform.path.ecg") }
+                        NavigationLink { DiagnosticsView() } label: { Label("诊断", icon: "waveform.path.ecg") }
                     }
-                    NavigationLink { SelfTestView() } label: { Label("自检（扩展 / 脚本 / 拦截）", systemImage: "stethoscope") }
-                    NavigationLink { AboutView() } label: { Label("关于 Rikugan", systemImage: "info.circle") }
+                    NavigationLink { SelfTestView() } label: { Label("自检（扩展 / 脚本 / 拦截）", icon: "stethoscope") }
+                    NavigationLink { AboutView() } label: { Label("关于 Rikugan", icon: "info.circle") }
                 }
                 Section {
                     Text(BuildInfo.line).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
@@ -144,6 +144,15 @@ struct AppearanceSettingsView: View {
                 NavigationLink { ToolbarCustomizeView() } label: { Text("工具栏按钮与手势") }
             } footer: { Text("自定义底部工具栏 5 个按钮、每个按钮的长按动作，以及滑动 / 双击手势。长按没有设置长按动作的按钮也会打开这里。") }
             Section {
+                NavigationLink { ThemeColorView() } label: {
+                    HStack {
+                        Text("主题色")
+                        Spacer()
+                        Text(Theme.presets.first { $0.hex.uppercased() == services.prefs.themeColor.uppercased() }?.name ?? "自选")
+                            .foregroundStyle(.secondary)
+                        Circle().fill(Theme.color).frame(width: 22, height: 22)
+                    }
+                }
                 NavigationLink { AppIconPickerView() } label: {
                     HStack {
                         Text("App 图标")

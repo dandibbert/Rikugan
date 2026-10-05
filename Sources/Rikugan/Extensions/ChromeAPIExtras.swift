@@ -436,11 +436,11 @@ extension ChromeAPIBridge {
 
     static func symbolDataURL(_ symbol: String, size: CGFloat) -> String {
         let config = UIImage.SymbolConfiguration(pointSize: size * 0.8)
-        let image = UIImage(systemName: symbol, withConfiguration: config) ?? UIImage(systemName: "doc", withConfiguration: config)
+        let image = Icons.uiImage(symbol, configuration: config) ?? Icons.uiImage("doc", configuration: config)
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         let png = renderer.pngData { _ in
             guard let image else { return }
-            let tinted = image.withTintColor(.systemBlue, renderingMode: .alwaysOriginal)
+            let tinted = image.withTintColor(Theme.uiColor, renderingMode: .alwaysOriginal)
             tinted.draw(in: CGRect(x: (size - tinted.size.width) / 2, y: (size - tinted.size.height) / 2, width: tinted.size.width, height: tinted.size.height))
         }
         return "data:image/png;base64," + png.base64EncodedString()

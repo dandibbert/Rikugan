@@ -187,7 +187,7 @@ struct ManualTestChecklistView: View {
                     ForEach(section.items) { item in
                         NavigationLink { ManualTestItemView(item: item) } label: {
                             HStack(alignment: .top) {
-                                Image(systemName: store.status(item.id).symbol).foregroundStyle(store.status(item.id).color)
+                                Image(icon: store.status(item.id).symbol).foregroundStyle(store.status(item.id).color)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.title).font(.callout)
                                     HStack(spacing: 6) {
@@ -222,11 +222,11 @@ private struct ManualTestItemView: View {
         Form {
             Section("步骤") {
                 Text(item.steps)
-                if item.realDeviceOnly { Label("仅能在真机上验证；PlayCover / 模拟器上请设为“不适用”。", systemImage: "iphone").font(.caption).foregroundStyle(.orange) }
+                if item.realDeviceOnly { Label("仅能在真机上验证；PlayCover / 模拟器上请设为“不适用”。", icon: "iphone").font(.caption).foregroundStyle(.orange) }
             }
             Section("状态") {
                 Picker("状态", selection: Binding(get: { store.status(item.id) }, set: { store.set(item.id, status: $0) })) {
-                    ForEach(ManualTestStatus.allCases, id: \.self) { Label($0.label, systemImage: $0.symbol).tag($0) }
+                    ForEach(ManualTestStatus.allCases, id: \.self) { Label($0.label, icon: $0.symbol).tag($0) }
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()

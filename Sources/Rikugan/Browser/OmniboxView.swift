@@ -16,7 +16,7 @@ struct OmniboxOverlay: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 HStack {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    Image(icon: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("搜索或输入网址", text: $text)
                         .focused($focused)
                         .textInputAutocapitalization(.never)
@@ -26,7 +26,7 @@ struct OmniboxOverlay: View {
                         .onSubmit { submit(text) }
                         .accessibilityIdentifier("omniboxField")
                     if !text.isEmpty {
-                        Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        Button { text = "" } label: { Image(icon: "xmark.circle.fill").foregroundStyle(.secondary) }
                     }
                 }
                 .padding(.horizontal, 12)
@@ -98,7 +98,7 @@ struct OmniboxOverlay: View {
     private func row(symbol: String, title: String, subtitle: String?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 22)
+                Image(icon: symbol).foregroundStyle(.secondary).frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).lineLimit(1).foregroundStyle(.primary)
                     if let subtitle, !subtitle.isEmpty { Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }

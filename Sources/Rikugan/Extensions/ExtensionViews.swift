@@ -80,7 +80,7 @@ struct ExtensionRow: View {
             if let icon = runtime.loaded[record.id]?.icon {
                 Image(uiImage: icon).resizable().scaledToFit().frame(width: 32, height: 32)
             } else {
-                Image(systemName: "puzzlepiece.extension.fill").resizable().scaledToFit().frame(width: 30, height: 30).foregroundStyle(.gray)
+                Image(icon: "puzzlepiece.extension.fill").resizable().scaledToFit().frame(width: 30, height: 30).foregroundStyle(.gray)
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(record.name).font(.body.weight(.medium)).lineLimit(1)
@@ -110,7 +110,7 @@ struct ExtensionDetailView: View {
                 Section {
                     ItemHeader(title: record.name, subtitle: record.description) {
                         if let icon = loaded?.icon { Image(uiImage: icon).resizable().scaledToFit() }
-                        else { Image(systemName: "puzzlepiece.extension.fill").resizable().scaledToFit().foregroundStyle(.gray) }
+                        else { Image(icon: "puzzlepiece.extension.fill").resizable().scaledToFit().foregroundStyle(.gray) }
                     }
                     Toggle("启用", isOn: Binding(get: { record.enabled }, set: { runtime.setEnabled(record.id, $0) }))
                 }
@@ -209,7 +209,7 @@ struct ExtensionInstallSheet: View {
                     ItemHeader(title: pending.displayName,
                                subtitle: "版本 \(pending.manifest.version)" + (pending.existing.map { " · 当前已安装 \($0.version)" } ?? "")) {
                         if let icon = pending.icon { Image(uiImage: icon).resizable().scaledToFit() }
-                        else { Image(systemName: "puzzlepiece.extension.fill").resizable().scaledToFit().foregroundStyle(.gray) }
+                        else { Image(icon: "puzzlepiece.extension.fill").resizable().scaledToFit().foregroundStyle(.gray) }
                     }
                 }
                 Section(pending.existing == nil ? "该扩展希望：" : "新版本需要新的权限：") {

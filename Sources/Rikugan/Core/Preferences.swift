@@ -82,6 +82,8 @@ public struct Preferences: Codable, Equatable {
     public var persistTabThumbnails = true
     public var homepageMode: HomepageMode = .start
     public var homepageURL = ""
+    /// App theme (tint) colour as #RRGGBB.
+    public var themeColor = "#E07A5F"
     public var showFrequentlyVisited = true
     public var wallpaperFileName: String?
     public var immersiveWallpaper = false
@@ -161,6 +163,7 @@ public struct Preferences: Codable, Equatable {
         persistTabThumbnails = v("persistTabThumbnails", persistTabThumbnails)
         homepageMode = v("homepageMode", homepageMode)
         homepageURL = v("homepageURL", homepageURL)
+        themeColor = v("themeColor", themeColor)
         showFrequentlyVisited = v("showFrequentlyVisited", showFrequentlyVisited)
         wallpaperFileName = v("wallpaperFileName", wallpaperFileName)
         immersiveWallpaper = v("immersiveWallpaper", immersiveWallpaper)

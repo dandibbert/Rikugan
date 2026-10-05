@@ -19,7 +19,7 @@ struct ReaderView: View {
             Group {
                 if failed {
                     VStack(spacing: 12) {
-                        Image(systemName: "doc.plaintext").font(.largeTitle).foregroundStyle(.secondary)
+                        Image(icon: "doc.plaintext").font(.largeTitle).foregroundStyle(.secondary)
                         Text("此页面无法使用阅读模式").foregroundStyle(.secondary)
                     }
                 } else if article == nil {
@@ -36,8 +36,8 @@ struct ReaderView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Section("字号") {
-                            Button { services.prefs.readerFontSize = max(12, services.prefs.readerFontSize - 1); render() } label: { Label("缩小", systemImage: "textformat.size.smaller") }
-                            Button { services.prefs.readerFontSize = min(34, services.prefs.readerFontSize + 1); render() } label: { Label("放大", systemImage: "textformat.size.larger") }
+                            Button { services.prefs.readerFontSize = max(12, services.prefs.readerFontSize - 1); render() } label: { Label("缩小", icon: "textformat.size.smaller") }
+                            Button { services.prefs.readerFontSize = min(34, services.prefs.readerFontSize + 1); render() } label: { Label("放大", icon: "textformat.size.larger") }
                         }
                         Picker("行距", selection: Binding(get: { services.prefs.readerLineHeight }, set: { services.prefs.readerLineHeight = $0; render() })) {
                             Text("紧凑").tag(1.4); Text("标准").tag(1.7); Text("宽松").tag(2.0)
@@ -53,7 +53,7 @@ struct ReaderView: View {
                         Picker("背景", selection: Binding(get: { services.prefs.readerTheme }, set: { services.prefs.readerTheme = $0; render() })) {
                             ForEach(Array(themes.enumerated()), id: \.offset) { _, theme in Text(theme.name).tag(theme.id) }
                         }
-                    } label: { Image(systemName: "textformat.size") }
+                    } label: { Image(icon: "textformat.size") }
                 }
             }
         }

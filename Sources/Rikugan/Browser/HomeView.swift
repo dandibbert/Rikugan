@@ -31,8 +31,8 @@ struct HomeView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 26) {
-                        Image(systemName: tab.isPrivate ? "hand.raised.circle.fill" : "eye.circle.fill")
-                            .font(.system(size: 54)).foregroundStyle(tab.isPrivate ? Color.purple : Color.accentColor)
+                        Image(icon: tab.isPrivate ? "hand.raised.circle.fill" : "eye.circle.fill")
+                            .font(.system(size: 54)).foregroundStyle(tab.isPrivate ? AnyShapeStyle(Color.purple) : AnyShapeStyle(.tint))
                             .padding(.top, 40)
                         if tab.isPrivate {
                             Text("无痕浏览").font(.title2.bold())
@@ -40,7 +40,7 @@ struct HomeView: View {
                                 .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 30)
                         }
                         HStack {
-                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            Image(icon: "magnifyingglass").foregroundStyle(.secondary)
                             TextField("搜索或输入网址", text: $query)
                                 .focused($focused)
                                 .textInputAutocapitalization(.never)

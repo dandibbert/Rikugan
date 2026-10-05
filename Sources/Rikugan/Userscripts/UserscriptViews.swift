@@ -42,7 +42,7 @@ struct UserscriptManagerView: View {
                     NavigationLink { UserscriptDetailView(scriptID: script.id, editorTarget: $editorTarget) } label: { UserscriptRow(script: script) }
                         .swipeActions {
                             Button("删除", role: .destructive) { store.delete(script.id) }
-                            Button("编辑") { editorTarget = EditorTarget(script: script, source: script.source) }.tint(.blue)
+                            Button("编辑") { editorTarget = EditorTarget(script: script, source: script.source) }.tint(Theme.color)
                         }
                 }
                 .onMove { store.move(from: $0, to: $1) }
@@ -115,7 +115,7 @@ struct ScriptIcon: View {
         AsyncImage(url: url.flatMap(URL.init(string:))) { image in
             image.resizable().scaledToFit()
         } placeholder: {
-            Image(systemName: "curlybraces.square.fill").resizable().scaledToFit().foregroundStyle(.orange)
+            Image(icon: "curlybraces.square.fill").resizable().scaledToFit().foregroundStyle(.orange)
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
@@ -243,7 +243,7 @@ struct ScriptEditorSheet: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack {
                             ForEach(diagnostics.issues) { issue in
-                                Label("第 \(issue.line) 行：\(issue.message)", systemImage: issue.severity == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                                Label("第 \(issue.line) 行：\(issue.message)", icon: issue.severity == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
                                     .font(.caption)
                                     .foregroundStyle(issue.severity == .error ? .red : .orange)
                                     .padding(.horizontal, 8).padding(.vertical, 5)

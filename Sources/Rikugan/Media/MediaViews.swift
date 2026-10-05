@@ -27,7 +27,7 @@ struct MediaSnifferView: View {
                 ForEach(all) { item in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Image(systemName: icon(item.kind)).foregroundStyle(.tint)
+                            Image(icon: icon(item.kind)).foregroundStyle(.tint)
                             Text(item.fileName).font(.subheadline.weight(.medium)).lineLimit(1)
                         }
                         Text(details(item)).font(.subheadline).foregroundStyle(.secondary)
@@ -36,7 +36,7 @@ struct MediaSnifferView: View {
                             Button("下载") { downloads.downloadInteractively(url: item.url, suggestedName: nil, from: tab) }
                             Button("播放") { player = item.url }
                             Button("拷贝链接") { UIPasteboard.general.url = item.url; ToastCenter.shared.show("已拷贝", symbol: "doc.on.doc") }
-                            Button { Presenter.share([item.url]) } label: { Image(systemName: "square.and.arrow.up") }
+                            Button { Presenter.share([item.url]) } label: { Image(icon: "square.and.arrow.up") }
                         }
                         .buttonStyle(.borderless)
                         .font(.caption)
@@ -44,8 +44,8 @@ struct MediaSnifferView: View {
                     .padding(.vertical, 4)
                 }
                 Section {
-                    Button { PageActions.videoAction(tab, "pip") } label: { Label("画中画", systemImage: "pip.enter") }
-                    Button { PageActions.videoAction(tab, "fullscreen") } label: { Label("全屏播放", systemImage: "arrow.up.left.and.arrow.down.right") }
+                    Button { PageActions.videoAction(tab, "pip") } label: { Label("画中画", icon: "pip.enter") }
+                    Button { PageActions.videoAction(tab, "fullscreen") } label: { Label("全屏播放", icon: "arrow.up.left.and.arrow.down.right") }
                 } footer: {
                     Text("FairPlay / Widevine 等 DRM 保护的媒体不在支持范围内；加密的 HLS 无法下载。")
                 }
@@ -54,7 +54,7 @@ struct MediaSnifferView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
-                ToolbarItem(placement: .topBarLeading) { Button { Task { await scan() } } label: { Image(systemName: "arrow.clockwise") } }
+                ToolbarItem(placement: .topBarLeading) { Button { Task { await scan() } } label: { Image(icon: "arrow.clockwise") } }
             }
             .task { await scan() }
             .sheet(item: Binding(get: { player.map { IdentifiedURL(url: $0) } }, set: { player = $0?.url })) { item in
@@ -124,15 +124,15 @@ struct ImageGalleryView: View {
                                 if selecting { toggle(image) } else { preview = image }
                             }
                             if selecting {
-                                Image(systemName: selection.contains(image.id) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(.white, Color.accentColor).font(.title3).padding(5)
+                                Image(icon: selection.contains(image.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(.white, Theme.color).font(.title3).padding(5)
                             }
                         }
                         .contextMenu {
-                            Button { Task { await save([image]) } } label: { Label("存储到相册", systemImage: "square.and.arrow.down") }
-                            Button { UIPasteboard.general.url = image.url } label: { Label("拷贝图片地址", systemImage: "link") }
-                            Button { Presenter.share([image.url]) } label: { Label("分享", systemImage: "square.and.arrow.up") }
-                            Button { tab.manager?.newTab(url: image.url, isPrivate: tab.isPrivate); dismiss() } label: { Label("在新标签页打开原图", systemImage: "arrow.up.right.square") }
+                            Button { Task { await save([image]) } } label: { Label("存储到相册", icon: "square.and.arrow.down") }
+                            Button { UIPasteboard.general.url = image.url } label: { Label("拷贝图片地址", icon: "link") }
+                            Button { Presenter.share([image.url]) } label: { Label("分享", icon: "square.and.arrow.up") }
+                            Button { tab.manager?.newTab(url: image.url, isPrivate: tab.isPrivate); dismiss() } label: { Label("在新标签页打开原图", icon: "arrow.up.right.square") }
                         }
                     }
                 }
@@ -216,12 +216,12 @@ struct ImagePreview: View {
 
     @ViewBuilder private var actions: some View {
         Button { Task { if await ImageGalleryView.saveToPhotos([image.url], tab: tab) > 0 { ToastCenter.shared.show("已存储到相册", symbol: "photo") } } } label: {
-            Label("存储到相册", systemImage: "square.and.arrow.down")
+            Label("存储到相册", icon: "square.and.arrow.down")
         }
-        Button { Task { await copyImage() } } label: { Label("拷贝图片", systemImage: "doc.on.doc") }
-        Button { UIPasteboard.general.url = image.url; ToastCenter.shared.show("已拷贝图片地址", symbol: "link") } label: { Label("拷贝图片地址", systemImage: "link") }
-        Button { Presenter.share([image.url]) } label: { Label("分享", systemImage: "square.and.arrow.up") }
-        if let openInTab { Button { openInTab() } label: { Label("在新标签页打开原图", systemImage: "arrow.up.right.square") } }
+        Button { Task { await copyImage() } } label: { Label("拷贝图片", icon: "doc.on.doc") }
+        Button { UIPasteboard.general.url = image.url; ToastCenter.shared.show("已拷贝图片地址", symbol: "link") } label: { Label("拷贝图片地址", icon: "link") }
+        Button { Presenter.share([image.url]) } label: { Label("分享", icon: "square.and.arrow.up") }
+        if let openInTab { Button { openInTab() } label: { Label("在新标签页打开原图", icon: "arrow.up.right.square") } }
     }
 
     var body: some View {
@@ -235,7 +235,7 @@ struct ImagePreview: View {
                         .onTapGesture(count: 2) { withAnimation { scale = scale > 1 ? 1 : 2.5; baseScale = scale } }
                         .contextMenu { actions }
             } placeholder: { failed in
-                if failed { Label("图片无法加载", systemImage: "exclamationmark.triangle").foregroundStyle(.white) }
+                if failed { Label("图片无法加载", icon: "exclamationmark.triangle").foregroundStyle(.white) }
                 else { ProgressView().tint(.white) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -245,7 +245,7 @@ struct ImagePreview: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
-                    Menu { actions } label: { Image(systemName: "ellipsis.circle") }.accessibilityIdentifier("imagePreviewActions")
+                    Menu { actions } label: { Image(icon: "ellipsis.circle") }.accessibilityIdentifier("imagePreviewActions")
                 }
             }
         }
