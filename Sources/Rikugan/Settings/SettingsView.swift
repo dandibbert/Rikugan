@@ -429,15 +429,23 @@ struct NavigationControlSettingsView: View {
 
 struct MediaSettingsView: View {
     @EnvironmentObject private var services: AppServices
+    @State private var destination = DownloadLocation.destination
     var body: some View {
         Form {
             Section {
                 Toggle("媒体资源嗅探", isOn: $services.prefs.mediaSnifferEnabled)
             } footer: { Text("记录网页通过 fetch / XHR / DOM 加载的视频、音频和 M3U8 地址。受 DRM（FairPlay / Widevine）保护的内容不在支持范围内。") }
             Section {
-                Toggle("下载前询问文件名和保存位置", isOn: $services.prefs.downloadConfirm)
+                Picker("保存到", selection: Binding(get: { destination }, set: { destination = $0; DownloadLocation.destination = $0 })) {
+                    Text("Rikugan 下载").tag(DownloadLocation.Destination.rikugan)
+                    if let folder = DownloadLocation.customFolderName { Text(folder).tag(DownloadLocation.Destination.custom) }
+                }
+                Button(DownloadLocation.customFolder == nil ? "选择文件夹…" : "更换文件夹…") {
+                    Task { if await DownloadLocation.pickFolder() { destination = .custom } }
+                }
+                Toggle("下载前询问文件名", isOn: $services.prefs.downloadConfirm)
             } header: { Text("下载") } footer: {
-                Text("开启后，网页下载、长按链接下载和媒体面板下载会先让你修改文件名，并选择保存到 Rikugan 下载文件夹或完成后在“文件”中选择位置。默认位置：文件 App → 我的 iPhone → Rikugan → Downloads。")
+                Text("选择的文件夹会被记住，之后的下载直接存到那里（同时保留在 Rikugan 的下载列表中，可随时打开）。Rikugan 下载文件夹：文件 App → 我的 iPhone → Rikugan → Downloads。")
             }
             Section {
                 Toggle("重启后保留标签页缩略图", isOn: $services.prefs.persistTabThumbnails)

@@ -24,8 +24,13 @@ import QuickLook
     var task: URLSessionDownloadTask?
     var resumeData: Data?
     var hlsTask: Task<Void, Never>?
-    /// Chosen in the download prompt: open the Files exporter once finished.
+    /// GM_download saveAs: open the Files exporter once finished.
     var exportToFiles = false
+    /// Also copy the finished file into the folder the user picked (remembered destination).
+    var copyToCustomFolder = false
+    /// A tab that only existed to start this download (opened for a link / window.open and never
+    /// showed a page): closed once the download ends, like Safari.
+    weak var downloadOnlyTab: BrowserTab?
     /// Started from a private tab: never written to the download history file and never reported
     /// to extensions.
     var isPrivate = false
@@ -139,12 +144,29 @@ import QuickLook
         item.isPrivate = sourceTab?.isPrivate ?? (TabRegistry.shared.tab(for: download.webView)?.isPrivate ?? false)
         item.webView = download.webView
         item.wkDownload = download
+        item.copyToCustomFolder = !item.isPrivate && DownloadLocation.destination == .custom
         item.mime = suggestedResponse?.mimeType ?? ""
         wkItems[ObjectIdentifier(download)] = item
         download.delegate = self
         item.observe(download.progress)
         items.insert(item, at: 0)
+        // A tab opened for this link (target=_blank / window.open) that never showed a page exists
+        // only for the download: it is closed when the download ends.
+        if let tab = sourceTab ?? TabRegistry.shared.tab(for: download.webView), tab.opener != nil,
+           download.webView?.backForwardList.currentItem == nil {
+            item.downloadOnlyTab = tab
+        }
         // Announced once the destination is decided (after the optional prompt).
+    }
+
+    /// Closes the blank tab a download was started from (see `downloadOnlyTab`), returning to the
+    /// page that opened it. A tab that has since shown a page is left alone.
+    func closeDownloadOnlyTab(_ item: DownloadItem) {
+        guard let tab = item.downloadOnlyTab, let manager = tab.manager else { return }
+        item.downloadOnlyTab = nil
+        guard tab.webView?.backForwardList.currentItem == nil, manager.tabs.contains(where: { $0 === tab }) else { return }
+        if manager.activeTab === tab, let opener = tab.opener, manager.tabs.contains(where: { $0 === opener }) { manager.select(opener) }
+        manager.close(tab)
     }
 
     // MARK: Direct downloads (links, media sniffer, extensions, GM_download)
@@ -159,7 +181,7 @@ import QuickLook
         Task {
             guard let decision = await DownloadPrompt.ask(fileName: name, size: 0, source: url, mime: nil) else { return }
             let item = download(url: url, suggestedName: decision.fileName, from: tab)
-            item?.exportToFiles = decision.exportToFiles
+            item?.copyToCustomFolder = decision.destination == .custom && !(item?.isPrivate ?? true)
         }
     }
 
@@ -176,6 +198,7 @@ import QuickLook
         item.headers = headers
         item.isPrivate = tab?.isPrivate ?? false
         item.userNamedFile = suggestedName != nil
+        item.copyToCustomFolder = !item.isPrivate && DownloadLocation.destination == .custom
         items.insert(item, at: 0)
         Task {
             var request = URLRequest(url: url)
@@ -366,7 +389,25 @@ import QuickLook
         item.state = .completed
         item.speed = 0
         persist()
+        closeDownloadOnlyTab(item)
         if item.exportToFiles { item.exportToFiles = false; saveToFiles(item) }
+        if item.copyToCustomFolder {
+            item.copyToCustomFolder = false
+            do {
+                let copy = try DownloadLocation.copyToCustomFolder(file)
+                ToastCenter.shared.show("已保存到“\(copy.deletingLastPathComponent().lastPathComponent)”：\(item.fileName)", symbol: "checkmark.circle",
+                                        actionTitle: "打开") { [weak self] in self?.open(item) }
+            } catch {
+                ToastCenter.shared.show("已下载，但无法存入所选文件夹（\(error.localizedDescription)），文件在 Rikugan 下载中",
+                                        symbol: "exclamationmark.triangle", actionTitle: "打开") { [weak self] in self?.open(item) }
+            }
+            if !item.isPrivate {
+                AppServices.shared.profile.extensions.dispatchAll("downloads.onChanged", permission: "downloads") { _ in
+                    [["id": item.numericID, "state": ["previous": "in_progress", "current": "complete"]]]
+                }
+            }
+            return
+        }
         if !item.isPrivate {
             AppServices.shared.profile.extensions.dispatchAll("downloads.onChanged", permission: "downloads") { _ in
                 [["id": item.numericID, "state": ["previous": "in_progress", "current": "complete"]]]
@@ -415,27 +456,28 @@ extension DownloadManager: WKDownloadDelegate {
                               completionHandler: @escaping (URL?) -> Void) {
         MainActor.assumeIsolated {
             let item = wkItems[ObjectIdentifier(download)]
-            let place: (String, Bool) -> Void = { name, exportToFiles in
+            let place: (String, DownloadLocation.Destination) -> Void = { name, destination in
                 let file = AppPaths.uniqueFile(in: AppPaths.downloads, name: name)
                 if let item {
                     item.fileName = file.lastPathComponent
                     item.mime = response.mimeType ?? item.mime
                     if response.expectedContentLength > 0 { item.total = response.expectedContentLength }
                     item.fileURL = file
-                    item.exportToFiles = exportToFiles
+                    item.copyToCustomFolder = destination == .custom && !item.isPrivate
                     self.announce(item)
                 }
                 completionHandler(file)
             }
-            guard DownloadPrompt.enabled else { place(suggestedFilename, false); return }
+            guard DownloadPrompt.enabled else { place(suggestedFilename, DownloadLocation.destination); return }
             Task { @MainActor in
                 // WebKit waits for the destination: the download does not start before the user confirms.
                 if let decision = await DownloadPrompt.ask(fileName: suggestedFilename, size: response.expectedContentLength,
                                                            source: download.originalRequest?.url ?? response.url, mime: response.mimeType) {
-                    place(decision.fileName, decision.exportToFiles)
+                    place(decision.fileName, decision.destination)
                 } else {
                     completionHandler(nil)
                     if let item {
+                        self.closeDownloadOnlyTab(item)
                         self.wkItems.removeValue(forKey: ObjectIdentifier(download))
                         self.items.removeAll { $0.id == item.id }
                     }
@@ -456,6 +498,7 @@ extension DownloadManager: WKDownloadDelegate {
             guard let item = wkItems[ObjectIdentifier(download)] else { return }
             item.resumeData = resumeData
             if item.state != .paused && item.state != .cancelled { item.state = .failed(error.localizedDescription) }
+            closeDownloadOnlyTab(item)
         }
     }
 }

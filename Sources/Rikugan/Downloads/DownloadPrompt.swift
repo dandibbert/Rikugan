@@ -3,7 +3,7 @@ import UIKit
 
 /// "Save as" step before a user-initiated download: file name, destination, size and source.
 @MainActor enum DownloadPrompt {
-    struct Decision { let fileName: String; let exportToFiles: Bool }
+    struct Decision { let fileName: String; let destination: DownloadLocation.Destination }
 
     /// Whether a prompt should be shown (setting on, and no self-test is driving downloads).
     static var enabled: Bool { AppServices.shared.prefs.downloadConfirm && !SelfTestRunner.shared.running && !SelfTestRunner.autoRun }
@@ -20,7 +20,11 @@ import UIKit
             let view = DownloadConfirmView(initialName: fileName, size: size, source: source, mime: mime, finish: finish)
             let controller = UIHostingController(rootView: view)
             controller.modalPresentationStyle = .pageSheet
-            if let sheet = controller.sheetPresentationController { sheet.detents = [.medium()]; sheet.prefersGrabberVisible = false }
+            if let sheet = controller.sheetPresentationController {
+                sheet.detents = [.custom(identifier: .init("download")) { _ in 370 }]
+                sheet.prefersGrabberVisible = true
+                sheet.preferredCornerRadius = 28
+            }
             controller.presentationController?.delegate = DismissWatcher.shared
             DismissWatcher.shared.onDismiss[ObjectIdentifier(controller)] = { finish(nil) }
             Presenter.present(controller)
@@ -45,8 +49,9 @@ struct DownloadConfirmView: View {
     let mime: String?
     let finish: (DownloadPrompt.Decision?) -> Void
     @State private var name = ""
-    @State private var toFiles = false
+    @State private var destination = DownloadLocation.destination
     @State private var alwaysAsk = true
+    @FocusState private var editingName: Bool
     @Environment(\.dismiss) private var dismiss
 
     init(initialName: String, size: Int64, source: URL?, mime: String?, finish: @escaping (DownloadPrompt.Decision?) -> Void) {
@@ -59,46 +64,71 @@ struct DownloadConfirmView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    HStack(spacing: 12) {
-                        Image(icon: DownloadRow.symbol(forFileName: name))
-                            .font(.title2).foregroundStyle(.tint)
-                            .frame(width: 44, height: 44)
-                            .background(Theme.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        VStack(alignment: .leading, spacing: 2) {
-                            TextField("文件名", text: $name)
-                                .font(.headline)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .accessibilityIdentifier("download-name")
-                            Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                    }
-                    .padding(.vertical, 4)
+        VStack(spacing: 18) {
+            HStack {
+                Text("下载文件").font(.headline)
+                Spacer()
+                Button { close(nil) } label: {
+                    Image(icon: "xmark").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30).background(Color(.tertiarySystemFill), in: Circle())
                 }
-                Section {
-                    Picker("保存位置", selection: $toFiles) {
-                        Text("Rikugan 下载").tag(false)
-                        Text("下载后选择…").tag(true)
+                .accessibilityLabel("取消")
+            }
+            HStack(spacing: 14) {
+                Image(icon: DownloadRow.symbol(forFileName: name))
+                    .font(.system(size: 26)).foregroundStyle(.tint)
+                    .frame(width: 58, height: 58)
+                    .background(Theme.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                VStack(alignment: .leading, spacing: 6) {
+                    TextField("文件名", text: $name)
+                        .font(.body.weight(.medium))
+                        .focused($editingName)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .padding(.horizontal, 10).frame(height: 36)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .accessibilityIdentifier("download-name")
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    Toggle("下载前总是询问", isOn: $alwaysAsk)
-                } footer: {
-                    Text(toFiles ? "下载完成后打开“文件”选择保存位置，下载列表中也保留一份。" : "“文件” › 我的 iPhone › Rikugan › Downloads")
                 }
             }
-            .navigationTitle("下载")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { close(nil) } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("下载") { close(.init(fileName: cleaned, exportToFiles: toFiles)) }
-                        .fontWeight(.semibold)
-                        .disabled(cleaned.isEmpty)
-                        .accessibilityIdentifier("download-confirm")
+            Menu {
+                Picker("保存到", selection: $destination) {
+                    Label("Rikugan 下载", icon: "arrow.down.circle").tag(DownloadLocation.Destination.rikugan)
+                    if let folder = DownloadLocation.customFolderName {
+                        Label(folder, icon: "folder").tag(DownloadLocation.Destination.custom)
+                    }
                 }
+                Button {
+                    Task { if await DownloadLocation.pickFolder() { destination = .custom } }
+                } label: { Label(DownloadLocation.customFolder == nil ? "选择文件夹…" : "更换文件夹…", icon: "folder") }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(icon: destination == .custom ? "folder" : "arrow.down.circle").foregroundStyle(.tint)
+                    Text("保存到").foregroundStyle(.secondary)
+                    Spacer()
+                    Text(DownloadLocation.displayName(destination)).foregroundStyle(.primary).lineLimit(1)
+                    Image(icon: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .font(.subheadline)
+                .padding(.horizontal, 14).frame(height: 46)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .accessibilityIdentifier("download-destination")
+            Button { close(.init(fileName: cleaned, destination: destination)) } label: {
+                Text("下载").font(.body.weight(.semibold)).frame(maxWidth: .infinity).frame(height: 32)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: 14))
+            .controlSize(.large)
+            .disabled(cleaned.isEmpty)
+            .accessibilityIdentifier("download-confirm")
+            Toggle("每次下载前询问", isOn: $alwaysAsk).font(.footnote).foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 12)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color(.systemBackground))
     }
 
     private var subtitle: String {
@@ -111,7 +141,10 @@ struct DownloadConfirmView: View {
     private var cleaned: String { name.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "/", with: "_") }
 
     private func close(_ decision: DownloadPrompt.Decision?) {
-        if decision != nil && !alwaysAsk { AppServices.shared.prefs.downloadConfirm = false }
+        if let decision {
+            DownloadLocation.destination = decision.destination
+            if !alwaysAsk { AppServices.shared.prefs.downloadConfirm = false }
+        }
         finish(decision)
         dismiss()
     }
