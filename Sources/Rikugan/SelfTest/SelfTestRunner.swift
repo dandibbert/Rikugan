@@ -133,6 +133,24 @@ import WebKit
             && m.box.width >= m.size.width * 0.3 && m.box.height >= m.size.height * 0.3
     }
 
+    /// Ink of a SwiftUI view rendered with ImageRenderer (the path the app's rows actually use).
+    static func swiftUIInk<V: View>(_ view: V) -> (size: CGSize, ink: Int) {
+        let renderer = ImageRenderer(content: view.foregroundStyle(.black).environment(\.colorScheme, .light))
+        renderer.scale = 2
+        guard let cg = renderer.cgImage else { return (.zero, -1) }
+        let w = cg.width, h = cg.height
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        pixels.withUnsafeMutableBytes { buffer in
+            if let ctx = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            }
+        }
+        var ink = 0
+        for i in stride(from: 3, to: pixels.count, by: 4) where pixels[i] > 40 { ink += 1 }
+        return (CGSize(width: w, height: h), ink)
+    }
+
     static func iconInfo(_ name: String) -> String {
         guard let m = iconMeasure(name) else { return "nil" }
         return "size=\(Int(m.size.width))x\(Int(m.size.height)) ink=\(m.ink) box=\(Int(m.box.width))x\(Int(m.box.height))"
@@ -185,6 +203,14 @@ import WebKit
         // Loading is not enough: a glyph placed outside the symbol's box loads fine and draws
         // nothing. Each icon is rendered and must have a sane size and visible ink.
         let brokenIcons = iconNames.filter { !Self.iconDraws("rk." + $0) }
+        // SwiftUI path (Image(icon:) as used by Label rows) compared with the system symbol.
+        let custom = Self.swiftUIInk(Image(icon: "magnifyingglass").font(.body))
+        let system = Self.swiftUIInk(Image(systemName: "magnifyingglass").font(.body))
+        let labelRow = Self.swiftUIInk(Label("搜索引擎", icon: "magnifyingglass").font(.body))
+        let labelText = Self.swiftUIInk(Text("搜索引擎").font(.body))
+        ctx.record("图标集：SwiftUI 渲染自定义符号有内容（与系统符号相当）",
+                   custom.ink > system.ink / 4 && labelRow.ink > labelText.ink + custom.ink / 2,
+                   "custom=\(custom.size) ink=\(custom.ink) system=\(system.size) ink=\(system.ink) label=\(labelRow.size) ink=\(labelRow.ink) textOnly=\(labelText.ink) resolved=\(Icons.resolved("magnifyingglass"))")
         ctx.record("图标集：自定义符号全部可加载并可见", !iconNames.isEmpty && brokenIcons.isEmpty,
                    "icons=\(iconNames.count) broken=\(brokenIcons.prefix(10)) sample=\(Self.iconInfo("rk.gearshape"))")
 
