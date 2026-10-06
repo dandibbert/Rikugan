@@ -20,6 +20,32 @@ from svgelements import Matrix, Path, SVG
 
 # SF Symbol name -> (Phosphor name, weight)
 MAP = {
+    # Profile icons (Settings → 身份)
+    "airplane": ("airplane", "regular"),
+    "bag": ("handbag", "regular"),
+    "bolt": ("lightning", "regular"),
+    "building.2": ("buildings", "regular"),
+    "camera": ("camera", "regular"),
+    "cloud": ("cloud", "regular"),
+    "cup.and.saucer": ("coffee", "regular"),
+    "dumbbell": ("barbell", "regular"),
+    "flame": ("fire", "regular"),
+    "gift": ("gift", "regular"),
+    "heart": ("heart", "regular"),
+    "leaf": ("leaf", "regular"),
+    "paintpalette": ("palette", "regular"),
+    "pawprint": ("paw-print", "regular"),
+    "sparkles": ("sparkle", "regular"),
+    "sun.max": ("sun", "regular"),
+    "ticket": ("ticket", "regular"),
+    "tree": ("tree", "regular"),
+    "person.2": ("users", "regular"),
+    "figure.child": ("baby", "regular"),
+    "banknote": ("money", "regular"),
+    "headphones": ("headphones", "regular"),
+    "fork.knife": ("fork-knife", "regular"),
+    "sailboat": ("sailboat", "regular"),
+    "clipboard": ("clipboard-text", "regular"),
     "arrow.clockwise": ("arrow-clockwise", "regular"),
     "arrow.clockwise.circle.fill": ("arrow-clockwise", "bold"),
     "arrow.down.circle": ("arrow-circle-down", "regular"),
@@ -151,13 +177,15 @@ MAP = {
     "xmark.square": ("x-square", "regular"),
 }
 
-# Xcode custom-symbol template (v3) geometry for the Regular-M glyph.
+# Xcode custom-symbol template (v3) geometry for the Regular-M glyph. Like Apple's templates, the
+# glyph is drawn in local coordinates (origin = left margin on the baseline, y up is negative)
+# inside a <g id="Regular-M"> that is translated to its place on the artboard.
 BASELINE_M = 1126.0
 CAPLINE_M = 1055.54
 CAP_HEIGHT = BASELINE_M - CAPLINE_M
 UNIT = 100.0 / 256.0          # a 256-unit Phosphor box becomes 100 template units
-ORIGIN_X = 1391.0
-CENTER_Y = BASELINE_M - CAP_HEIGHT / 2
+PAD = 16                      # Phosphor units kept as side bearing on each side
+GLYPH_X = 1391.0              # artboard x of the Regular-M left margin
 
 
 def glyph_path(svg_file):
@@ -166,8 +194,8 @@ def glyph_path(svg_file):
     for element in svg.elements():
         if isinstance(element, Path):
             path = Path(element)
-            # Phosphor's 256 box is centred on the cap-height midline.
-            path *= Matrix(f"translate({ORIGIN_X}, {CENTER_Y - 128 * UNIT}) scale({UNIT})")
+            # Local coordinates: x from the left margin, the 256 box centred on the cap-height midline.
+            path *= Matrix(f"translate({-PAD * UNIT}, {-CAP_HEIGHT / 2 - 128 * UNIT}) scale({UNIT})")
             path.reify()
             out.append(path.d())
     if not out:
@@ -176,8 +204,8 @@ def glyph_path(svg_file):
 
 
 def template(d):
-    left = ORIGIN_X + 16 * UNIT
-    right = ORIGIN_X + 240 * UNIT
+    left = GLYPH_X
+    right = GLYPH_X + (256 - 2 * PAD) * UNIT
     guide = 'style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;"'
     lines = []
     for size, base, cap in (("S", 696.0, 625.541), ("M", BASELINE_M, CAPLINE_M), ("L", 1556.0, 1485.54)):
@@ -198,7 +226,7 @@ def template(d):
 {chr(10).join(lines)}
 </g>
 <g id="Symbols">
-<g id="Regular-M">
+<g id="Regular-M" transform="matrix(1 0 0 1 {GLYPH_X} {BASELINE_M})">
 <path d="{d}"/>
 </g>
 </g>

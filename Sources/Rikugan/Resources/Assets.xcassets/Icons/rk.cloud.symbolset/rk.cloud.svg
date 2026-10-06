@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3300" height="2200">
+<!--Phosphor Icons (MIT) converted for Rikugan by scripts/gen_icons.py-->
+<g id="Notes">
+<rect height="2200" id="artboard" style="fill:white;opacity:1" width="3300" x="0" y="0"/>
+<text id="template-version" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 3036 1933)">Template v.3.0</text>
+</g>
+<g id="Guides">
+<line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696.0" y2="696.0"/>
+<line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+<line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126.0" y2="1126.0"/>
+<line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+<line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556.0" y2="1556.0"/>
+<line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+<line id="left-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1391.000" x2="1391.000" y1="1030.79" y2="1150.12"/>
+<line id="right-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1478.500" x2="1478.500" y1="1030.79" y2="1150.12"/>
+</g>
+<g id="Symbols">
+<g id="Regular-M" transform="matrix(1 0 0 1 1391.0 1126.0)">
+<path d="M 56.25,-69.605 A 34.4102,34.4102 0 0,0 25.50390625,-50.59328125 A 25,25 0 1,0 21.875,-0.855 l 34.375,0 a 34.375,34.375 0 0,0 0,-68.75 Z m 0,62.5 L 21.875,-7.105 a 18.75,18.75 0 0,1 0,-37.5 c 0.4296875,0 0.859375,0 1.28515625,0.04296875 A 34.375,34.375 0 0,0 21.875,-35.23 a 3.125,3.125 0 0,0 6.25,0 a 28.125,28.125 0 1,1 28.125,28.125 Z"/>
+</g>
+</g>
+</svg>

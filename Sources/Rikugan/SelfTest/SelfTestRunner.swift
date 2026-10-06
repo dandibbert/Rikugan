@@ -100,6 +100,44 @@ import WebKit
 
 /// Original end-to-end suite: fixture extension + userscript + AdBlock on a local page.
 @MainActor enum CoreSuite {
+    /// Renders a symbol at 22 pt and measures it: (size, opaque pixels, ink bounding box).
+    static func iconMeasure(_ name: String) -> (size: CGSize, ink: Int, box: CGRect)? {
+        guard let image = UIImage(named: name, in: nil, with: UIImage.SymbolConfiguration(pointSize: 22))?
+            .withTintColor(.black, renderingMode: .alwaysOriginal) else { return nil }
+        let size = image.size
+        guard size.width > 0, size.height > 0 else { return (size, 0, .zero) }
+        let w = Int(ceil(size.width)), h = Int(ceil(size.height))
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            UIGraphicsPushContext(context)
+            context.translateBy(x: 0, y: CGFloat(h)); context.scaleBy(x: 1, y: -1)
+            image.draw(in: CGRect(origin: .zero, size: size))
+            UIGraphicsPopContext()
+            return true
+        }
+        guard drawn else { return nil }
+        var ink = 0, minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h { for x in 0..<w where pixels[(y * w + x) * 4 + 3] > 40 {
+            ink += 1; minX = min(minX, x); minY = min(minY, y); maxX = max(maxX, x); maxY = max(maxY, y)
+        } }
+        let box = ink > 0 ? CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1) : .zero
+        return (size, ink, box)
+    }
+
+    /// A usable icon: about text-sized and with visible ink that fills a fair part of its box.
+    static func iconDraws(_ name: String) -> Bool {
+        guard let m = iconMeasure(name) else { return false }
+        return (10...60).contains(m.size.width) && (10...60).contains(m.size.height) && m.ink >= 15
+            && m.box.width >= m.size.width * 0.3 && m.box.height >= m.size.height * 0.3
+    }
+
+    static func iconInfo(_ name: String) -> String {
+        guard let m = iconMeasure(name) else { return "nil" }
+        return "size=\(Int(m.size.width))x\(Int(m.size.height)) ink=\(m.ink) box=\(Int(m.box.width))x\(Int(m.box.height))"
+    }
+
     static func run(_ ctx: SelfTestContext) async {
         let services = ctx.services
         let profile = ctx.profile
@@ -144,9 +182,11 @@ import WebKit
         // fails to load would silently fall back to the system symbol).
         let iconNames = (Bundle.main.url(forResource: "icon-names", withExtension: "json"))
             .flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String] } ?? []
-        let brokenIcons = iconNames.filter { UIImage(named: "rk." + $0)?.isSymbolImage != true }
-        ctx.record("图标集：自定义符号全部可加载", !iconNames.isEmpty && brokenIcons.isEmpty,
-                   "icons=\(iconNames.count) broken=\(brokenIcons.prefix(10))")
+        // Loading is not enough: a glyph placed outside the symbol's box loads fine and draws
+        // nothing. Each icon is rendered and must have a sane size and visible ink.
+        let brokenIcons = iconNames.filter { !Self.iconDraws("rk." + $0) }
+        ctx.record("图标集：自定义符号全部可加载并可见", !iconNames.isEmpty && brokenIcons.isEmpty,
+                   "icons=\(iconNames.count) broken=\(brokenIcons.prefix(10)) sample=\(Self.iconInfo("rk.gearshape"))")
 
         let tab = await ctx.open("/index.html")
         ctx.record("测试页面加载", tab.webView?.url?.path == "/index.html")

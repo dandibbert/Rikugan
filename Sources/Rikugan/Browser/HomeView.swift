@@ -6,6 +6,7 @@ struct HomeView: View {
     @ObservedObject var tab: BrowserTab
     @EnvironmentObject private var services: AppServices
     @EnvironmentObject private var profile: ProfileContext
+    @EnvironmentObject private var manager: TabManager
     @State private var query = ""
     @FocusState private var focused: Bool
 
@@ -55,6 +56,8 @@ struct HomeView: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .frame(maxWidth: 600)
                         .padding(.horizontal)
+                        PasteAndGoChip { strings in PasteAndGo.open(strings, in: tab, manager: manager) }
+                            .padding(.top, -14)
                         if !profile.bookmarks.favorites.isEmpty {
                             section("个人收藏") {
                                 ForEach(profile.bookmarks.favorites) { node in

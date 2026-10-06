@@ -229,7 +229,12 @@ struct ProfilesView: View {
     @EnvironmentObject private var services: AppServices
     @State private var name = ""
     @State private var symbol = "briefcase"
-    private let symbols = ["person.crop.circle", "briefcase", "hammer", "gamecontroller", "house", "graduationcap", "cart", "flask"]
+    private let symbols = ["person.crop.circle", "person.2", "figure.child", "briefcase", "building.2", "house", "graduationcap", "book",
+                           "hammer", "flask", "paintpalette", "camera", "headphones", "gamecontroller", "dumbbell", "airplane",
+                           "sailboat", "cart", "bag", "banknote", "gift", "ticket", "cup.and.saucer", "fork.knife",
+                           "heart", "star", "sparkles", "flame", "bolt", "leaf", "tree", "pawprint",
+                           "sun.max", "moon", "cloud", "globe", "shield", "key", "clipboard", "curlybraces"]
+    private let iconColumns = [GridItem(.adaptive(minimum: 44), spacing: 8)]
 
     var body: some View {
         Form {
@@ -256,7 +261,23 @@ struct ProfilesView: View {
             }
             Section("新建身份") {
                 TextField("名称，例如 工作", text: $name)
-                Picker("图标", selection: $symbol) { ForEach(symbols, id: \.self) { Image(icon: $0).tag($0) } }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("图标")
+                    LazyVGrid(columns: iconColumns, spacing: 8) {
+                        ForEach(symbols, id: \.self) { name in
+                            Button { symbol = name } label: {
+                                Image(icon: name).font(.title3)
+                                    .frame(width: 42, height: 42)
+                                    .foregroundStyle(symbol == name ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                                    .background(symbol == name ? AnyShapeStyle(.tint) : AnyShapeStyle(Color(.tertiarySystemFill)),
+                                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(symbol == name ? .isSelected : [])
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
                 Button("创建") { services.profiles.create(name: name.isEmpty ? "新身份" : name, symbol: symbol); name = "" }
             }
         }

@@ -13,12 +13,12 @@
 <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
 <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556.0" y2="1556.0"/>
 <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
-<line id="left-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1397.250" x2="1397.250" y1="1030.79" y2="1150.12"/>
-<line id="right-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1484.750" x2="1484.750" y1="1030.79" y2="1150.12"/>
+<line id="left-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1391.000" x2="1391.000" y1="1030.79" y2="1150.12"/>
+<line id="right-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1478.500" x2="1478.500" y1="1030.79" y2="1150.12"/>
 </g>
 <g id="Symbols">
-<g id="Regular-M">
-<path d="M 1471.3359375,1094.8090625 a 3.12674,3.12674 0 0,1 -4.421875,4.421875 L 1444.125,1076.43796875 L 1444.125,1128.27 a 3.125,3.125 0 0,1 -6.25,0 L 1437.875,1076.43796875 L 1415.0859375,1099.2309375 a 3.12674,3.12674 0 0,1 -4.421875,-4.421875 l 28.125,-28.125 a 3.125,3.125 0 0,1 4.421875,0 Z M 1475.375,1053.27 L 1406.625,1053.27 a 3.125,3.125 0 0,0 0,6.25 L 1475.375,1059.52 a 3.125,3.125 0 0,0 0,-6.25 Z"/>
+<g id="Regular-M" transform="matrix(1 0 0 1 1391.0 1126.0)">
+<path d="M 74.0859375,-31.1909375 a 3.12674,3.12674 0 0,1 -4.421875,4.421875 L 46.875,-49.56203125 L 46.875,2.27 a 3.125,3.125 0 0,1 -6.25,0 L 40.625,-49.56203125 L 17.8359375,-26.7690625 a 3.12674,3.12674 0 0,1 -4.421875,-4.421875 l 28.125,-28.125 a 3.125,3.125 0 0,1 4.421875,0 Z M 78.125,-72.73 L 9.375,-72.73 a 3.125,3.125 0 0,0 0,6.25 L 78.125,-66.48 a 3.125,3.125 0 0,0 0,-6.25 Z"/>
 </g>
 </g>
 </svg>
