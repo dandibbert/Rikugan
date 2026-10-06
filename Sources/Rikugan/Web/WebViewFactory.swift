@@ -97,6 +97,9 @@ import UIKit
         let site = profile.siteSettings.settings(for: host)
         let isWeb = ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "")
 
+        // Compatibility mode: none of Rikugan's own page scripts (1 and 2) on this site.
+        let compatibility = site.compatibilityMode == true
+
         // 1. Page-world hooks.
         let hooks: [String: Any] = [
             "handler": Worlds.messageHandlerName,
@@ -110,8 +113,10 @@ import UIKit
             // enforces the user's choice for cooperative pages, not a security boundary.
             "clipboardGate": true,
         ]
-        controller.addUserScript(WKUserScript(source: JSResource.fill("PageHooks", marker: "__RK_HOOKS_CONFIG__", config: hooks),
-                                              injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+        if !compatibility {
+            controller.addUserScript(WKUserScript(source: JSResource.fill("PageHooks", marker: "__RK_HOOKS_CONFIG__", config: hooks),
+                                                  injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+        }
 
         // 2. Page tools (dark mode, fonts, cosmetic filters, picker, reader, translate, media).
         var tools: [String: Any] = ["handler": Worlds.messageHandlerName, "dark": darkModeConfig(host: host, profile: profile) as Any,
@@ -121,8 +126,10 @@ import UIKit
             let cosmetic = AppServices.shared.adBlock.cosmeticRules(forHost: host)
             tools["cosmetic"] = ["selectors": cosmetic.selectors, "css": cosmetic.css]
         }
-        controller.addUserScript(WKUserScript(source: JSResource.fill("PageTools", marker: "__RK_TOOLS_CONFIG__", config: tools),
-                                              injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Worlds.tools))
+        if !compatibility {
+            controller.addUserScript(WKUserScript(source: JSResource.fill("PageTools", marker: "__RK_TOOLS_CONFIG__", config: tools),
+                                                  injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Worlds.tools))
+        }
 
         // 3. Userscripts.
         if isWeb, site.userScriptsEnabled != false {

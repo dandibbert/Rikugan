@@ -12,7 +12,6 @@ struct BrowserView: View {
     @EnvironmentObject private var extensionInstaller: ExtensionInstaller
     @EnvironmentObject private var toasts: ToastCenter
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @ObservedObject private var keyboard = KeyboardOwner.shared
     @State private var sheet: BrowserSheet?
     @State private var showTabs = false
     @State private var editing = false
@@ -67,9 +66,6 @@ struct BrowserView: View {
                     .background(.bar)
                 }
             }
-            // A page field's keyboard must not resize the web view (see KeyboardOwner); the
-            // address / find bar keeps normal keyboard avoidance.
-            .ignoresSafeArea(keyboard.webContentHasKeyboard ? .keyboard : [], edges: .bottom)
             if editing {
                 OmniboxOverlay(editing: $editing)
                     .transition(.opacity)

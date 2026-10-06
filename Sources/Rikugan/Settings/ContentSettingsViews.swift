@@ -132,6 +132,12 @@ struct SiteSettingsDetailView: View {
                     Picker("弹出窗口", selection: decision(\.popups)) { Text("默认").tag(PermissionDecision.ask); Text("允许").tag(PermissionDecision.allow); Text("阻止").tag(PermissionDecision.block) }
                     Picker("打开外部 App", selection: decision(\.externalNavigation)) { Text("询问").tag(PermissionDecision.ask); Text("允许").tag(PermissionDecision.allow); Text("阻止").tag(PermissionDecision.block) }
                 }
+                Section {
+                    Toggle("兼容模式", isOn: Binding(get: { site.compatibilityMode == true },
+                                                  set: { on in profile.siteSettings.update(host) { $0.compatibilityMode = on ? true : nil } }))
+                } footer: {
+                    Text("开启后，Rikugan 不在此网站注入自己的页面脚本（深色模式、自定义字体、元素隐藏、页内查找、阅读模式、翻译、媒体嗅探、控制台和权限适配都会失效）。网站表现异常时可以试试，刷新页面后生效。用户脚本和扩展由上面的开关单独控制。")
+                }
                 Section("网页权限") {
                     ForEach(Array(SiteSettings.webPermissionKinds.enumerated()), id: \.offset) { _, kind in
                         Picker(kind.title, selection: Binding(get: { site.permissions[kind.key] ?? .ask },

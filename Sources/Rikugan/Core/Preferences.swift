@@ -230,13 +230,17 @@ public struct SiteSettings: Codable, Equatable, Identifiable {
     public var fontBody: String?
     public var fontHeading: String?
     public var fontMono: String?
+    /// Compatibility mode: Rikugan injects none of its own page scripts (hooks for media sniffing,
+    /// console, permissions shims; page tools for dark mode, fonts, element hiding, find, reader,
+    /// translation). For sites that misbehave with them.
+    public var compatibilityMode: Bool?
     public var id: String { host }
 
     public init(host: String) { self.host = host.lowercased() }
 
     enum CodingKeys: String, CodingKey {
         case host, desktopMode, darkMode, javaScript, popups, externalNavigation, contentBlocking, userScriptsEnabled,
-             extensionsEnabled, webFont, permissions, autoRefreshSeconds, fontBody, fontHeading, fontMono
+             extensionsEnabled, webFont, permissions, autoRefreshSeconds, fontBody, fontHeading, fontMono, compatibilityMode
     }
 
     // Tolerant decoding: missing / unknown keys never make a whole settings file unreadable.
@@ -257,12 +261,13 @@ public struct SiteSettings: Codable, Equatable, Identifiable {
         fontBody = try? c.decodeIfPresent(String.self, forKey: .fontBody)
         fontHeading = try? c.decodeIfPresent(String.self, forKey: .fontHeading)
         fontMono = try? c.decodeIfPresent(String.self, forKey: .fontMono)
+        compatibilityMode = try? c.decodeIfPresent(Bool.self, forKey: .compatibilityMode)
     }
 
     public var isEmpty: Bool {
         desktopMode == nil && darkMode == nil && javaScript == nil && popups == nil && externalNavigation == nil &&
             contentBlocking == nil && userScriptsEnabled == nil && extensionsEnabled == nil && webFont == nil && permissions.isEmpty &&
-            fontBody == nil && fontHeading == nil && fontMono == nil && autoRefreshSeconds == nil
+            fontBody == nil && fontHeading == nil && fontMono == nil && autoRefreshSeconds == nil && compatibilityMode == nil
     }
 
     public static let webPermissionKinds: [(key: String, title: String)] = [
