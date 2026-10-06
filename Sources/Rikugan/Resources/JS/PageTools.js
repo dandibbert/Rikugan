@@ -119,8 +119,13 @@ html::-webkit-scrollbar { background: #222; }`;
     if (/^H[1-6]$/.test(el.tagName) || el.closest('h1, h2, h3, h4, h5, h6')) return 'heading';
     return 'body';
   };
+  // Editable content (rich text editors, text areas) is never tagged: editors such as ProseMirror
+  // watch their own DOM and "repair" foreign attribute changes, which resets selection and scroll
+  // (the caret jumping back to the top of a long text). They get the font from one CSS rule below
+  // instead, by inheritance.
+  const inEditable = (el) => !!(el.isContentEditable || (el.closest && el.closest('[contenteditable]:not([contenteditable="false"]), textarea, input')));
   const tagElement = (el) => {
-    if (el.nodeType !== 1 || el.hasAttribute('data-rk-font') || el.hasAttribute('data-rk-font-skip')) return;
+    if (el.nodeType !== 1 || el.hasAttribute('data-rk-font') || el.hasAttribute('data-rk-font-skip') || inEditable(el)) return;
     const role = fontRole(el);
     if (!role) return;
     if (role === 'icon' || !fontPlan[role]) { el.setAttribute('data-rk-font-skip', role); return; }
@@ -135,6 +140,7 @@ html::-webkit-scrollbar { background: #222; }`;
       const root = fontQueue.shift();
       if (!root || !root.isConnected) continue;
       if (root.nodeType === 1) tagElement(root);
+      if (root.nodeType === 1 && inEditable(root)) continue;
       if (root.querySelectorAll) {
         const all = root.querySelectorAll('*');
         if (all.length > 400) { for (let i = 0; i < all.length; i += 400) fontQueue.push({ isConnected: true, nodeType: 0, querySelectorAll: () => Array.prototype.slice.call(all, i, i + 400) }); continue; }
@@ -146,7 +152,10 @@ html::-webkit-scrollbar { background: #222; }`;
   const scheduleFontWork = () => {
     if (fontScheduled) return;
     fontScheduled = true;
-    (window.requestIdleCallback || ((f) => setTimeout(f, 16)))(drainFontQueue, { timeout: 200 });
+    // An animation frame, not a timer: WebKit treats a short timer started while a tap is being
+    // dispatched as the page reacting to "hover" and swallows the click (every button then needs
+    // a second tap). requestIdleCallback is not available in WebKit.
+    requestAnimationFrame(() => drainFontQueue());
   };
   const fontStack = (family) => '"' + String(family).replace(/"/g, '') + '", "Apple Color Emoji", -apple-system, system-ui, sans-serif';
   const applyFont = async (o) => {
@@ -174,12 +183,18 @@ html::-webkit-scrollbar { background: #222; }`;
     if (fontPlan.body) rules.push(`[data-rk-font="body"] { font-family: ${fontStack(fontPlan.body)} !important; }`);
     if (fontPlan.heading) rules.push(`[data-rk-font="heading"] { font-family: ${fontStack(fontPlan.heading)} !important; }`);
     if (fontPlan.mono) rules.push(`[data-rk-font="mono"] { font-family: ${fontStack(fontPlan.mono).replace('sans-serif', 'monospace')} !important; }`);
+    // Editors and fields: set on the editable root only, descendants inherit (nothing is tagged).
+    if (fontPlan.body) rules.push(`[contenteditable]:not([contenteditable="false"]), textarea, input { font-family: ${fontStack(fontPlan.body)} !important; }`);
     setSheet('font', rules.join('\n'));
     const start = () => {
       fontQueue.push(document.body || document.documentElement);
       scheduleFontWork();
       fontObserver = new MutationObserver((mutations) => {
-        for (const m of mutations) for (const n of m.addedNodes) if (n.nodeType === 1) fontQueue.push(n); else if (n.nodeType === 3 && n.parentElement) fontQueue.push(n.parentElement);
+        for (const m of mutations) {
+          // Typing in an editor adds nodes on every keystroke: nothing to do there.
+          if (m.target && m.target.nodeType === 1 && inEditable(m.target)) continue;
+          for (const n of m.addedNodes) if (n.nodeType === 1) fontQueue.push(n); else if (n.nodeType === 3 && n.parentElement) fontQueue.push(n.parentElement);
+        }
         if (fontQueue.length) scheduleFontWork();
       });
       fontObserver.observe(document.documentElement, { childList: true, subtree: true });
