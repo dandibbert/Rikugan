@@ -50,6 +50,10 @@ import WebKit
         let valuesBefore = profile.userscripts.values(for: victim.id)
         let menusBefore = tab.menuCommands.map(\.title)
         let historyBefore = profile.history.entries.count
+        // A stores its secret from onInstalled, asynchronously: take the baseline only once it is
+        // there, otherwise a late write looks like tampering.
+        let secretStored = await ctx.waitUntil(10) { runtime.storage(extA, area: "local")["aSecret"] != nil }
+        ctx.record("夹具就绪：扩展 A 的秘密已写入", secretStored)
         let aStorageBefore = runtime.storage(extA, area: "local")
 
         // --- Hostile page attacks ------------------------------------------------------------------
