@@ -56,7 +56,7 @@ struct TabSwitcherView: View {
             }
             .searchable(text: $search, prompt: "搜索标签页")
             .background(manager.isPrivateMode ? Color(.systemGray6).opacity(0.9) : Color(.systemGroupedBackground))
-            .navigationTitle(manager.currentSpaceTitle)
+            // No title: the group switcher at the bottom already names the current group.
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -141,11 +141,20 @@ struct TabSwitcherView: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                Text(manager.currentSpaceTitle).font(.headline)
-                Image(icon: "chevron.down").font(.caption)
+            // Looks like a control (icon, name, count, chevron in a tinted capsule) so it reads as
+            // "tap to switch group" rather than a second title.
+            HStack(spacing: 6) {
+                Image(icon: manager.isPrivateMode ? "hand.raised" : (manager.currentGroupID == nil ? "square.on.square" : "square.grid.2x2"))
+                    .font(.subheadline)
+                Text(manager.currentSpaceTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("\(manager.visibleTabs.count)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                Image(icon: "chevron.down").font(.caption.weight(.semibold))
             }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(.tint.opacity(0.14), in: Capsule())
+            .frame(maxWidth: 220)
         }
+        .accessibilityLabel("标签页组：\(manager.currentSpaceTitle)")
         .accessibilityIdentifier("groupMenu")
     }
 }

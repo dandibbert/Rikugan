@@ -177,25 +177,34 @@ MAP = {
     "xmark.square": ("x-square", "regular"),
 }
 
-# Xcode custom-symbol template (v3) geometry for the Regular-M glyph. Like Apple's templates, the
-# glyph is drawn in local coordinates (origin = left margin on the baseline, y up is negative)
-# inside a <g id="Regular-M"> that is translated to its place on the artboard.
-BASELINE_M = 1126.0
-CAPLINE_M = 1055.54
-CAP_HEIGHT = BASELINE_M - CAPLINE_M
-UNIT = 100.0 / 256.0          # a 256-unit Phosphor box becomes 100 template units
+# Xcode custom-symbol template (v3) geometry. Like Apple's templates, each glyph is drawn in local
+# coordinates (origin = left margin on the baseline, y up is negative) inside a <g id="Weight-Scale">
+# that is translated to its place on the artboard.
+#
+# All 27 variants (9 weights x small/medium/large) are written out. With only Regular-M, the
+# system drew nothing wherever it asked for another weight or scale (Form rows, navigation-bar and
+# toolbar buttons on device), so every variant is explicit and nothing is left to interpolation.
+CAP_HEIGHT = 1126.0 - 1055.54
+UNIT = 100.0 / 256.0          # a 256-unit Phosphor box becomes 100 template units (medium scale)
 PAD = 16                      # Phosphor units kept as side bearing on each side
-GLYPH_X = 1391.0              # artboard x of the Regular-M left margin
+COLUMN_X = 1391.0             # artboard x of the Regular left margin
+COLUMN_STEP = 296.71
+# name, baseline, capline, glyph size relative to medium
+SCALES = (("S", 696.0, 625.541, 0.783), ("M", 1126.0, 1055.54, 1.0), ("L", 1556.0, 1485.54, 1.29))
+# SF weight -> Phosphor weight used for it (icons mapped to a fixed fill/bold glyph keep that one)
+WEIGHTS = (("Ultralight", "thin"), ("Thin", "thin"), ("Light", "light"), ("Regular", "regular"),
+           ("Medium", "regular"), ("Semibold", "regular"), ("Bold", "bold"), ("Heavy", "bold"),
+           ("Black", "bold"))
 
 
-def glyph_path(svg_file):
+def glyph_path(svg_file, scale):
     svg = SVG.parse(svg_file)
     out = []
     for element in svg.elements():
         if isinstance(element, Path):
             path = Path(element)
             # Local coordinates: x from the left margin, the 256 box centred on the cap-height midline.
-            path *= Matrix(f"translate({-PAD * UNIT}, {-CAP_HEIGHT / 2 - 128 * UNIT}) scale({UNIT})")
+            path *= Matrix(f"translate({-PAD}, -128)") * Matrix(f"scale({scale * UNIT})") * Matrix(f"translate(0, {-CAP_HEIGHT / 2})")
             path.reify()
             out.append(path.d())
     if not out:
@@ -203,17 +212,22 @@ def glyph_path(svg_file):
     return " ".join(out)
 
 
-def template(d):
-    left = GLYPH_X
-    right = GLYPH_X + (256 - 2 * PAD) * UNIT
+def template(glyphs):
+    """glyphs: {(weight, scale): path data}"""
     guide = 'style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;"'
-    lines = []
-    for size, base, cap in (("S", 696.0, 625.541), ("M", BASELINE_M, CAPLINE_M), ("L", 1556.0, 1485.54)):
+    margin = 'style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;"'
+    lines, groups = [], []
+    for size, base, cap, factor in SCALES:
         lines.append(f'<line id="Baseline-{size}" {guide} x1="263" x2="3036" y1="{base}" y2="{base}"/>')
         lines.append(f'<line id="Capline-{size}" {guide} x1="263" x2="3036" y1="{cap}" y2="{cap}"/>')
-    margin = 'style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;"'
-    lines.append(f'<line id="left-margin-Regular-M" {margin} x1="{left:.3f}" x2="{left:.3f}" y1="1030.79" y2="1150.12"/>')
-    lines.append(f'<line id="right-margin-Regular-M" {margin} x1="{right:.3f}" x2="{right:.3f}" y1="1030.79" y2="1150.12"/>')
+    for column, (weight, _) in enumerate(WEIGHTS):
+        left = COLUMN_X + (column - 3) * COLUMN_STEP
+        for size, base, cap, factor in SCALES:
+            right = left + (256 - 2 * PAD) * UNIT * factor
+            variant = f"{weight}-{size}"
+            lines.append(f'<line id="left-margin-{variant}" {margin} x1="{left:.3f}" x2="{left:.3f}" y1="{base - 95:.2f}" y2="{base + 24:.2f}"/>')
+            lines.append(f'<line id="right-margin-{variant}" {margin} x1="{right:.3f}" x2="{right:.3f}" y1="{base - 95:.2f}" y2="{base + 24:.2f}"/>')
+            groups.append(f'<g id="{variant}" transform="matrix(1 0 0 1 {left:.3f} {base})">\n<path d="{glyphs[(weight, size)]}"/>\n</g>')
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
 <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3300" height="2200">
@@ -226,12 +240,15 @@ def template(d):
 {chr(10).join(lines)}
 </g>
 <g id="Symbols">
-<g id="Regular-M" transform="matrix(1 0 0 1 {GLYPH_X} {BASELINE_M})">
-<path d="{d}"/>
-</g>
+{chr(10).join(groups)}
 </g>
 </svg>
 '''
+
+
+def source_file(assets, ph, weight):
+    suffix = "" if weight == "regular" else "-" + weight
+    return os.path.join(assets, weight, f"{ph}{suffix}.svg")
 
 
 def main():
@@ -244,15 +261,19 @@ def main():
         json.dump({"info": {"author": "xcode", "version": 1}}, f, indent=2)
     names = []
     for sf, (ph, weight) in sorted(MAP.items()):
-        suffix = "" if weight == "regular" else "-" + weight
-        source = os.path.join(assets, weight, f"{ph}{suffix}.svg")
-        if not os.path.exists(source):
-            raise SystemExit(f"missing Phosphor icon {weight}/{ph} for {sf}")
+        glyphs = {}
+        for sf_weight, ph_weight in WEIGHTS:
+            # Icons mapped to a fill / bold glyph (e.g. "*.fill") keep it at every weight.
+            source = source_file(assets, ph, ph_weight if weight == "regular" else weight)
+            if not os.path.exists(source):
+                raise SystemExit(f"missing Phosphor icon {source} for {sf}")
+            for size, _, _, factor in SCALES:
+                glyphs[(sf_weight, size)] = glyph_path(source, factor)
         name = "rk." + sf
         folder = os.path.join(root, name + ".symbolset")
         os.makedirs(folder)
         with open(os.path.join(folder, name + ".svg"), "w") as f:
-            f.write(template(glyph_path(source)))
+            f.write(template(glyphs))
         with open(os.path.join(folder, "Contents.json"), "w") as f:
             json.dump({"info": {"author": "xcode", "version": 1},
                        "symbols": [{"filename": name + ".svg", "idiom": "universal"}]}, f, indent=2)

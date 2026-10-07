@@ -66,6 +66,7 @@ struct PageMenuButton: View {
             Button { tab.toggleDesktopMode() } label: {
                 Label(tab.desktopMode ? "请求移动版网站" : "请求桌面版网站", icon: tab.desktopMode ? "iphone" : "desktopcomputer")
             }
+            Button { PageActions.resetZoom(tab) } label: { Label("复位页面缩放", icon: "arrow.up.left.and.arrow.down.right") }
         }
         Section {
             Menu {

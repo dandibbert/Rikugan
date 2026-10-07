@@ -11,6 +11,25 @@ import SwiftUI
         tab.findActive = true
     }
 
+    /// Puts the page back at its normal scale. If pinch-zoom cannot go back below the current
+    /// scale (WebKit's minimum is stuck above the page's natural scale, and a reload restores the
+    /// stored scale), the page is loaded afresh, which recomputes the scale from its viewport.
+    /// The toast shows the scales so a stuck case can be reported with numbers.
+    static func resetZoom(_ tab: BrowserTab?) {
+        guard let tab, let webView = tab.webView else { return }
+        let scrollView = webView.scrollView
+        let before = scrollView.zoomScale, minimum = scrollView.minimumZoomScale
+        let summary = String(format: "缩放 %.2f×，最小 %.2f×，页面缩放 %.2f", before, minimum, webView.pageZoom)
+        webView.pageZoom = 1
+        if minimum > 1.01, let url = webView.url {
+            webView.load(URLRequest(url: url))
+            ToastCenter.shared.show("已重新载入以复位缩放（\(summary)）", symbol: "arrow.up.left.and.arrow.down.right", duration: 5)
+        } else {
+            scrollView.setZoomScale(minimum, animated: true)
+            ToastCenter.shared.show("已复位缩放（\(summary)）", symbol: "arrow.up.left.and.arrow.down.right", duration: 5)
+        }
+    }
+
     static func share(_ tab: BrowserTab?) {
         guard let url = tab?.webView?.url ?? tab?.url else { return }
         Presenter.share([url], from: tab?.webView)

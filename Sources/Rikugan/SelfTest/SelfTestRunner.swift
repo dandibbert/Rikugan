@@ -101,8 +101,10 @@ import WebKit
 /// Original end-to-end suite: fixture extension + userscript + AdBlock on a local page.
 @MainActor enum CoreSuite {
     /// Renders a symbol at 22 pt and measures it: (size, opaque pixels, ink bounding box).
-    static func iconMeasure(_ name: String) -> (size: CGSize, ink: Int, box: CGRect)? {
-        guard let image = UIImage(named: name, in: nil, with: UIImage.SymbolConfiguration(pointSize: 22))?
+    static func iconMeasure(_ name: String, weight: UIImage.SymbolWeight = .regular,
+                            scale: UIImage.SymbolScale = .medium) -> (size: CGSize, ink: Int, box: CGRect)? {
+        let configuration = UIImage.SymbolConfiguration(pointSize: 22, weight: weight, scale: scale)
+        guard let image = UIImage(named: name, in: nil, with: configuration)?
             .withTintColor(.black, renderingMode: .alwaysOriginal) else { return nil }
         let size = image.size
         guard size.width > 0, size.height > 0 else { return (size, 0, .zero) }
@@ -127,8 +129,8 @@ import WebKit
     }
 
     /// A usable icon: about text-sized and with visible ink that fills a fair part of its box.
-    static func iconDraws(_ name: String) -> Bool {
-        guard let m = iconMeasure(name) else { return false }
+    static func iconDraws(_ name: String, weight: UIImage.SymbolWeight = .regular, scale: UIImage.SymbolScale = .medium) -> Bool {
+        guard let m = iconMeasure(name, weight: weight, scale: scale) else { return false }
         return (10...60).contains(m.size.width) && (10...60).contains(m.size.height) && m.ink >= 15
             && m.box.width >= m.size.width * 0.3 && m.box.height >= m.size.height * 0.3
     }
@@ -211,6 +213,18 @@ import WebKit
         ctx.record("图标集：SwiftUI 渲染自定义符号有内容（与系统符号相当）",
                    custom.ink > system.ink / 4 && labelRow.ink > labelText.ink + custom.ink / 2,
                    "custom=\(custom.size) ink=\(custom.ink) system=\(system.size) ink=\(system.ink) label=\(labelRow.size) ink=\(labelRow.ink) textOnly=\(labelText.ink) resolved=\(Icons.resolved("magnifyingglass"))")
+        // Bars, menus and list rows ask for other weights and scales than Regular-M; a symbol that
+        // only has Regular-M drew nothing there on device. Every variant must draw.
+        let weights: [UIImage.SymbolWeight] = [.ultraLight, .thin, .light, .regular, .medium, .semibold, .bold, .heavy, .black]
+        let scales: [UIImage.SymbolScale] = [.small, .medium, .large]
+        var brokenVariants: [String] = []
+        for name in ["rk.gearshape", "rk.plus", "rk.ellipsis.circle", "rk.chevron.down", "rk.star.fill"] {
+            for weight in weights { for scale in scales where !Self.iconDraws(name, weight: weight, scale: scale) {
+                brokenVariants.append("\(name)/w\(weight.rawValue)/s\(scale.rawValue)")
+            } }
+        }
+        ctx.record("图标集：所有字重与尺寸（S/M/L）都能绘制", brokenVariants.isEmpty,
+                   "broken=\(brokenVariants.prefix(8)) bold-large=\(Self.iconMeasure("rk.plus", weight: .bold, scale: .large).map { "\($0.size) ink=\($0.ink)" } ?? "nil")")
         ctx.record("图标集：自定义符号全部可加载并可见", !iconNames.isEmpty && brokenIcons.isEmpty,
                    "icons=\(iconNames.count) broken=\(brokenIcons.prefix(10)) sample=\(Self.iconInfo("rk.gearshape"))")
 

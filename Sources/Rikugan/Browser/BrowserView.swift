@@ -19,6 +19,7 @@ struct BrowserView: View {
     @State private var importKind: ImportKind?
     @State private var showQuickActionPicker = false
     @State private var importPreview: ImportPreview?
+    @State private var layoutIgnoresKeyboard = false
 
     struct ImportPreview: Identifiable { let id = UUID(); let archive: RikuganArchive; let source: String }
 
@@ -64,6 +65,18 @@ struct BrowserView: View {
                         CompactToolbar(showTabs: $showTabs, sheet: $sheet, importKind: $importKind, showQuickActionPicker: $showQuickActionPicker)
                     }
                     .background(.bar)
+                }
+            }
+            // A page field's keyboard is WKWebView's business: like Safari, the web view keeps its
+            // size and scrolls the field above the keyboard itself, and the bottom bars stay under
+            // the keyboard. When SwiftUI also shrank the layout, both adjustments applied and part
+            // of the page went blank. Native fields (address bar, find bar, start page search)
+            // keep normal avoidance. This follows browser state, not keyboard frames, so it does
+            // not flip while the keyboard animates.
+            .ignoresSafeArea(layoutIgnoresKeyboard ? .keyboard : [], edges: .bottom)
+            .background {
+                if let tab = manager.activeTab {
+                    KeyboardLayoutProbe(tab: tab, editing: editing, ignoresKeyboard: $layoutIgnoresKeyboard)
                 }
             }
             if editing {
@@ -365,6 +378,22 @@ struct AddressBar: View {
         if let tab = manager.activeTab {
             AddressOrFindBar(tab: tab, editing: $editing, sheet: $sheet)
         }
+    }
+}
+
+/// Decides whether the browser layout ignores the keyboard (see BrowserView): only while web
+/// content is showing and no native field of the browser chrome can have the keyboard.
+private struct KeyboardLayoutProbe: View {
+    @ObservedObject var tab: BrowserTab
+    let editing: Bool
+    @Binding var ignoresKeyboard: Bool
+
+    private var value: Bool { !editing && !tab.findActive && !tab.isHome }
+
+    var body: some View {
+        Color.clear
+            .onAppear { ignoresKeyboard = value }
+            .onChange(of: value) { _, new in ignoresKeyboard = new }
     }
 }
 
