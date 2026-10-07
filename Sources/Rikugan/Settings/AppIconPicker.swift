@@ -52,6 +52,7 @@ struct AppIconPickerView: View {
     @State private var selected = AppIconOption.current
     @State private var changing = false
     @State private var errorMessage: String?
+    @State private var currentAttempt: UUID?
 
     var body: some View {
         Form {
@@ -69,7 +70,7 @@ struct AppIconPickerView: View {
                             if option == selected { Image(icon: "checkmark").foregroundStyle(.tint).fontWeight(.semibold) }
                         }
                     }
-                    .disabled(changing || !UIApplication.shared.supportsAlternateIcons)
+                    .disabled(changing)
                     .accessibilityIdentifier("appicon-\(option.rawValue)")
                 }
             } footer: {
@@ -81,22 +82,46 @@ struct AppIconPickerView: View {
             }
         }
         .navigationTitle("App 图标")
+        .onAppear { selected = AppIconOption.current }
         .alert("无法更换图标", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("好", role: .cancel) {}
         } message: { Text(errorMessage ?? "") }
     }
 
     private func apply(_ option: AppIconOption) {
-        guard option != selected, UIApplication.shared.supportsAlternateIcons else { return }
+        guard option != selected else { return }
+        guard UIApplication.shared.supportsAlternateIcons else {
+            errorMessage = "系统报告当前环境不支持更换 App 图标（supportsAlternateIcons = false）。"
+            return
+        }
         changing = true
+        let attempt = UUID()
+        currentAttempt = attempt
         UIApplication.shared.setAlternateIconName(option.alternateName) { error in
             Task { @MainActor in
+                guard currentAttempt == attempt else { return }
+                currentAttempt = nil
                 changing = false
                 if let error {
-                    errorMessage = error.localizedDescription
+                    let ns = error as NSError
+                    errorMessage = "\(ns.localizedDescription)（\(ns.domain) \(ns.code)）"
+                    ErrorLog.shared.record("setAlternateIconName(\(option.alternateName ?? "nil")): \(ns.domain) \(ns.code) \(ns.localizedDescription)", source: "App 图标")
                 } else {
-                    selected = option
+                    selected = AppIconOption.current
                 }
+            }
+        }
+        // The system sometimes never calls back (e.g. its confirmation alert could not be shown):
+        // never leave the buttons disabled, and say what happened.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(8))
+            guard currentAttempt == attempt else { return }
+            currentAttempt = nil
+            changing = false
+            selected = AppIconOption.current
+            if selected != option {
+                errorMessage = "系统没有回应更换图标的请求。请回到主屏幕再打开 Rikugan 后重试。"
+                ErrorLog.shared.record("setAlternateIconName(\(option.alternateName ?? "nil")): no callback after 8 s", source: "App 图标")
             }
         }
     }

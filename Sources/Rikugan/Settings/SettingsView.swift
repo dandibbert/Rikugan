@@ -37,7 +37,7 @@ struct SettingsView: View {
                     NavigationLink { ExtensionManagerView(importKind: $importKind) } label: { Label("扩展", icon: "puzzlepiece.extension") }
                     NavigationLink { AdBlockSettingsView() } label: { Label("内容拦截", icon: "shield.lefthalf.filled") }
                     NavigationLink { SiteSettingsListView() } label: { Label("网站设置", icon: "slider.horizontal.3") }
-                    NavigationLink { MediaSettingsView() } label: { Label("媒体与下载", icon: "play.rectangle") }
+                    NavigationLink { MediaSettingsView(importKind: $importKind) } label: { Label("媒体与下载", icon: "play.rectangle") }
                 }
                 Section("隐私与数据") {
                     NavigationLink { AutofillSettingsView() } label: { Label("密码与自动填充", icon: "key") }
@@ -430,6 +430,9 @@ struct NavigationControlSettingsView: View {
 struct MediaSettingsView: View {
     @EnvironmentObject private var services: AppServices
     @State private var destination = DownloadLocation.destination
+    /// The folder picker is the Settings sheet's own file importer (one importer per sheet:
+    /// SwiftUI does not reliably present a second one nested inside it).
+    @Binding var importKind: BrowserView.ImportKind?
     var body: some View {
         Form {
             Section {
@@ -440,9 +443,7 @@ struct MediaSettingsView: View {
                     Text("Rikugan 下载").tag(DownloadLocation.Destination.rikugan)
                     if let folder = DownloadLocation.customFolderName { Text(folder).tag(DownloadLocation.Destination.custom) }
                 }
-                Button(DownloadLocation.customFolder == nil ? "选择文件夹…" : "更换文件夹…") {
-                    Task { if await DownloadLocation.pickFolder() { destination = .custom } }
-                }
+                Button(DownloadLocation.customFolder == nil ? "选择文件夹…" : "更换文件夹…") { importKind = .downloadFolder }
                 Toggle("下载前询问文件名", isOn: $services.prefs.downloadConfirm)
             } header: { Text("下载") } footer: {
                 Text("选择的文件夹会被记住，之后的下载直接存到那里（同时保留在 Rikugan 的下载列表中，可随时打开）。Rikugan 下载文件夹：文件 App → 我的 iPhone → Rikugan → Downloads。")
@@ -452,6 +453,7 @@ struct MediaSettingsView: View {
             } footer: { Text("缩略图保存在 App 缓存中（无痕标签页不保存），关闭标签页时删除。") }
         }
         .navigationTitle("媒体与下载")
+        .onChange(of: importKind) { _, kind in if kind == nil { destination = DownloadLocation.destination } }
     }
 }
 

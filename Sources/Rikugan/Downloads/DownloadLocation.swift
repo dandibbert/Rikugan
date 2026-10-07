@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
@@ -22,7 +23,7 @@ import UniformTypeIdentifiers
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return nil }
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else { return nil }
-        if stale { remember(url) }
+        if stale { try? remember(url) }
         return url
     }
 
@@ -32,28 +33,30 @@ import UniformTypeIdentifiers
         destination == .custom ? (customFolderName ?? "所选文件夹") : "Rikugan 下载"
     }
 
-    private static func remember(_ folder: URL) {
+    private static func remember(_ folder: URL) throws {
         let accessing = folder.startAccessingSecurityScopedResource()
         defer { if accessing { folder.stopAccessingSecurityScopedResource() } }
-        if let data = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
-            UserDefaults.standard.set(data, forKey: bookmarkKey)
-        }
+        let data = try folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        UserDefaults.standard.set(data, forKey: bookmarkKey)
     }
 
-    /// Lets the user pick a folder in Files; on success it becomes the remembered destination.
-    static func pickFolder() async -> Bool {
-        await withCheckedContinuation { continuation in
-            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
-            let delegate = PickerDelegate { url in
-                if let url {
-                    remember(url)
-                    destination = .custom
-                }
-                continuation.resume(returning: url != nil)
-            }
-            picker.delegate = delegate
-            objc_setAssociatedObject(picker, &PickerDelegate.key, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-            Presenter.present(picker)
+    /// Takes the result of the folder picker (`.fileImporter` with `.folder`, see
+    /// `downloadFolderPicker`). On success the folder becomes the remembered destination; a failure
+    /// is shown, never swallowed.
+    @discardableResult
+    static func adopt(_ result: Result<[URL], Error>) -> Bool {
+        do {
+            guard let folder = try result.get().first else { return false }
+            try remember(folder)
+            guard customFolder != nil else { throw RikuganError("无法重新打开所选文件夹") }
+            destination = .custom
+            ToastCenter.shared.show("下载将保存到“\(folder.lastPathComponent)”", symbol: "folder")
+            return true
+        } catch {
+            if (error as NSError).code == NSUserCancelledError { return false }
+            ErrorLog.shared.record(error.localizedDescription, source: "下载文件夹")
+            ToastCenter.shared.show("无法使用这个文件夹：\(error.localizedDescription)", symbol: "exclamationmark.triangle", duration: 5)
+            return false
         }
     }
 
@@ -71,16 +74,13 @@ import UniformTypeIdentifiers
         if let error = coordinationError ?? copyError { throw error }
         return target
     }
+}
 
-    private final class PickerDelegate: NSObject, UIDocumentPickerDelegate {
-        static var key = 0
-        private var done: ((URL?) -> Void)?
-        init(_ done: @escaping (URL?) -> Void) { self.done = done }
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            done?(urls.first); done = nil
-        }
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            done?(nil); done = nil
+extension View {
+    /// The system folder picker for the download destination, presented by SwiftUI itself.
+    func downloadFolderPicker(isPresented: Binding<Bool>, picked: @escaping () -> Void) -> some View {
+        fileImporter(isPresented: isPresented, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
+            if DownloadLocation.adopt(result) { picked() }
         }
     }
 }

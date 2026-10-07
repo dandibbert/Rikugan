@@ -51,6 +51,7 @@ struct DownloadConfirmView: View {
     @State private var name = ""
     @State private var destination = DownloadLocation.destination
     @State private var alwaysAsk = true
+    @State private var pickingFolder = false
     @FocusState private var editingName: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -100,9 +101,7 @@ struct DownloadConfirmView: View {
                         Label(folder, icon: "folder").tag(DownloadLocation.Destination.custom)
                     }
                 }
-                Button {
-                    Task { if await DownloadLocation.pickFolder() { destination = .custom } }
-                } label: { Label(DownloadLocation.customFolder == nil ? "选择文件夹…" : "更换文件夹…", icon: "folder") }
+                Button { pickingFolder = true } label: { Label(DownloadLocation.customFolder == nil ? "选择文件夹…" : "更换文件夹…", icon: "folder") }
             } label: {
                 HStack(spacing: 10) {
                     Image(icon: destination == .custom ? "folder" : "arrow.down.circle").foregroundStyle(.tint)
@@ -129,6 +128,7 @@ struct DownloadConfirmView: View {
         .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 12)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(.systemBackground))
+        .downloadFolderPicker(isPresented: $pickingFolder) { destination = .custom }
     }
 
     private var subtitle: String {

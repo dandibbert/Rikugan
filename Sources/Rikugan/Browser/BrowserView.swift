@@ -23,7 +23,7 @@ struct BrowserView: View {
 
     struct ImportPreview: Identifiable { let id = UUID(); let archive: RikuganArchive; let source: String }
 
-    enum ImportKind: Identifiable { case extensionPackage, extensionFolder, userscript, font, settings
+    enum ImportKind: Identifiable { case extensionPackage, extensionFolder, userscript, font, settings, downloadFolder
         var id: Int { hashValue }
     }
 
@@ -163,6 +163,7 @@ struct BrowserView: View {
         case .font: return [.font, UTType(filenameExtension: "ttf") ?? .data, UTType(filenameExtension: "otf") ?? .data, UTType(filenameExtension: "ttc") ?? .data, UTType(filenameExtension: "woff2") ?? .data]
         // Archives are JSON; some file providers report them only as generic data.
         case .settings: return [.json, UTType(filenameExtension: "rikugan") ?? .json, .data]
+        case .downloadFolder: return [.folder]
         case nil: return [.data]
         }
     }
@@ -171,6 +172,7 @@ struct BrowserView: View {
         let services = AppServices.shared
         switch result {
         case .failure(let error):
+            if kind == .downloadFolder { DownloadLocation.adopt(result); return }
             ToastCenter.shared.show("无法打开文件：\(error.localizedDescription)", symbol: "exclamationmark.triangle")
             return
         case .success(let urls):
@@ -188,6 +190,8 @@ struct BrowserView: View {
                 catch { ToastCenter.shared.show(error.localizedDescription, symbol: "exclamationmark.triangle") }
             case .settings:
                 ImportExport.importBundle(from: url, into: manager)
+            case .downloadFolder:
+                DownloadLocation.adopt(result)
             case nil: break
             }
         }
