@@ -219,8 +219,14 @@ import WebKit
         let scales: [UIImage.SymbolScale] = [.small, .medium, .large]
         var brokenVariants: [String] = []
         for name in ["rk.gearshape", "rk.plus", "rk.ellipsis.circle", "rk.chevron.down", "rk.star.fill"] {
-            for weight in weights { for scale in scales where !Self.iconDraws(name, weight: weight, scale: scale) {
-                brokenVariants.append("\(name)/w\(weight.rawValue)/s\(scale.rawValue)")
+            // Visible ink and a sane size; no fill-ratio test here: a thin, small chevron is a flat
+            // stroke whose ink box is legitimately short.
+            for weight in weights { for scale in scales {
+                guard let m = Self.iconMeasure(name, weight: weight, scale: scale),
+                      (8...60).contains(m.size.width), (8...60).contains(m.size.height), m.ink >= 8, m.box.width >= m.size.width * 0.3
+                else {
+                    brokenVariants.append("\(name)/w\(weight.rawValue)/s\(scale.rawValue)"); continue
+                }
             } }
         }
         ctx.record("图标集：所有字重与尺寸（S/M/L）都能绘制", brokenVariants.isEmpty,
