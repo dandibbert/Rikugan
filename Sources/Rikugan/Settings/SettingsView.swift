@@ -442,11 +442,12 @@ struct MediaSettingsView: View {
                 Picker("保存到", selection: Binding(get: { destination }, set: { destination = $0; DownloadLocation.destination = $0 })) {
                     Text("Rikugan 下载").tag(DownloadLocation.Destination.rikugan)
                     if let folder = DownloadLocation.customFolderName { Text(folder).tag(DownloadLocation.Destination.custom) }
+                    Text("每次选择位置").tag(DownloadLocation.Destination.files)
                 }
                 Button(DownloadLocation.customFolder == nil ? "选择文件夹…" : "更换文件夹…") { importKind = .downloadFolder }
                 Toggle("下载前询问文件名", isOn: $services.prefs.downloadConfirm)
             } header: { Text("下载") } footer: {
-                Text("选择的文件夹会被记住，之后的下载直接存到那里（同时保留在 Rikugan 的下载列表中，可随时打开）。Rikugan 下载文件夹：文件 App → 我的 iPhone → Rikugan → Downloads。")
+                Text("选择的文件夹会被记住，之后的下载直接存到那里（同时保留在 Rikugan 的下载列表中，可随时打开）。“每次选择位置”在下载完成后弹出系统的“存储到文件”，它会记住上次的位置。Rikugan 下载文件夹：文件 App → 我的 iPhone → Rikugan → Downloads。")
             }
             Section {
                 Toggle("重启后保留标签页缩略图", isOn: $services.prefs.persistTabThumbnails)

@@ -144,7 +144,7 @@ import QuickLook
         item.isPrivate = sourceTab?.isPrivate ?? (TabRegistry.shared.tab(for: download.webView)?.isPrivate ?? false)
         item.webView = download.webView
         item.wkDownload = download
-        item.copyToCustomFolder = !item.isPrivate && DownloadLocation.destination == .custom
+        apply(DownloadLocation.destination, to: item)
         item.mime = suggestedResponse?.mimeType ?? ""
         wkItems[ObjectIdentifier(download)] = item
         download.delegate = self
@@ -157,6 +157,13 @@ import QuickLook
             item.downloadOnlyTab = tab
         }
         // Announced once the destination is decided (after the optional prompt).
+    }
+
+    /// Where a finished download goes besides Rikugan's Downloads folder. Private downloads stay
+    /// in the app.
+    func apply(_ destination: DownloadLocation.Destination, to item: DownloadItem) {
+        item.copyToCustomFolder = destination == .custom && !item.isPrivate
+        item.exportToFiles = destination == .files && !item.isPrivate
     }
 
     /// Closes the blank tab a download was started from (see `downloadOnlyTab`), returning to the
@@ -185,7 +192,7 @@ import QuickLook
         Task {
             guard let decision = await DownloadPrompt.ask(fileName: name, size: 0, source: url, mime: nil) else { return }
             let item = download(url: url, suggestedName: decision.fileName, from: tab)
-            item?.copyToCustomFolder = decision.destination == .custom && !(item?.isPrivate ?? true)
+            if let item { self.apply(decision.destination, to: item) }
         }
     }
 
@@ -202,7 +209,7 @@ import QuickLook
         item.headers = headers
         item.isPrivate = tab?.isPrivate ?? false
         item.userNamedFile = suggestedName != nil
-        item.copyToCustomFolder = !item.isPrivate && DownloadLocation.destination == .custom
+        apply(DownloadLocation.destination, to: item)
         items.insert(item, at: 0)
         Task {
             var request = URLRequest(url: url)
@@ -467,7 +474,7 @@ extension DownloadManager: WKDownloadDelegate {
                     item.mime = response.mimeType ?? item.mime
                     if response.expectedContentLength > 0 { item.total = response.expectedContentLength }
                     item.fileURL = file
-                    item.copyToCustomFolder = destination == .custom && !item.isPrivate
+                    self.apply(destination, to: item)
                     self.announce(item)
                 }
                 completionHandler(file)

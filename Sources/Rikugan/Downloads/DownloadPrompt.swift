@@ -100,11 +100,12 @@ struct DownloadConfirmView: View {
                     if let folder = DownloadLocation.customFolderName {
                         Label(folder, icon: "folder").tag(DownloadLocation.Destination.custom)
                     }
+                    Label("每次选择位置（存储到“文件”）", icon: "square.and.arrow.down").tag(DownloadLocation.Destination.files)
                 }
                 Button { pickingFolder = true } label: { Label(DownloadLocation.customFolder == nil ? "选择文件夹…" : "更换文件夹…", icon: "folder") }
             } label: {
                 HStack(spacing: 10) {
-                    Image(icon: destination == .custom ? "folder" : "arrow.down.circle").foregroundStyle(.tint)
+                    Image(icon: destination == .custom ? "folder" : (destination == .files ? "square.and.arrow.down" : "arrow.down.circle")).foregroundStyle(.tint)
                     Text("保存到").foregroundStyle(.secondary)
                     Spacer()
                     Text(DownloadLocation.displayName(destination)).foregroundStyle(.primary).lineLimit(1)

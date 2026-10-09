@@ -100,7 +100,7 @@ import Combine
             removeFromShareInbox([shareID])
         }
         if url.isFileURL {
-            pendingOpen.append(PendingOpen(kind: .importFile(url)))
+            pendingOpen.append(PendingOpen(kind: .importFile(Self.localCopy(of: url))))
             return
         }
         if url.scheme == "rikugan" {
@@ -118,6 +118,32 @@ import Combine
             return
         }
         pendingOpen.append(PendingOpen(kind: .url(url)))
+    }
+
+    /// Files opened from other apps arrive in place (LSSupportsOpeningDocumentsInPlace, needed so
+    /// the folder picker can grant a download folder): one outside the app's container is copied
+    /// into a temporary folder while its security scope is open, so every importer and the web
+    /// view get a plain local file, as with the old Inbox copies.
+    static func localCopy(of url: URL) -> URL {
+        let home = URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path
+        guard !url.standardizedFileURL.path.hasPrefix(home) else { return url }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Incoming/\(UUID().uuidString)", isDirectory: true)
+        let target = folder.appendingPathComponent(url.lastPathComponent)
+        var copyError: Error?
+        var coordinationError: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &coordinationError) { source in
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: source, to: target)
+            } catch { copyError = error }
+        }
+        if let error = coordinationError ?? copyError {
+            ErrorLog.shared.record("copy of opened file failed: \(error.localizedDescription)", source: "打开文件")
+            return url
+        }
+        return target
     }
 
     static let appGroup = "group.com.dandibbert.Rikugan"

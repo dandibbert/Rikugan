@@ -7,15 +7,28 @@ import UniformTypeIdentifiers
 /// when the user picked one, a copy in a folder of their choice in Files. The chosen folder is
 /// remembered (security-scoped bookmark) and used for every later download until changed.
 @MainActor enum DownloadLocation {
-    enum Destination: Equatable { case rikugan, custom }
+    /// rikugan: only Rikugan's Downloads folder. custom: also copied into the remembered folder.
+    /// files: the system "save to Files" sheet after each download (the sheet itself reopens in
+    /// the last location used); works where folder access cannot be granted.
+    enum Destination: Equatable { case rikugan, custom, files }
 
     private static let bookmarkKey = "rikugan.downloadFolderBookmark"
     private static let destinationKey = "rikugan.downloadDestination"
 
     /// The remembered destination for new downloads.
     static var destination: Destination {
-        get { UserDefaults.standard.string(forKey: destinationKey) == "custom" && customFolder != nil ? .custom : .rikugan }
-        set { UserDefaults.standard.set(newValue == .custom ? "custom" : "rikugan", forKey: destinationKey) }
+        get {
+            switch UserDefaults.standard.string(forKey: destinationKey) {
+            case "custom": return customFolder != nil ? .custom : .rikugan
+            case "files": return .files
+            default: return .rikugan
+            }
+        }
+        set {
+            let value: String
+            switch newValue { case .rikugan: value = "rikugan"; case .custom: value = "custom"; case .files: value = "files" }
+            UserDefaults.standard.set(value, forKey: destinationKey)
+        }
     }
 
     /// The folder picked in Files, if any (resolved from its bookmark).
@@ -30,7 +43,11 @@ import UniformTypeIdentifiers
     static var customFolderName: String? { customFolder?.lastPathComponent }
 
     static func displayName(_ destination: Destination) -> String {
-        destination == .custom ? (customFolderName ?? "所选文件夹") : "Rikugan 下载"
+        switch destination {
+        case .rikugan: return "Rikugan 下载"
+        case .custom: return customFolderName ?? "所选文件夹"
+        case .files: return "每次选择位置"
+        }
     }
 
     private static func remember(_ folder: URL) throws {
