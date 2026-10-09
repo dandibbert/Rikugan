@@ -47,6 +47,10 @@ enum TranslationState: Equatable {
     let isPrivate: Bool
     weak var manager: TabManager?
     weak var opener: BrowserTab?
+    /// The tab has shown a real page (a main-frame document other than about:blank committed, or
+    /// it was restored with one). A tab that never has exists only for a download it started and
+    /// is closed when that download ends (DownloadManager.closeDownloadOnlyTab).
+    private(set) var hasShownPage = false
 
     @Published var groupID: UUID?
     @Published var title: String
@@ -127,6 +131,7 @@ enum TranslationState: Equatable {
         lastActiveAt = snapshot.lastActiveAt
         pinned = snapshot.pinned
         lastScrollY = snapshot.scrollY
+        hasShownPage = !snapshot.url.isEmpty
         pendingScrollRestore = snapshot.scrollY
         restoreState = snapshot.interactionState
         restoreURL = URL(string: snapshot.url)
@@ -454,6 +459,7 @@ enum TranslationState: Equatable {
 
     /// Clears per-document state when a new main-frame document commits.
     func documentDidCommit() {
+        if let scheme = webView?.url?.scheme?.lowercased(), scheme != "about" { hasShownPage = true }
         if findActive { findResult = (0, -1) }
         menuCommands.removeAll()
         sniffedMedia.removeAll()

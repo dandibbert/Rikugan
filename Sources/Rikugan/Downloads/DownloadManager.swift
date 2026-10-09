@@ -150,10 +150,10 @@ import QuickLook
         download.delegate = self
         item.observe(download.progress)
         items.insert(item, at: 0)
-        // A tab opened for this link (target=_blank / window.open) that never showed a page exists
+        // A tab that never showed a page (opened for this link by target=_blank / window.open /
+        // "open in new tab", or redirected straight to a file like GitHub artifact links) exists
         // only for the download: it is closed when the download ends.
-        if let tab = sourceTab ?? TabRegistry.shared.tab(for: download.webView), tab.opener != nil,
-           download.webView?.backForwardList.currentItem == nil {
+        if let tab = sourceTab ?? TabRegistry.shared.tab(for: download.webView), !tab.hasShownPage {
             item.downloadOnlyTab = tab
         }
         // Announced once the destination is decided (after the optional prompt).
@@ -164,7 +164,11 @@ import QuickLook
     func closeDownloadOnlyTab(_ item: DownloadItem) {
         guard let tab = item.downloadOnlyTab, let manager = tab.manager else { return }
         item.downloadOnlyTab = nil
-        guard tab.webView?.backForwardList.currentItem == nil, manager.tabs.contains(where: { $0 === tab }) else { return }
+        guard manager.tabs.contains(where: { $0 === tab }) else { return }
+        guard !tab.hasShownPage, manager.tabs.count > 1 else {
+            ErrorLog.shared.record("download tab kept: shownPage=\(tab.hasShownPage) tabs=\(manager.tabs.count)", source: "下载")
+            return
+        }
         if manager.activeTab === tab, let opener = tab.opener, manager.tabs.contains(where: { $0 === opener }) { manager.select(opener) }
         manager.close(tab)
     }

@@ -158,6 +158,16 @@ import WebKit
         ctx.record("下载 · 普通下载（WKDownload）在 DNR 开启时完成且字节一致", navItem?.state == .completed && bytes(navItem) == expected && !expected.isEmpty,
                    describe(navItem) + " expected=\(expected.count)")
 
+        // 2b. A tab opened only to download a file (new tab whose first load is the file) closes
+        //     when the download ends and the opener is shown again.
+        let tabsBefore = ctx.manager.tabs.count
+        let downloadTab = ctx.manager.newTab(url: ctx.url("/dnr/dl/file.bin?newtab=1"), background: false, opener: tab)
+        let closed = await ctx.waitUntil(20) { !ctx.manager.tabs.contains { $0 === downloadTab } }
+        if let tabItem = downloads.items.first(where: { $0.sourceURL?.query == "newtab=1" }) { created.append(tabItem) }
+        ctx.record("下载 · 只为下载打开的新标签页在下载结束后自动关闭并回到原标签页",
+                   closed && ctx.manager.activeTab === tab && ctx.manager.tabs.count == tabsBefore,
+                   "closed=\(closed) activeIsOpener=\(ctx.manager.activeTab === tab) tabs=\(tabsBefore)→\(ctx.manager.tabs.count) shownPage=\(downloadTab.hasShownPage)")
+
         // 3. Direct (URLSession) download of the same file: not subject to content rules.
         let directURL = ctx.url("/dnr/dl/file.bin?direct=1")
         let direct = downloads.download(url: directURL, suggestedName: "direct.bin", from: tab)
