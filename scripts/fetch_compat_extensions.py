@@ -14,6 +14,7 @@ Sources:
   - Chrome Web Store CRX (current version, read from the manifest after download):
       Tampermonkey          dhdgffkkebhmkfjojejmpbldmpobfkfo
       Immersive Translate   bpoadfkcbjbfhfodiogcnhhhpibjhbnh
+      1Password             aeblfdkhhhdcdjpifhhbdiojplfjncoa
 """
 import hashlib
 import io
@@ -34,6 +35,7 @@ GITHUB = [
 CWS = [
     ("tampermonkey", "Tampermonkey", "dhdgffkkebhmkfjojejmpbldmpobfkfo"),
     ("immersive-translate", "Immersive Translate", "bpoadfkcbjbfhfodiogcnhhhpibjhbnh"),
+    ("1password", "1Password", "aeblfdkhhhdcdjpifhhbdiojplfjncoa"),
 ]
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 

@@ -235,6 +235,27 @@ import WebKit
             let userScriptsAPI = unsupported.keys.filter { $0.hasPrefix("userScripts") }
             return area(bgOK && userScriptsAPI.isEmpty ? "partial" : "fail",
                         "background ready=\(bgOK); chrome.userScripts calls=\(userScriptsAPI.joined(separator: ",")) — script injection itself is not verified by this suite")
+        case "1password":
+            // Unlocking needs a real account, so only what is observable without one: the
+            // background starts, and the MAIN-world script replaces navigator.credentials so the
+            // extension (not iOS) answers passkey requests. Filling itself is not verified here.
+            // Its passkey scripts match https pages only (not the local http test server).
+            let bgOK = ext.background?.isReady == true
+            let page = ctx.manager.newTab(url: URL(string: "https://example.com/")!, background: false, isPrivate: false)
+            defer { ctx.manager.close(page) }
+            let loaded = await ctx.waitUntil(20) { page.webView?.isLoading == false && page.webView?.url?.host == "example.com" }
+            var hooked = false
+            if loaded {
+                hooked = await ctx.waitUntil(15) {
+                    (await ctx.eval(page, "return !!(navigator.credentials && navigator.credentials.get && !String(navigator.credentials.get).includes('[native code]'));") as? Bool) == true
+                }
+            }
+            let unsupported = (ctx.profile.extensions.unsupportedCalls[ext.id] ?? [:]).keys.sorted()
+            guard loaded else {
+                return area("untested", "background ready=\(bgOK); https test page did not load (network) — passkey hook not checked")
+            }
+            return area(bgOK && hooked ? "partial" : "fail",
+                        "background ready=\(bgOK) passkey hook on navigator.credentials (https page)=\(hooked) unsupported=\(unsupported.prefix(8).joined(separator: ",")) — unlock and filling need an account and are not verified")
         default:
             return area("untested", "no behaviour probe for \(key)")
         }
