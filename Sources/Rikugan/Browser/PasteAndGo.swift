@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// "Open the copied link" on the start page and in the address-bar overlay.
 ///
@@ -41,6 +42,45 @@ import UIKit
     }
 }
 
+/// The system paste button (no "Allow Paste" prompt). Links copied from Safari and many apps are
+/// on the pasteboard only as a URL, not as text: a String-only paste button received nothing for
+/// them, so the button accepts URLs as well as text.
+struct PasteAndGoButton: View {
+    let onPaste: ([String]) -> Void
+
+    var body: some View {
+        PasteButton(supportedContentTypes: [.url, .plainText, .text]) { providers in
+            Task { @MainActor in
+                var strings: [String] = []
+                for provider in providers {
+                    if let text = await Self.load(provider) { strings.append(text) }
+                }
+                if strings.isEmpty {
+                    ToastCenter.shared.show("剪贴板里没有可打开的链接或文字", symbol: "exclamationmark.triangle")
+                } else {
+                    onPaste(strings)
+                }
+            }
+        }
+    }
+
+    private static func load(_ provider: NSItemProvider) async -> String? {
+        if provider.canLoadObject(ofClass: URL.self),
+           let url = await withCheckedContinuation({ (c: CheckedContinuation<URL?, Never>) in
+               _ = provider.loadObject(ofClass: URL.self) { url, _ in c.resume(returning: url) }
+           }) {
+            return url.absoluteString
+        }
+        if provider.canLoadObject(ofClass: NSString.self),
+           let text = await withCheckedContinuation({ (c: CheckedContinuation<String?, Never>) in
+               _ = provider.loadObject(ofClass: NSString.self) { value, _ in c.resume(returning: value as? String) }
+           }) {
+            return text
+        }
+        return nil
+    }
+}
+
 /// Row for the address-bar overlay's suggestion list.
 struct PasteAndGoRow: View {
     @StateObject private var probe = PasteboardProbe()
@@ -52,9 +92,7 @@ struct PasteAndGoRow: View {
                 Image(icon: probe.kind == .link ? "link" : "magnifyingglass").foregroundStyle(.secondary).frame(width: 22)
                 Text(probe.kind == .link ? "打开拷贝的链接" : "搜索拷贝的文字").foregroundStyle(.primary)
                 Spacer()
-                PasteButton(payloadType: String.self) { strings in
-                    Task { @MainActor in onPaste(strings) }
-                }
+                PasteAndGoButton(onPaste: onPaste)
                 .labelStyle(.titleAndIcon)
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
@@ -75,9 +113,7 @@ struct PasteAndGoChip: View {
                 Image(icon: probe.kind == .link ? "link" : "magnifyingglass").foregroundStyle(.tint)
                 Text(probe.kind == .link ? "打开拷贝的链接" : "搜索拷贝的文字").font(.subheadline)
                 Spacer(minLength: 8)
-                PasteButton(payloadType: String.self) { strings in
-                    Task { @MainActor in onPaste(strings) }
-                }
+                PasteAndGoButton(onPaste: onPaste)
                 .labelStyle(.titleAndIcon)
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
