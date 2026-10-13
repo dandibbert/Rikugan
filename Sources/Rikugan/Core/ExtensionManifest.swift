@@ -109,6 +109,10 @@ public struct ExtensionManifest {
     /// `content_security_policy.extension_pages` (MV3) / string policy (MV2), but never weaker than
     /// the MV3 minimum for scripts (remote hosts and 'unsafe-inline' / 'unsafe-eval' are dropped
     /// from script-src, as Chrome refuses them for MV3 extension pages).
+    /// Fetch directives under which an extension page may always load the extension's own files.
+    static let ownResourceDirectives: Set<String> = ["default-src", "connect-src", "img-src", "font-src", "style-src", "style-src-elem",
+                                                     "media-src", "worker-src", "child-src", "frame-src", "manifest-src"]
+
     public var extensionPagesCSP: String {
         let declared: String? = (raw["content_security_policy"] as? [String: Any])?["extension_pages"] as? String
             ?? raw["content_security_policy"] as? String
@@ -122,6 +126,14 @@ public struct ExtensionManifest {
                 hasScript = hasScript || name == "script-src"
                 let allowed = tokens.dropFirst().filter { ["'self'", "'wasm-unsafe-eval'", "'none'"].contains($0.lowercased()) || $0.lowercased().hasPrefix("'sha") }
                 directives.append(([name] + (allowed.isEmpty ? ["'self'"] : allowed)).joined(separator: " "))
+            } else if Self.ownResourceDirectives.contains(name) {
+                // Chrome always lets an extension load its own files, whatever its CSP says
+                // (1Password declares default-src 'none' and a connect-src without 'self', then
+                // fetches its own .wasm). Here 'self' is the extension's own origin, so it is
+                // added (and a 'none' that would block it dropped); other sources are untouched.
+                var values = tokens.dropFirst().filter { $0.lowercased() != "'none'" }
+                if !values.contains(where: { $0.lowercased() == "'self'" }) { values.insert("'self'", at: values.startIndex) }
+                directives.append(([name] + values).joined(separator: " "))
             } else {
                 if name == "object-src" { hasObject = true }
                 directives.append(tokens.joined(separator: " "))

@@ -221,6 +221,23 @@ final class ManifestTests: XCTestCase {
         XCTAssertFalse(cs.matches(URL(string: "https://other.com/")!))
     }
 
+    func testExtensionPagesCSPAlwaysAllowsOwnFiles() throws {
+        // Shape of 1Password's policy: default-src 'none', connect-src only remote hosts.
+        let json = #"{"manifest_version":3,"name":"x","version":"1","content_security_policy":{"extension_pages":"default-src 'none'; connect-src https://*.example.com wss://b.example.com; img-src 'self' data:; script-src 'self' 'wasm-unsafe-eval' https://cdn.example.com; frame-ancestors http: https: 'self'"}}"#
+        let csp = try ExtensionManifest(data: Data(json.utf8)).extensionPagesCSP
+        let directives = Dictionary(uniqueKeysWithValues: csp.split(separator: ";").compactMap { part -> (String, [String])? in
+            let tokens = part.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard let name = tokens.first else { return nil }
+            return (name, Array(tokens.dropFirst()))
+        })
+        XCTAssertEqual(directives["default-src"], ["'self'"])
+        XCTAssertEqual(directives["connect-src"], ["'self'", "https://*.example.com", "wss://b.example.com"])
+        XCTAssertEqual(directives["img-src"], ["'self'", "data:"])
+        XCTAssertEqual(directives["script-src"], ["'self'", "'wasm-unsafe-eval'"])
+        XCTAssertEqual(directives["frame-ancestors"], ["http:", "https:", "'self'"])
+        XCTAssertEqual(directives["object-src"], ["'self'"])
+    }
+
     func testRejectsMV2() {
         XCTAssertThrowsError(try ExtensionManifest(data: Data(#"{"manifest_version":2,"name":"x","version":"1"}"#.utf8)))
     }
