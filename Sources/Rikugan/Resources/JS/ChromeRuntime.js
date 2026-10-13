@@ -328,7 +328,19 @@
       getBackgroundPage: unsupportedFn('runtime.getBackgroundPage'),
       getContexts: call('runtime.getContexts'),
       sendNativeMessage: unsupportedFn('runtime.sendNativeMessage'),
-      connectNative: unsupportedFn('runtime.connectNative'),
+      // No native messaging hosts exist on iOS. Like Chrome when the host is not installed, a
+      // port is returned and disconnects at once with lastError set; code that attaches
+      // port.onDisconnect (1Password) then takes its "app not available" path instead of
+      // crashing on a missing port. Still reported as an unsupported call.
+      connectNative: Object.assign((application) => {
+        const port = new Port(uuid(), '');
+        port._connected = false;
+        portsById.delete(port._id);
+        unsupportedFn('runtime.connectNative')().catch(() => {});
+        setTimeout(() => withLastError(new Error('Specified native messaging host not found.'),
+          () => port.onDisconnect._dispatch([port])), 0);
+        return port;
+      }, { __rikuganUnsupported: true }),
       restart: unsupportedFn('runtime.restart'),
       getPackageDirectoryEntry: unsupportedFn('runtime.getPackageDirectoryEntry'),
     });

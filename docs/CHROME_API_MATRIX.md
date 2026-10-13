@@ -66,7 +66,7 @@ Messaging, ports, lifecycle events and manifest/URL helpers work in content scri
 | 方法 / 事件 | 级别 | 实现位置 | 说明 |
 |---|---|---|---|
 | `connect` | ✅ Supported | 原生桥 | Messages posted before the receiver connects are queued |
-| `connectNative` | ⛔ Unsupported | — | No native messaging hosts on iOS |
+| `connectNative` | ⛔ Unsupported | — | No native messaging hosts on iOS; returns a port that disconnects at once with "Specified native messaging host not found." (as Chrome without the host) |
 | `getBackgroundPage` | ⛔ Unsupported | — | MV3 has no background page |
 | `getContexts` | 🟡 Partial | 原生桥 | Returns background / popup / tab contexts without documentId |
 | `getManifest` | ✅ Supported | JS shim |  |

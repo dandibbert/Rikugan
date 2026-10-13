@@ -18,7 +18,7 @@
         "getPlatformInfo": ["Partial", "os = 'ios', arch = 'arm64'", true],
         "getBackgroundPage": ["Unsupported", "MV3 has no background page"],
         "sendNativeMessage": ["Unsupported", "No native messaging hosts on iOS"],
-        "connectNative": ["Unsupported", "No native messaging hosts on iOS"],
+        "connectNative": ["Unsupported", "No native messaging hosts on iOS; returns a port that disconnects at once with \"Specified native messaging host not found.\" (as Chrome without the host)"],
         "restart": ["Unsupported", "Chrome OS only"],
         "onMessage": ["Supported", "sendResponse, return true and returned Promises are supported", true],
         "onConnect": ["Supported", "", true],
