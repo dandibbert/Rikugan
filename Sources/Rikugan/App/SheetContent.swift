@@ -20,12 +20,6 @@ struct SheetContent: View {
             .sheet(item: $importPreview) { preview in
                 ArchiveImportSheet(archive: preview.archive, source: preview.source).environmentObjects(services, manager)
             }
-            .fileImporter(isPresented: Binding(get: { importKind != nil }, set: { if !$0 { importKind = nil } }),
-                          allowedContentTypes: ImportRouter.allowedTypes(importKind), allowsMultipleSelection: false) { result in
-                let kind = importKind
-                importKind = nil
-                ImportRouter.handle(result, kind: kind, manager: manager)
-            }
     }
 
     @ViewBuilder private var content: some View {

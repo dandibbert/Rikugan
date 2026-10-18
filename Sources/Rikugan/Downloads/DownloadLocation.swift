@@ -12,6 +12,9 @@ import UniformTypeIdentifiers
     /// the last location used); works where folder access cannot be granted.
     enum Destination: Equatable { case rikugan, custom, files }
 
+    /// Posted when a folder was adopted (the picker finishes after the view that asked for it).
+    static let changed = Notification.Name("rikugan.downloadLocationChanged")
+
     private static let bookmarkKey = "rikugan.downloadFolderBookmark"
     private static let destinationKey = "rikugan.downloadDestination"
 
@@ -57,7 +60,7 @@ import UniformTypeIdentifiers
         UserDefaults.standard.set(data, forKey: bookmarkKey)
     }
 
-    /// Takes the result of the folder picker (`.fileImporter` with `.folder`, see
+    /// Takes the result of the folder picker (FilePicker with a folder, see
     /// `downloadFolderPicker`). On success the folder becomes the remembered destination; a failure
     /// is shown, never swallowed.
     @discardableResult
@@ -67,6 +70,7 @@ import UniformTypeIdentifiers
             try remember(folder)
             guard customFolder != nil else { throw RikuganError("无法重新打开所选文件夹") }
             destination = .custom
+            NotificationCenter.default.post(name: changed, object: nil)
             ToastCenter.shared.show("下载将保存到“\(folder.lastPathComponent)”", symbol: "folder")
             return true
         } catch {
@@ -96,8 +100,12 @@ import UniformTypeIdentifiers
 extension View {
     /// The system folder picker for the download destination, presented by SwiftUI itself.
     func downloadFolderPicker(isPresented: Binding<Bool>, picked: @escaping () -> Void) -> some View {
-        fileImporter(isPresented: isPresented, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
-            if DownloadLocation.adopt(result) { picked() }
+        onChange(of: isPresented.wrappedValue) { _, show in
+            guard show else { return }
+            isPresented.wrappedValue = false
+            FilePicker.pick([.folder], folder: true) { result in
+                if DownloadLocation.adopt(result) { picked() }
+            }
         }
     }
 }

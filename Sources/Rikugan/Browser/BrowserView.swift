@@ -103,13 +103,13 @@ struct BrowserView: View {
         .sheet(item: $runtime.popup) { request in ExtensionPopupSheet(request: request).environmentObject(runtime) }
         .sheet(item: $runtime.permissionRequest) { prompt in PermissionPromptSheet(prompt: prompt) }
         .sheet(isPresented: $showQuickActionPicker) { QuickActionPicker().environmentObject(services) }
-        // While a sheet (e.g. Settings) is up, the picker is presented by the sheet instead: a view
-        // cannot present a second modal over its own sheet.
-        .fileImporter(isPresented: Binding(get: { importKind != nil && sheet == nil }, set: { if !$0 { importKind = nil } }),
-                      allowedContentTypes: ImportRouter.allowedTypes(importKind), allowsMultipleSelection: false) { result in
-            let kind = importKind
+        // One picker for the browser and its sheets: FilePicker presents over whatever is on top.
+        .onChange(of: importKind) { _, kind in
+            guard let kind else { return }
             importKind = nil
-            ImportRouter.handle(result, kind: kind, manager: manager)
+            FilePicker.pick(ImportRouter.allowedTypes(kind), folder: kind == .downloadFolder || kind == .extensionFolder) { result in
+                ImportRouter.handle(result, kind: kind, manager: manager)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .rikuganOpenSheet)) { note in
             guard (note.object as? TabManager) === manager, let target = note.userInfo?["sheet"] as? BrowserSheet else { return }
@@ -172,6 +172,7 @@ struct BrowserView: View {
         let services = AppServices.shared
         switch result {
         case .failure(let error):
+            if (error as NSError).code == NSUserCancelledError { return }
             if kind == .downloadFolder { DownloadLocation.adopt(result); return }
             ToastCenter.shared.show("无法打开文件：\(error.localizedDescription)", symbol: "exclamationmark.triangle")
             return

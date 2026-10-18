@@ -454,7 +454,7 @@ struct MediaSettingsView: View {
             } footer: { Text("缩略图保存在 App 缓存中（无痕标签页不保存），关闭标签页时删除。") }
         }
         .navigationTitle("媒体与下载")
-        .onChange(of: importKind) { _, kind in if kind == nil { destination = DownloadLocation.destination } }
+        .onReceive(NotificationCenter.default.publisher(for: DownloadLocation.changed)) { _ in destination = DownloadLocation.destination }
     }
 }
 
