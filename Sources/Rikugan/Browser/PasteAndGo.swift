@@ -81,49 +81,25 @@ struct PasteAndGoButton: View {
     }
 }
 
-/// Row for the address-bar overlay's suggestion list.
-struct PasteAndGoRow: View {
+/// Paste-and-go inside a search field (start page, address-bar overlay), like Safari: a small
+/// theme-coloured "Paste" capsule at the trailing edge, shown only while the field is empty and
+/// the pasteboard holds a link or text. One tap opens the link (or searches the text).
+struct PasteAndGoInline: View {
     @StateObject private var probe = PasteboardProbe()
+    var compact = false
     let onPaste: ([String]) -> Void
 
     var body: some View {
         if probe.kind != .none {
-            HStack(spacing: 12) {
-                Image(icon: probe.kind == .link ? "link" : "magnifyingglass").foregroundStyle(.secondary).frame(width: 22)
-                Text(probe.kind == .link ? "打开拷贝的链接" : "搜索拷贝的文字").foregroundStyle(.primary)
-                Spacer()
-                PasteAndGoButton(onPaste: onPaste)
+            PasteAndGoButton(onPaste: onPaste)
                 .labelStyle(.titleAndIcon)
                 .buttonBorderShape(.capsule)
-                .controlSize(.small)
-            }
-            .accessibilityIdentifier("pasteAndGo")
-        }
-    }
-}
-
-/// Compact version for the start page, under the search field.
-struct PasteAndGoChip: View {
-    @StateObject private var probe = PasteboardProbe()
-    let onPaste: ([String]) -> Void
-
-    var body: some View {
-        if probe.kind != .none {
-            HStack(spacing: 10) {
-                Image(icon: probe.kind == .link ? "link" : "magnifyingglass").foregroundStyle(.tint)
-                Text(probe.kind == .link ? "打开拷贝的链接" : "搜索拷贝的文字").font(.subheadline)
-                Spacer(minLength: 8)
-                PasteAndGoButton(onPaste: onPaste)
-                .labelStyle(.titleAndIcon)
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-            }
-            .padding(.leading, 14).padding(.trailing, 8)
-            .frame(height: 44)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .frame(maxWidth: 600)
-            .padding(.horizontal)
-            .accessibilityIdentifier("pasteAndGoChip")
+                .controlSize(compact ? .mini : .small)
+                .tint(Theme.color)
+                .fixedSize()
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                .accessibilityLabel(probe.kind == .link ? "打开拷贝的链接" : "搜索拷贝的文字")
+                .accessibilityIdentifier("pasteAndGo")
         }
     }
 }

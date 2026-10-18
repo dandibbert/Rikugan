@@ -27,6 +27,11 @@ struct OmniboxOverlay: View {
                         .accessibilityIdentifier("omniboxField")
                     if !text.isEmpty {
                         Button { text = "" } label: { Image(icon: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    } else {
+                        PasteAndGoInline(compact: true) { strings in
+                            editing = false
+                            PasteAndGo.open(strings, in: manager.activeTab, manager: manager)
+                        }
                     }
                 }
                 .padding(.horizontal, 12)
@@ -38,12 +43,6 @@ struct OmniboxOverlay: View {
             .padding(.vertical, 8)
             .background(.bar)
             List {
-                if text.isEmpty {
-                    PasteAndGoRow { strings in
-                        editing = false
-                        PasteAndGo.open(strings, in: manager.activeTab, manager: manager)
-                    }
-                }
                 if case .url(let url) = Omnibox.classify(text, shortcuts: services.prefs.shortcuts), !text.isEmpty {
                     row(symbol: "globe", title: url.absoluteString, subtitle: "打开网址") { submit(text) }
                 } else if !text.isEmpty {

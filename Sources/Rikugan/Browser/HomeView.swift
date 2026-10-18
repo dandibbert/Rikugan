@@ -50,14 +50,15 @@ struct HomeView: View {
                                 .submitLabel(.go)
                                 .onSubmit { tab.loadInput(query); query = "" }
                                 .accessibilityIdentifier("homeSearchField")
+                            if query.isEmpty {
+                                PasteAndGoInline { strings in PasteAndGo.open(strings, in: tab, manager: manager) }
+                            }
                         }
-                        .padding(.horizontal, 14)
+                        .padding(.leading, 14).padding(.trailing, 8)
                         .frame(height: 46)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .frame(maxWidth: 600)
                         .padding(.horizontal)
-                        PasteAndGoChip { strings in PasteAndGo.open(strings, in: tab, manager: manager) }
-                            .padding(.top, -14)
                         if !profile.bookmarks.favorites.isEmpty {
                             section("个人收藏") {
                                 ForEach(profile.bookmarks.favorites) { node in
