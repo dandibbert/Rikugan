@@ -15,12 +15,17 @@ struct DiagnosticsReport: Codable {
         var recentErrors: [String] = [] }
     struct ScriptInfo: Codable { var name: String; var version: String; var enabled: Bool; var world: String; var grants: [String] }
     struct DNR: Codable { var probed: Bool; var redirect: Bool; var modifyHeaders: Bool; var redirectCompiles: Bool; var modifyHeadersCompiles: Bool; var convertedRules: Int; var lists: Int; var skipped: [String: [String]] }
-    struct Environment: Codable { var appGroup: Bool; var shareExtensionEmbedded: Bool; var webInspector: Bool; var profile: String; var profileCount: Int }
+    struct Environment: Codable { var appGroup: Bool; var shareExtensionEmbedded: Bool; var webInspector: Bool; var profile: String; var profileCount: Int
+        var signing: Signing? }
+    /// How this copy was signed (see SigningInfo): identifiers only, no certificate or key data.
+    struct Signing: Codable { var bundleID: String; var applicationIdentifier: String?; var teamID: String?; var appGroups: [String]
+        var shareExtensionBundleID: String?; var signedEntitlementKeys: [String]; var profileKind: String; var profileAppID: String?
+        var profileExpires: Date?; var problems: [String] }
     struct APISummary: Codable { var namespaces: Int; var supported: Int; var partial: Int; var unsupported: Int; var methodsImplemented: Int; var methodsMissing: Int }
 
     struct Security: Codable { var rejectedPrivilegedCalls: Int; var recent: [SecurityLog.Entry] }
 
-    static let privacyStatement = "Contains: build, OS/device model, tab and background-runtime counters, extension and userscript names/versions/grants, feature flags, compatibility-matrix version, DNR skipped-rule summary, error types and source locations, rejected-call log (hosts only), manual test statuses. Not read by the exporter: passwords, cookies, Keychain secrets, page or form contents, userscript source or GM stored values, extension storage, archive contents. Error message text and test notes are included only when includesErrorText is true; that text was redacted automatically, which cannot guarantee it holds no personal data."
+    static let privacyStatement = "Contains: build, OS/device model, signing identifiers (bundle ID, application-identifier, team ID, App Groups, entitlement names, profile type and App ID; no certificate or key data), tab and background-runtime counters, extension and userscript names/versions/grants, feature flags, compatibility-matrix version, DNR skipped-rule summary, error types and source locations, rejected-call log (hosts only), manual test statuses. Not read by the exporter: passwords, cookies, Keychain secrets, page or form contents, userscript source or GM stored values, extension storage, archive contents. Error message text and test notes are included only when includesErrorText is true; that text was redacted automatically, which cannot guarantee it holds no personal data."
 
     var reportFormat = "rikugan-diagnostics/3"
     var includesErrorText = false
@@ -97,7 +102,14 @@ struct DiagnosticsReport: Codable {
             appGroup: FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.dandibbert.Rikugan") != nil,
             shareExtensionEmbedded: plugins.contains { $0.hasSuffix(".appex") },
             webInspector: services.prefs.webInspectorEnabled,
-            profile: services.profile.info.name, profileCount: services.profiles.profiles.count)
+            profile: services.profile.info.name, profileCount: services.profiles.profiles.count,
+            signing: {
+                let info = SigningInfo.read()
+                return Signing(bundleID: info.bundleID, applicationIdentifier: info.applicationIdentifier, teamID: info.teamID,
+                               appGroups: info.appGroups, shareExtensionBundleID: info.shareExtensionBundleID,
+                               signedEntitlementKeys: info.signedEntitlements?.keys.sorted() ?? [], profileKind: info.profileKind,
+                               profileAppID: info.profileAppID, profileExpires: info.profileExpires, problems: info.problems)
+            }())
         let security = Security(rejectedPrivilegedCalls: SecurityLog.shared.totalRejected, recent: Array(SecurityLog.shared.entries.suffix(30)))
         let errors = ErrorLog.shared.entries.map { ErrorLog.Entry(id: $0.id, date: $0.date, source: $0.source, message: text($0.message)) }
         var manual = ManualTestStore.shared.export()
