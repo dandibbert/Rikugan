@@ -7,7 +7,14 @@ import UIKit
 /// about to commit (so main-frame scripts run unwrapped with exact semantics) while sub-frame
 /// variants carry a JS-side URL guard generated from the same native rules.
 @MainActor enum WebViewFactory {
-    static let safariUserAgentSuffix = "Version/17.0 Mobile/15E148 Safari/604.1"
+    /// Appended to WebKit's user agent so sites see Safari of this iOS release (Safari's version
+    /// follows iOS: iOS 26.1 → "Version/26.1"). A fixed old version made sites such as 1Password
+    /// treat Rikugan as an outdated browser ("Browser update required").
+    static let safariUserAgentSuffix: String = {
+        let parts = UIDevice.current.systemVersion.split(separator: ".")
+        let version = parts.prefix(2).joined(separator: ".") + (parts.count < 2 ? ".0" : "")
+        return "Version/\(version) Mobile/15E148 Safari/604.1"
+    }()
 
     static func makeWebView(for tab: BrowserTab, configuration external: WKWebViewConfiguration?) -> WKWebView {
         let configuration: WKWebViewConfiguration

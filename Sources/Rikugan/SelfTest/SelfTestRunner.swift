@@ -236,6 +236,12 @@ import WebKit
 
         let tab = await ctx.open("/index.html")
         ctx.record("测试页面加载", tab.webView?.url?.path == "/index.html")
+        // Sites judge the browser by the Safari version in the user agent; it must be this iOS
+        // release's, not a fixed old one (1Password showed "Browser update required" for 17.0).
+        let agent = await ctx.eval(tab, "return navigator.userAgent;") as? String ?? ""
+        let major = UIDevice.current.systemVersion.split(separator: ".").first.map(String.init) ?? "?"
+        ctx.record("User-Agent 中的 Safari 版本与系统一致", agent.contains("Version/\(major).") && agent.contains("Safari/"),
+                   "iOS \(UIDevice.current.systemVersion) ua=\(agent)")
         // Wait for every asynchronous result to be reported by the page (no fixed delay).
         let expected = ["data-cs-start", "data-cs-end", "data-messaging", "data-port", "data-storage", "data-scripting", "data-scripting-result",
                         "data-permissions", "data-bg-storage", "data-to-content", "data-extras", "data-unsupported", "data-us", "data-gm-storage", "data-gmxhr", "data-unsafe-window", "data-gm-extras"]
