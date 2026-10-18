@@ -144,6 +144,7 @@ struct DiagnosticsView: View {
     @ObservedObject private var errors = ErrorLog.shared
     @State private var report = DiagnosticsReport.collect()
     @State private var includeErrorText = false
+    @State private var signing = SigningInfo.read()
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -160,6 +161,23 @@ struct DiagnosticsView: View {
                 row("App Group", report.environment.appGroup ? "可用" : "不可用（未签名或 entitlement 缺失）")
                 row("分享扩展", report.environment.shareExtensionEmbedded ? "已嵌入" : "未找到")
                 row("网页检查器", report.environment.webInspector ? "开启" : "关闭")
+            }
+            Section {
+                let signing = self.signing
+                row("包名", signing.bundleID)
+                row("application-identifier", signing.applicationIdentifier ?? "无")
+                row("Team", signing.teamID ?? "无")
+                row("App Group", signing.appGroups.isEmpty ? "无" : signing.appGroups.joined(separator: ", "))
+                row("分享扩展包名", signing.shareExtensionBundleID ?? "未嵌入")
+                row("描述文件", [signing.profileName, signing.profileKind].compactMap { $0 }.joined(separator: " · "))
+                if let team = signing.profileTeam { row("描述文件团队", team) }
+                if let appID = signing.profileAppID { row("描述文件 App ID", appID) }
+                if let expires = signing.profileExpires { row("描述文件到期", expires.formatted(date: .abbreviated, time: .omitted)) }
+                ForEach(signing.problems, id: \.self) { problem in
+                    Label(problem, icon: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
+                }
+            } header: { Text("签名") } footer: {
+                Text(signing.problems.isEmpty ? "签名身份完整。" : "重签名时如果没有把 App ID 换成本 App 的包名，依赖 App 身份的系统功能（文件选择器、更换图标、App Group）会失败。")
             }
             Section("标签页") {
                 row("窗口 / 标签页 / 组", "\(report.tabs.windows) / \(report.tabs.tabs) / \(report.tabs.groups)")

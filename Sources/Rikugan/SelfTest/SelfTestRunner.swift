@@ -234,6 +234,12 @@ import WebKit
         ctx.record("图标集：自定义符号全部可加载并可见", !iconNames.isEmpty && brokenIcons.isEmpty,
                    "icons=\(iconNames.count) broken=\(brokenIcons.prefix(10)) sample=\(Self.iconInfo("rk.gearshape"))")
 
+        // Informational: the signing reader runs on this build (simulator builds are ad-hoc signed;
+        // what matters is that parsing the executable and profile does not fail or crash).
+        let signing = SigningInfo.read()
+        ctx.record("（记录）签名信息读取", true,
+                   "bundle=\(signing.bundleID) appID=\(signing.applicationIdentifier ?? "nil") entitlements=\(signing.signedEntitlements?.keys.sorted().joined(separator: ",") ?? "nil") profile=\(signing.profileKind) problems=\(signing.problems.count)")
+
         let tab = await ctx.open("/index.html")
         ctx.record("测试页面加载", tab.webView?.url?.path == "/index.html")
         // Sites judge the browser by the Safari version in the user agent; it must be this iOS
