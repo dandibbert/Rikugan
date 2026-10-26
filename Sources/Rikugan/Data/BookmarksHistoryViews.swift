@@ -188,6 +188,7 @@ struct HistoryListView: View {
 struct DownloadsView: View {
     @EnvironmentObject private var downloads: DownloadManager
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmDeleteFiles = false
 
     private var active: [DownloadItem] { downloads.items.filter { $0.state == .downloading || $0.state == .paused } }
     private var finished: [DownloadItem] { downloads.items.filter { $0.state != .downloading && $0.state != .paused } }
@@ -206,12 +207,19 @@ struct DownloadsView: View {
         }
         .navigationTitle("下载")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("删除 Rikugan 下载文件夹中的所有文件？", isPresented: $confirmDeleteFiles, titleVisibility: .visible) {
+            Button("全部删除", role: .destructive) {
+                let count = downloads.deleteAllDownloadedFiles()
+                ToastCenter.shared.show("已删除 \(count) 个文件", symbol: "trash")
+            }
+        } message: { Text("已存到其他位置（“文件”或所选文件夹）的文件不受影响；正在进行的下载不会删除。") }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
                     Button { openDownloadsFolder() } label: { Label("在“文件”中打开下载文件夹", icon: "folder") }
                     Button(role: .destructive) { downloads.clearFinished() } label: { Label("清除已完成的记录", icon: "trash") }
+                    Button(role: .destructive) { confirmDeleteFiles = true } label: { Label("删除 Rikugan 下载文件夹中的所有文件…", icon: "trash") }
                 } label: { Image(icon: "ellipsis.circle") }
             }
         }
@@ -243,7 +251,11 @@ struct DownloadRow: View {
                     ProgressView(value: item.total > 0 ? item.fraction : nil).tint(tint)
                     Text(progressText).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                 case .completed:
-                    Text(subtitle(ByteCountFormatter.string(fromByteCount: item.total, countStyle: .file))).font(.footnote).foregroundStyle(.secondary)
+                    if let place = item.savedElsewhere {
+                        Text(subtitle("已存到“\(place)”")).font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Text(subtitle(ByteCountFormatter.string(fromByteCount: item.total, countStyle: .file))).font(.footnote).foregroundStyle(.secondary)
+                    }
                 case .failed(let message):
                     Text("失败：\(message)").font(.footnote).foregroundStyle(.red).lineLimit(2)
                 case .cancelled:
@@ -255,7 +267,7 @@ struct DownloadRow: View {
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
-        .onTapGesture { if item.state == .completed { downloads.open(item) } }
+        .onTapGesture { if item.state == .completed, item.fileURL != nil { downloads.open(item) } }
         .contextMenu { menuItems }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) { downloads.remove(item, deleteFile: true) } label: { Label("删除", icon: "trash") }
@@ -278,9 +290,11 @@ struct DownloadRow: View {
     @ViewBuilder private var menuItems: some View {
         switch item.state {
         case .completed:
-            Button { downloads.open(item) } label: { Label("打开", icon: "eye") }
-            Button { downloads.share(item) } label: { Label("分享", icon: "square.and.arrow.up") }
-            Button { downloads.saveToFiles(item) } label: { Label("存储到“文件”…", icon: "folder") }
+            if item.fileURL != nil {
+                Button { downloads.open(item) } label: { Label("打开", icon: "eye") }
+                Button { downloads.share(item) } label: { Label("分享", icon: "square.and.arrow.up") }
+                Button { downloads.saveToFiles(item) } label: { Label("存储到“文件”…", icon: "folder") }
+            }
         case .downloading:
             Button { downloads.pause(item) } label: { Label("暂停", icon: "pause") }
             Button(role: .destructive) { downloads.cancel(item) } label: { Label("取消", icon: "xmark") }

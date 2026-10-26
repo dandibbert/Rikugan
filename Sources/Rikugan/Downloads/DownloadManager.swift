@@ -16,6 +16,9 @@ import QuickLook
     @Published var total: Int64 = 0
     @Published var speed: Double = 0
     @Published var fileURL: URL?
+    /// The file was handed to another place (the remembered folder, or "save to Files") and the
+    /// copy in Rikugan's Downloads folder was removed: where it went, for the list.
+    @Published var savedElsewhere: String?
     var mime: String = ""
     let startDate: Date
     var headers: [String: String] = [:]
@@ -379,10 +382,62 @@ import QuickLook
         Presenter.share([file])
     }
 
-    func saveToFiles(_ item: DownloadItem) {
+    /// The system "save to Files" sheet. With `handOff` (destination "choose each time") the copy
+    /// in Rikugan's Downloads folder is removed once the file is saved, so files do not pile up
+    /// there (and new downloads do not get " (1)", " (2)" names); if the sheet is cancelled the
+    /// file stays in Rikugan's Downloads. Saved as a copy, which needs no access grant.
+    func saveToFiles(_ item: DownloadItem, handOff: Bool = false) {
         guard let file = item.fileURL else { return }
         let picker = UIDocumentPickerViewController(forExporting: [file], asCopy: true)
+        let delegate = ExportDelegate { [weak self] saved in
+            guard let self else { return }
+            if saved, handOff {
+                self.handedOff(item, file: file, to: "文件 App")
+                ToastCenter.shared.show("已存储到“文件”：\(item.fileName)", symbol: "checkmark.circle")
+            } else if !saved, handOff {
+                ToastCenter.shared.show("未存储，文件保留在 Rikugan 下载中", symbol: "info.circle", actionTitle: "打开") { [weak self] in self?.open(item) }
+            }
+        }
+        picker.delegate = delegate
+        objc_setAssociatedObject(picker, &ExportDelegate.key, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         Presenter.present(picker)
+    }
+
+    /// The file now lives elsewhere: drop Rikugan's copy, keep the list entry.
+    private func handedOff(_ item: DownloadItem, file: URL, to place: String) {
+        try? FileManager.default.removeItem(at: file)
+        item.fileURL = nil
+        item.savedElsewhere = place
+        persist()
+    }
+
+    /// Deletes every finished download's file in Rikugan's Downloads folder (and its entry), plus
+    /// files there that no entry refers to (left over from earlier versions). Running downloads are
+    /// kept.
+    func deleteAllDownloadedFiles() -> Int {
+        let running = Set(items.filter { $0.state == .downloading || $0.state == .paused }.compactMap { $0.fileURL?.standardizedFileURL.path })
+        var removed = 0
+        let files = (try? FileManager.default.contentsOfDirectory(at: AppPaths.downloads, includingPropertiesForKeys: nil)) ?? []
+        for file in files where !running.contains(file.standardizedFileURL.path) {
+            if (try? FileManager.default.removeItem(at: file)) != nil { removed += 1 }
+        }
+        items.removeAll { $0.state != .downloading && $0.state != .paused }
+        persist()
+        return removed
+    }
+
+    private final class ExportDelegate: NSObject, UIDocumentPickerDelegate {
+        static var key = 0
+        private var done: ((Bool) -> Void)?
+        init(_ done: @escaping (Bool) -> Void) { self.done = done }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            let done = self.done; self.done = nil
+            Task { @MainActor in done?(true) }
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            let done = self.done; self.done = nil
+            Task { @MainActor in done?(false) }
+        }
     }
 
     fileprivate func finish(_ item: DownloadItem, file: URL) {
@@ -401,13 +456,15 @@ import QuickLook
         item.speed = 0
         persist()
         closeDownloadOnlyTab(item)
-        if item.exportToFiles { item.exportToFiles = false; saveToFiles(item) }
+        if item.exportToFiles { item.exportToFiles = false; saveToFiles(item, handOff: !item.isPrivate) }
         if item.copyToCustomFolder {
             item.copyToCustomFolder = false
             do {
                 let copy = try DownloadLocation.copyToCustomFolder(file)
-                ToastCenter.shared.show("已保存到“\(copy.deletingLastPathComponent().lastPathComponent)”：\(item.fileName)", symbol: "checkmark.circle",
-                                        actionTitle: "打开") { [weak self] in self?.open(item) }
+                let folder = copy.deletingLastPathComponent().lastPathComponent
+                // Saved where the user wanted it: Rikugan's copy would only pile up.
+                handedOff(item, file: file, to: folder)
+                ToastCenter.shared.show("已保存到“\(folder)”：\(copy.lastPathComponent)", symbol: "checkmark.circle")
             } catch {
                 ToastCenter.shared.show("已下载，但无法存入所选文件夹（\(error.localizedDescription)），文件在 Rikugan 下载中",
                                         symbol: "exclamationmark.triangle", actionTitle: "打开") { [weak self] in self?.open(item) }
